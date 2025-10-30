@@ -1,0 +1,37 @@
+{
+  "jwt_expiry_minutes": 30,
+  "template_path": "claude-template",
+  "common_slash_commands": [
+    "/agents",
+    "/clear",
+    "/compact",
+    "/context",
+    "/hooks",
+    "/mcp",
+    "/resume",
+    "/rewind",
+    "/usage"
+  ],
+  "projects": [
+    {
+      "name": "🔥 AGI-SaaS Disruptor",
+      "path": "~/projects/agi-saas",
+      "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
+    },
+    {
+      "name": "⚡ NeuralMesh3000",
+      "path": "~/projects/neural-mesh",
+      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression"
+    },
+    {
+      "name": "⚛️ ReactHook Nirvana",
+      "path": "~/projects/react-nirvana",
+      "description": "Component library that transcends the virtual DOM and enters the astral plane"
+    },
+    {
+      "name": "☁️ Cloude Code",
+      "path": "~/projects/cloude-code",
+      "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
+    }
+  ]
+}

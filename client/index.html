@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>☁️ Cloude Code</title>
+
+    <!-- xterm.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+    <div class="header">
+        <h1 id="appTitle">☁️ Cloude Code <span class="version">v0.2</span></h1>
+        <div class="controls">
+            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 3L12 9H4L8 3Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M4 11H12" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <span class="status" id="statusText" data-status="Ready"></span>
+        </div>
+    </div>
+
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="screen"></div>
+
+    <!-- Launchpad Screen -->
+    <div id="launchpad-screen" class="screen"></div>
+
+    <!-- Terminal Screen -->
+    <div id="terminal-screen" class="screen">
+        <div class="terminal-container">
+            <div id="terminal"></div>
+        </div>
+
+        <div class="tunnels" id="tunnelsContainer" style="display: none;">
+            <h3>Active Tunnels</h3>
+            <div id="tunnelsList"></div>
+        </div>
+
+        <div class="info">
+            <span id="sessionInfo">No active session</span>
+        </div>
+    </div>
+
+    <!-- xterm.js -->
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
+
+    <!-- Application modules -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/launchpad.js"></script>
+    <script src="/static/js/terminal.js"></script>
+    <script src="/static/js/dpad.js"></script>
+    <script src="/static/js/slash-commands.js"></script>
+
+    <!-- App Controller -->
+    <script>
+        /**
+         * App Controller - Manages application state and screen transitions
+         */
+        class AppController {
+            constructor() {
+                this.currentScreen = null;
+                this.logoutBtn = null;
+                this.destroyBtn = null;
+            }
+
+            /**
+             * Initialize application
+             */
+            async init() {
+                console.log('App: Initializing');
+
+                this.logoutBtn = document.getElementById('logoutBtn');
+                this.destroyBtn = document.getElementById('destroySessionBtn');
+
+                // Setup event listeners
+                this.setupEventListeners();
+
+                // Initialize auth module (always needed first)
+                window.Auth.init();
+
+                // Check if user is authenticated
+                if (window.Auth.isAuthenticated()) {
+                    console.log('App: User has token, verifying...');
+                    const isValid = await window.Auth.verifyToken();
+                    if (isValid) {
+                        this.showLaunchpad();
+                    } else {
+                        console.log('App: Token invalid, showing auth');
+                        this.showAuth();
+                    }
+                } else {
+                    console.log('App: No token, showing auth');
+                    this.showAuth();
+                }
+            }
+
+            /**
+             * Setup event listeners
+             */
+            setupEventListeners() {
+                // Auth events
+                window.addEventListener('authenticated', () => {
+                    console.log('App: User authenticated');
+                    this.showLaunchpad();
+                });
+
+                window.addEventListener('auth-required', () => {
+                    console.log('App: Auth required');
+                    this.showAuth();
+                });
+
+                window.addEventListener('logged-out', () => {
+                    console.log('App: User logged out');
+                    this.showAuth();
+                });
+
+                // Session events
+                window.addEventListener('session-created', (e) => {
+                    console.log('App: Session created', e.detail);
+                    this.showTerminal(e.detail.session);
+                });
+
+                window.addEventListener('session-destroyed', () => {
+                    console.log('App: Session destroyed');
+                    this.showLaunchpad();
+                });
+
+                // Title click - navigate back to launchpad (only from terminal)
+                const appTitle = document.getElementById('appTitle');
+                appTitle.addEventListener('click', () => {
+                    if (this.currentScreen === 'terminal') {
+                        console.log('App: Title clicked, navigating to launchpad');
+                        this.showLaunchpad();
+                    }
+                });
+            }
+
+            /**
+             * Show auth screen
+             */
+            showAuth() {
+                console.log('App: Showing auth screen');
+                this.hideAllScreens();
+                document.getElementById('auth-screen').classList.add('active');
+                this.logoutBtn.classList.add('hidden');
+                this.destroyBtn.classList.add('hidden');
+                this.currentScreen = 'auth';
+            }
+
+            /**
+             * Show launchpad screen
+             */
+            showLaunchpad() {
+                console.log('App: Showing launchpad screen');
+                this.hideAllScreens();
+                document.getElementById('launchpad-screen').classList.add('active');
+                this.logoutBtn.classList.remove('hidden');
+                this.destroyBtn.classList.add('hidden');
+                this.currentScreen = 'launchpad';
+
+                // Hide D-pad on launchpad
+                if (window.DPad) {
+                    window.DPad.hide();
+                }
+
+                // Hide slash command button on launchpad
+                if (window.SlashCommandsModal) {
+                    window.SlashCommandsModal.hide();
+                }
+
+                // Initialize launchpad if first time
+                if (!window.Launchpad.launchpadScreen) {
+                    window.Launchpad.init();
+                }
+
+                // Reload projects
+                window.Launchpad.loadProjects();
+            }
+
+            /**
+             * Show terminal screen
+             */
+            async showTerminal(session) {
+                console.log('App: Showing terminal screen');
+                this.hideAllScreens();
+                document.getElementById('terminal-screen').classList.add('active');
+                this.logoutBtn.classList.remove('hidden');
+                this.destroyBtn.classList.remove('hidden');
+                this.currentScreen = 'terminal';
+
+                // Initialize terminal if first time
+                if (!window.TerminalController.term) {
+                    await window.TerminalController.init();
+                }
+
+                // Initialize D-pad (mobile only)
+                if (window.DPad && !window.DPad.floatingButton) {
+                    window.DPad.init();
+                }
+
+                // Show D-pad on terminal screen
+                if (window.DPad) {
+                    window.DPad.show();
+                }
+
+                // Initialize slash commands modal
+                if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
+                    await window.SlashCommandsModal.init((command) => {
+                        // Insert command into terminal without Enter
+                        window.TerminalController.insertText(command);
+                    });
+                }
+
+                // Show slash command button on terminal screen
+                if (window.SlashCommandsModal) {
+                    window.SlashCommandsModal.show();
+                }
+
+                // Connect terminal to session
+                window.TerminalController.connectToSession(session);
+            }
+
+            /**
+             * Hide all screens
+             */
+            hideAllScreens() {
+                document.querySelectorAll('.screen').forEach(screen => {
+                    screen.classList.remove('active');
+                });
+            }
+
+            /**
+             * Logout
+             */
+            async logout() {
+                // Show confirmation modal
+                const confirmed = await this.showConfirmModal(
+                    'logout',
+                    'are you sure you want to logout?',
+                    'any active session will be destroyed.'
+                );
+
+                if (confirmed) {
+                    // Destroy active session if exists
+                    if (window.TerminalController.sessionActive) {
+                        try {
+                            await window.TerminalController.destroySession();
+                        } catch (error) {
+                            console.error('App: Error destroying session during logout:', error);
+                        }
+                    }
+
+                    // Logout
+                    window.Auth.logout();
+                }
+            }
+
+            /**
+             * Show confirmation modal
+             * @param {string} title - Modal title
+             * @param {string} message - Main message
+             * @param {string} details - Additional details (optional)
+             * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+             */
+            showConfirmModal(title, message, details = null) {
+                return new Promise((resolve) => {
+                    // Create modal overlay
+                    const overlay = document.createElement('div');
+                    overlay.className = 'modal-overlay';
+
+                    // Create modal content
+                    overlay.innerHTML = `
+                        <div class="modal-content">
+                            <div class="modal-header">» ${title}</div>
+                            <div class="modal-body">
+                                <div class="modal-message">${message}</div>
+                                ${details ? `<div class="modal-description">${details}</div>` : ''}
+                            </div>
+                            <div class="modal-footer">
+                                <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
+                                <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                            </div>
+                        </div>
+                    `;
+
+                    document.body.appendChild(overlay);
+
+                    const confirmBtn = overlay.querySelector('#modal-confirm');
+                    const cancelBtn = overlay.querySelector('#modal-cancel');
+
+                    // Handle Escape key
+                    overlay.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape') {
+                            document.body.removeChild(overlay);
+                            resolve(false);
+                        }
+                    });
+
+                    // Handle confirm button
+                    confirmBtn.addEventListener('click', () => {
+                        document.body.removeChild(overlay);
+                        resolve(true);
+                    });
+
+                    // Handle cancel button
+                    cancelBtn.addEventListener('click', () => {
+                        document.body.removeChild(overlay);
+                        resolve(false);
+                    });
+
+                    // Handle click outside modal
+                    overlay.addEventListener('click', (e) => {
+                        if (e.target === overlay) {
+                            document.body.removeChild(overlay);
+                            resolve(false);
+                        }
+                    });
+
+                    // Focus confirm button
+                    setTimeout(() => confirmBtn.focus(), 100);
+                });
+            }
+        }
+
+        // Create app instance
+        const App = new AppController();
+
+        // Initialize on load
+        window.addEventListener('load', () => {
+            App.init();
+        });
+    </script>
+</body>
+</html>
