@@ -5,6 +5,7 @@ const { app } = require('electron');
 const net = require('net');
 const fs = require('fs');
 const os = require('os');
+const { currentTotp, secondsUntilRollover } = require('./totp');
 
 // Default bind host = 0.0.0.0 (listen on all interfaces). Matches the
 // pydantic Settings default in src/config.py; changing here without
@@ -41,7 +42,6 @@ class ServerManager {
 
     // Auto-detect Python installation
     this.pythonPath = this.findPython();
-    this.apiUrl = 'http://127.0.0.1:8000';
     this.port = 8000;
     // Use userData/logs for persistent logging
     const logDir = path.join(app.getPath('userData'), 'logs');
@@ -175,6 +175,71 @@ class ServerManager {
       return `http://${lan || '127.0.0.1'}:${this.port}`;
     }
     return `http://${host}:${this.port}`;
+  }
+
+  /**
+   * Host the Electron app should use for internal HTTP probes (/health,
+   * /api/v1/auth/qr, etc.).
+   *
+   * Bug context: uvicorn binds EXCLUSIVELY to the configured host. When
+   * the user picks a specific LAN IP like 192.168.1.250, the loopback
+   * interface is NOT listening — so probing 127.0.0.1 returns ECONNREFUSED
+   * forever and the tray icon hangs on "starting". We must probe the
+   * actual bound interface.
+   *
+   * Exception: when bind is 0.0.0.0 the server listens on every interface
+   * including loopback, so 127.0.0.1 is always reachable and preferred
+   * (no dependency on LAN state for internal probes).
+   */
+  getLocalProbeHost() {
+    const h = this.getBindHost();
+    return (h === '0.0.0.0' || !h) ? '127.0.0.1' : h;
+  }
+
+  /**
+   * Fully-qualified base URL for internal HTTP probes. Replaces the old
+   * hardcoded `this.apiUrl = 'http://127.0.0.1:8000'` — that constant broke
+   * the moment the user chose a non-loopback bind host.
+   */
+  getLocalApiUrl() {
+    return `http://${this.getLocalProbeHost()}:${this.port}`;
+  }
+
+  /**
+   * Current 6-digit TOTP code, or null if we can't compute one.
+   *
+   * Reads TOTP_SECRET from the server's .env (same file uvicorn uses, so
+   * the code we surface ALWAYS matches what the server will accept on
+   * /api/v1/auth/login). Recomputes on every call — caller (menu rebuild
+   * on each health poll) gets a fresh code every ~5s.
+   *
+   * Returns null on any failure — caller renders a disabled placeholder
+   * instead of crashing the menu.
+   */
+  getCurrentOtp() {
+    try {
+      const envPath = path.join(this.baseDir, '.env');
+      if (!fs.existsSync(envPath)) return null;
+      const envText = fs.readFileSync(envPath, 'utf8');
+      const m = envText.match(/^TOTP_SECRET=(.*)$/m);
+      if (!m) return null;
+      // Trim optional surrounding quotes + whitespace.
+      const secret = m[1].trim().replace(/^['"]|['"]$/g, '').trim();
+      if (!secret) return null;
+      return currentTotp(secret);
+    } catch (err) {
+      console.warn('[otp] getCurrentOtp failed:', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Seconds until the current TOTP window rolls over. Used by the tray
+   * menu to decorate the Copy OTP label with "(rolls in Xs)" so users
+   * know whether to grab-and-go or wait a tick.
+   */
+  getOtpSecondsRemaining() {
+    return secondsUntilRollover();
   }
 
   /**
@@ -720,7 +785,10 @@ class ServerManager {
    */
   async getHealth() {
     try {
-      const response = await axios.get(`${this.apiUrl}/api/v1/health`, {
+      // Probe the actual bound interface, not a hardcoded 127.0.0.1 —
+      // uvicorn binds exclusively, so loopback is unreachable when the
+      // user picks a specific LAN IP. See getLocalProbeHost() for rule.
+      const response = await axios.get(`${this.getLocalApiUrl()}/api/v1/health`, {
         timeout: 3000
       });
       return response.data;

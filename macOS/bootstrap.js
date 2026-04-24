@@ -13,8 +13,10 @@
  * States (string enum, observer pattern):
  *   'checking'            — verifying Python + existing sentinel files
  *   'python-missing'      — Python 3.12+ absent; caller must show dialog + quit
+ *   'syncing-assets'      — rsync bundled build artifacts → Application Support
+ *                           (runs on EVERY packaged launch so upgrades land)
  *   'preparing'           — creating Application Support directory tree
- *   'copying-files'       — bundled resources → Application Support
+ *   'copying-files'       — bundled resources → Application Support (first run)
  *   'creating-venv'       — python3 -m venv
  *   'installing-deps'     — venv/bin/pip install -r requirements.txt
  *   'generating-secrets'  — TOTP_SECRET + JWT_SECRET into .env
@@ -30,7 +32,7 @@
  *                   'python-missing'
  */
 
-const { spawn, execFile } = require('child_process');
+const { spawn, execFile, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -258,6 +260,148 @@ function generateEnvFile({ envExamplePath, envOutPath, defaultWorkingDir, logDir
 }
 
 // ---------------------------------------------------------------------------
+// Bundle → userData asset resync (runs on EVERY packaged launch)
+// ---------------------------------------------------------------------------
+
+/**
+ * Allowlist of build artifacts that ship inside the .app bundle and must
+ * track whatever version of the app is currently launching. On every
+ * packaged launch we rsync these from <bundle>/Resources/<name> into
+ * <serverDir>/<name>, deleting orphans from within those paths.
+ *
+ * EVERYTHING ELSE in serverDir is user-owned state and MUST NOT be touched:
+ *   - .env                      (user secrets + config)
+ *   - config.json               (user-customized runtime config)
+ *   - venv/                     (python virtualenv — big, expensive to rebuild)
+ *   - .deps-hash                (cache key for pip reinstall decision)
+ *   - refresh_tokens.db         (auth state)
+ *   - session_metadata.json     (tmux session bookkeeping)
+ *   - logs/                     (runtime logs)
+ *   - any future user-created files
+ *
+ * This is an ALLOWLIST by design: anything we don't explicitly name is
+ * preserved. Defense against future drift — if a new user-state file
+ * appears, it's safe by default.
+ *
+ * Dirs use rsync -a --delete with trailing slashes (contents sync, not
+ * parent-dir nesting). Files are plain copyFile (overwrite). macOS ships
+ * with rsync in /usr/bin/rsync — always available, no dep issue.
+ */
+const RESYNC_ALLOWLIST = [
+  { name: 'src', isDir: true },
+  { name: 'client', isDir: true },
+  { name: 'requirements.txt', isDir: false },
+  { name: 'setup_auth.py', isDir: false },
+  { name: 'config.example.json', isDir: false },
+  { name: '.env.example', isDir: false },
+];
+
+/**
+ * rsync a single directory, with trailing-slash semantics:
+ *   rsync -a --delete SRC/ DST/   (sync CONTENTS; --delete wipes orphans in DST)
+ *
+ * Returns { ok: true } on success or { ok: false, code, stderr } on failure.
+ * Caller decides whether non-zero is fatal (it should be — a half-synced
+ * tree is worse than no sync).
+ */
+function rsyncDir(srcDir, dstDir) {
+  // Ensure dst parent exists; rsync will create dstDir itself, but mkdir
+  // is free insurance against edge cases where dstDir's parent doesn't exist.
+  fs.mkdirSync(dstDir, { recursive: true });
+  const result = spawnSync(
+    '/usr/bin/rsync',
+    ['-a', '--delete', `${srcDir}/`, `${dstDir}/`],
+    { encoding: 'utf8' }
+  );
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      code: result.status,
+      stderr: (result.stderr || '').trim(),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Re-sync bundled build artifacts into serverDir. Runs on every packaged
+ * launch so version upgrades land without manual intervention.
+ *
+ * In dev mode (!isPackaged), this is a no-op — the dev's working tree
+ * is authoritative and we don't want to rsync a stale .app bundle's
+ * Resources over live source edits.
+ *
+ * Returns { ok: true, summary: string } on success,
+ *         { ok: false, details: string } on any rsync/copy failure.
+ */
+function syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged }) {
+  if (!isPackaged) {
+    console.log('[bootstrap] dev mode — skipping bundled-asset resync');
+    return { ok: true, summary: 'dev-mode skip' };
+  }
+
+  if (!fs.existsSync(bundleResourcesDir)) {
+    return {
+      ok: false,
+      details: `bundleResourcesDir does not exist: ${bundleResourcesDir}`,
+    };
+  }
+
+  fs.mkdirSync(serverDir, { recursive: true });
+
+  const t0 = Date.now();
+  const synced = [];
+  const skipped = [];
+
+  for (const item of RESYNC_ALLOWLIST) {
+    const src = path.join(bundleResourcesDir, item.name);
+    const dst = path.join(serverDir, item.name);
+
+    if (!fs.existsSync(src)) {
+      // Artifact missing from bundle — don't blow up (older/newer bundle
+      // layouts might omit an entry), just log and move on. This is
+      // distinct from a rsync failure, which IS fatal.
+      skipped.push(`${item.name} (not in bundle)`);
+      continue;
+    }
+
+    if (item.isDir) {
+      const res = rsyncDir(src, dst);
+      if (!res.ok) {
+        return {
+          ok: false,
+          details: `rsync failed for ${item.name}/ (exit ${res.code}): ${res.stderr.slice(-400)}`,
+        };
+      }
+      synced.push(`${item.name}/`);
+    } else {
+      // File: overwrite unconditionally. copyFileSync is atomic-ish on
+      // macOS (single write to a freshly-opened fd) — good enough for
+      // small config files. We don't preserve the prior content because
+      // these are all example/template files the user shouldn't edit
+      // in-place anyway (they edit config.json / .env derived from them).
+      try {
+        fs.copyFileSync(src, dst);
+        synced.push(item.name);
+      } catch (err) {
+        return {
+          ok: false,
+          details: `copy failed for ${item.name}: ${err.message}`,
+        };
+      }
+    }
+  }
+
+  const elapsed = Date.now() - t0;
+  const summary =
+    `resynced ${synced.length} items in ${elapsed}ms ` +
+    `[${synced.join(', ')}]` +
+    (skipped.length ? ` skipped [${skipped.join(', ')}]` : '');
+  console.log(`[bootstrap] ${summary}`);
+  return { ok: true, summary };
+}
+
+// ---------------------------------------------------------------------------
 // Main bootstrap orchestrator
 // ---------------------------------------------------------------------------
 
@@ -265,15 +409,27 @@ function generateEnvFile({ envExamplePath, envOutPath, defaultWorkingDir, logDir
  * @param {Object} opts
  * @param {string} opts.serverDir      - Target Application Support/server/ dir
  * @param {string} opts.bundleResourcesDir - Source: packaged app Resources/
+ * @param {boolean} [opts.isPackaged]  - true in packaged .app, false in `npm start`
+ *                                       dev mode. If omitted, auto-detected from
+ *                                       bundleResourcesDir path (contains
+ *                                       '.app/Contents/Resources').
  * @param {Function} opts.onStateChange - (state: string) => void — state observer
  * @returns {Promise<{status: string, freshInstall: boolean, details?: string}>}
  */
-async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, onStateChange }) {
+async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, onStateChange }) {
   const emit = (state) => {
     if (onStateChange) {
       try { onStateChange(state); } catch (_) { /* observer errors are non-fatal */ }
     }
   };
+
+  // Auto-detect packaged mode if caller didn't pass it. Reliable heuristic on
+  // macOS: Electron's process.resourcesPath in packaged mode always lives
+  // under `<something>.app/Contents/Resources`. In dev (`npm start`) the
+  // caller typically passes a path like `<repo>/macOS/..` — not a .app.
+  const packaged = typeof isPackaged === 'boolean'
+    ? isPackaged
+    : /\.app\/Contents\/Resources\/?$/.test(bundleResourcesDir || '');
 
   emit('checking');
 
@@ -289,6 +445,39 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, onStateChange 
     };
   }
   console.log(`[bootstrap] Python found: ${python.path} (${python.version})`);
+
+  // -------------------------------------------------------------------------
+  // 1b. Bundle → userData resync (EVERY launch in packaged mode)
+  //
+  // This is the upgrade path. The .app bundle ships fresh src/ + client/ +
+  // requirements.txt etc. under Contents/Resources. We rsync those into
+  // serverDir so the running version of the app always serves the client
+  // files it was built with. Runs BEFORE the fast-path check on purpose:
+  //   - requirements.txt getting overwritten may change its sha256, which
+  //     the downstream deps-hash check will catch and trigger a pip reinstall.
+  //   - A changed client/ needs to land even when everything else is already
+  //     provisioned (.env, venv, config.json all exist from prior launch).
+  //
+  // Dev mode is a no-op (don't clobber live source tree with stale bundle).
+  // -------------------------------------------------------------------------
+  if (packaged) {
+    emit('syncing-assets');
+    // Ensure serverDir exists before rsync so we never hit a missing-parent
+    // race on a brand-new install where the fast-path check below would
+    // normally create it via 'preparing'.
+    fs.mkdirSync(serverDir, { recursive: true });
+    const sync = syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged: true });
+    if (!sync.ok) {
+      // A failed resync is NOT recoverable — a half-synced client/ dir will
+      // serve a mix of old + new files and break the app in confusing ways.
+      // Surface the error loudly.
+      return {
+        status: 'error',
+        freshInstall: false,
+        details: `asset resync failed: ${sync.details}`,
+      };
+    }
+  }
 
   // -------------------------------------------------------------------------
   // 2. Fast path: is everything already provisioned?
@@ -325,8 +514,20 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, onStateChange 
     }
 
     // 3a. Copy bundled resources → serverDir
+    //
+    // In PACKAGED mode the resync step above (1b) has already pulled in all
+    // allowlisted build artifacts (src/, client/, requirements.txt, setup_auth.py,
+    // config.example.json, .env.example). Here we only handle:
+    //   - DEV-mode first-run copy (resync is skipped in dev — we still need
+    //     the artifacts landed the first time the dev launches into a clean
+    //     serverDir, otherwise the venv/deps/env steps have nothing to key off).
+    //   - nuke.sh — deliberately NOT in the resync allowlist; first-run copy
+    //     only so users who've customized it keep their version.
     emit('copying-files');
-    const resourceMap = [
+    const firstRunResources = [
+      // In packaged mode these six are already resynced above; copyRecursive
+      // with its skip-if-exists behavior makes this a no-op in that case.
+      // In dev mode, this is the first-run landing.
       { name: 'src', isDir: true },
       { name: 'client', isDir: true },
       { name: 'requirements.txt', isDir: false },
@@ -335,7 +536,7 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, onStateChange 
       { name: '.env.example', isDir: false },
       { name: 'nuke.sh', isDir: false },
     ];
-    for (const item of resourceMap) {
+    for (const item of firstRunResources) {
       const src = path.join(bundleResourcesDir, item.name);
       const dst = path.join(serverDir, item.name);
       if (!fs.existsSync(src)) {
@@ -473,4 +674,6 @@ module.exports = {
   base32Encode,
   findSuitablePython,
   sha256File,
+  syncBundledAssets,
+  RESYNC_ALLOWLIST,
 };

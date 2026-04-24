@@ -24,6 +24,33 @@ class Launchpad {
         this.launchpadScreen = document.getElementById('launchpad-screen');
         this.renderLaunchpadUI();
         // Note: loadProjects() will be called by App.showLaunchpad()
+        this._startRunningSessionsPoller();
+    }
+
+    /**
+     * Kick off a 5s interval that re-fetches the running-sessions list.
+     *
+     * Idempotent — guarded by ``this._runningPollInterval`` so repeated
+     * calls (e.g. re-entering the launchpad after a session swap) don't
+     * stack multiple intervals. Auth-gated per tick: skips the fetch
+     * entirely when the user isn't logged in, so we don't hammer /sessions
+     * with anonymous requests before the OTP flow completes.
+     *
+     * Runs forever; does not pause on tab hide — external tmux sessions
+     * born while the tab is backgrounded should still surface the moment
+     * the user returns.
+     */
+    _startRunningSessionsPoller() {
+        if (this._runningPollInterval) return;
+        this._runningPollInterval = setInterval(() => {
+            if (!(window.Auth && typeof window.Auth.isAuthenticated === 'function' && window.Auth.isAuthenticated())) {
+                return;
+            }
+            this.loadRunningSessions().catch(err => {
+                console.warn('Launchpad: running-sessions poll tick failed:', err);
+            });
+        }, 5000);
+        console.log('Launchpad: running-sessions poller started (5s)');
     }
 
     /**
@@ -140,10 +167,32 @@ class Launchpad {
         if (!container) return;
         const section = document.getElementById('running-sessions-section');
         if (!this.runningSessions || this.runningSessions.length === 0) {
-            if (section) section.style.display = 'none';
-            container.innerHTML = '';
+            // Only rewrite the DOM when transitioning into the empty state —
+            // repeated renders while already empty would thrash the
+            // section's display flip for no reason.
+            if (this._lastRunningSig !== 'empty') {
+                this._lastRunningSig = 'empty';
+                if (section) section.style.display = 'none';
+                container.innerHTML = '';
+            }
             return;
         }
+        // Signature-diff: skip the innerHTML rewrite when the set of rows
+        // (name + ownership + active flag) hasn't changed. Previously the
+        // 5s poller was restarting the `.running-session-row` pulse-glow
+        // CSS animations every tick, which visibly flickered. Age labels
+        // still need updating each tick, so we punt those through a
+        // cheap text-only DOM update instead.
+        const sig = JSON.stringify(this.runningSessions.map(s => ({
+            name: s.name,
+            owned: !!s.created_by_cloude,
+            active: !!s.is_active,
+        })));
+        if (sig === this._lastRunningSig) {
+            this._updateRunningSessionAges();
+            return;
+        }
+        this._lastRunningSig = sig;
         if (section) section.style.display = '';
         container.innerHTML = this.runningSessions.map(s => {
             const owned = !!s.created_by_cloude;
@@ -175,6 +224,30 @@ class Launchpad {
         // because the listener is bound to the (stable) container element,
         // not the (re-painted) row children, and the flag gates re-bind.
         this._bindRunningSessionClicks();
+    }
+
+    /**
+     * Text-only age refresh — walks existing rows and rewrites just the
+     * ``.running-session-age`` textContent. Used on poll ticks when the
+     * row set is unchanged so we avoid the innerHTML rewrite that would
+     * restart the pulse-glow CSS animations.
+     *
+     * Guarded for all the obvious missing-data cases: row without a
+     * data-name, session no longer in the list, session without an
+     * epoch, row without an age element. Any miss is a silent skip —
+     * the next full render will reconcile.
+     */
+    _updateRunningSessionAges() {
+        const rows = document.querySelectorAll('#running-sessions-list .running-session-row');
+        rows.forEach(row => {
+            const name = row.dataset.name;
+            if (!name) return;
+            const s = this.runningSessions.find(x => x.name === name);
+            if (!s || !s.created_at_epoch) return;
+            const ageEl = row.querySelector('.running-session-age');
+            if (!ageEl) return;
+            ageEl.textContent = this._formatRelativeTime(s.created_at_epoch);
+        });
     }
 
     /**
@@ -418,10 +491,9 @@ class Launchpad {
                 </div>
 
                 <div class="launchpad-footer">
-                    <a href="https://DrinkBlackMarket.com" target="_blank" rel="noopener noreferrer">
-                        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 827 814">
-                            <path d="M 399 0 C 407.91 0 416.82 0 426 0 C 426.33 135.63 426.66 271.26 427 411 C 434.618 399.649 609.473 128.537 618 115 C 623.377 115.567 639.725 123.44 640.891 125.816 C 641.048 128.963 453.608 418.363 448 427 C 456.264 422.984 679.016 303.482 680 303 C 683.164 304.101 691.507 315.724 691.953 316.398 C 692.347 316.993 452.689 452.704 450 456 C 451.044 456.081 520.653 476.354 526 478 C 525.715 486.257 523.179 493.875 519 501 C 515.688 502.397 442.202 479.4 426 474 C 426 489.84 426 505.68 426 522 C 417.09 522 408.18 522 399 522 C 398.67 506.16 398.34 490.32 398 474 C 390.373 476.347 308.499 502.028 305.633 501.866 C 303.451 500.709 296.607 482.74 297 478 C 298.107 477.671 371.612 454.981 374 454 C 372.855 453.413 138.231 328.154 131 324 C 131.362 318.049 141.707 304.675 143 303 C 148.977 304.654 374.147 426.136 377 427 C 367.051 411.432 183.948 128.542 184.196 125.953 C 185.641 122.443 202.468 115.478 207 115 C 207.49 115.777 207.49 115.777 207.991 116.57 C 211.17 121.608 396.858 409.287 398 411 C 398.33 275.37 398.66 139.74 399 0 Z" fill="#d77757" transform="matrix(0.999974, 0.007264, -0.007264, 0.999974, 0, 0)"/>
-                            <path d="M 7 529 C 14.866 529.557 387.15 649.223 392.79 651.283 C 405.483 655.806 415.028 657.457 427.526 652.007 C 432.7 649.9 817.501 528.914 820 529 C 821.207 532.556 826.648 553.159 826 556 C 792.238 566.782 490.79 662.27 463 671 C 465.852 672.901 797.149 777.901 826 787 C 826.922 791.046 820.856 811.478 820 814 C 813.295 813.418 411.629 687.261 406 689 C 404.991 689.303 11 814 7 814 C 5.793 810.444 0.352 789.841 1 787 C 36.966 775.49 337.27 680.359 364 672 C 361.079 670.052 28.79 564.73 1 556 C -0.082 552.02 6.144 531.522 7 529 Z" fill="#d77757" transform="matrix(0.999974, 0.007264, -0.007264, 0.999974, -0.000025, -0.000024)"/>
+                    <a href="https://nyedis.ai" target="_blank" rel="noopener noreferrer">
+                        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
+                            <path d="M 409.0 883.5 L 408.5 882.0 L 458.5 804.0 L 489.5 748.0 L 488.0 747.5 L 453.0 783.5 L 437.0 797.5 L 403.0 823.5 L 377.0 839.5 L 376.5 838.0 L 398.5 816.0 L 438.5 771.0 L 469.5 732.0 L 478.5 718.0 L 474.0 719.5 L 436.0 750.5 L 388.0 785.5 L 394.5 766.0 L 409.5 739.0 L 408.0 738.5 L 386.0 753.5 L 377.0 758.5 L 375.5 758.0 L 382.5 743.0 L 394.5 725.0 L 410.5 705.0 L 410.5 703.0 L 374.0 704.5 L 361.0 702.5 L 360.5 701.0 L 409.0 681.5 L 481.0 647.5 L 520.0 625.5 L 546.0 607.5 L 565.5 589.0 L 570.5 580.0 L 570.5 576.0 L 561.0 575.5 L 542.0 580.5 L 545.5 574.0 L 560.5 556.0 L 594.0 522.5 L 632.5 489.0 L 630.0 487.5 L 588.0 488.5 L 551.0 493.5 L 516.0 500.5 L 529.5 487.0 L 532.5 480.0 L 532.0 473.5 L 515.0 472.5 L 491.0 468.5 L 451.0 455.5 L 435.5 448.0 L 452.0 439.5 L 456.5 435.0 L 456.0 433.5 L 420.0 426.5 L 402.0 420.5 L 394.5 416.0 L 427.0 414.5 L 442.0 411.5 L 445.0 410.5 L 445.0 408.5 L 399.0 408.5 L 375.0 406.5 L 333.0 400.5 L 305.5 393.0 L 306.0 391.5 L 309.0 391.5 L 344.0 394.5 L 429.0 395.5 L 461.0 394.5 L 461.0 392.5 L 426.0 390.5 L 378.0 384.5 L 302.0 370.5 L 249.0 358.5 L 180.0 339.5 L 138.0 331.5 L 75.0 314.5 L 34.0 299.5 L 19.0 291.5 L 15.5 287.0 L 18.0 285.5 L 173.5 287.0 L 173.0 285.5 L 125.0 275.5 L 91.0 264.5 L 68.0 252.5 L 59.5 244.0 L 59.0 238.5 L 134.0 251.5 L 227.5 271.0 L 225.5 266.0 L 218.0 259.5 L 181.5 238.0 L 185.0 237.5 L 297.0 264.5 L 434.0 294.5 L 546.0 316.5 L 613.0 326.5 L 613.5 325.0 L 607.0 320.5 L 591.0 312.5 L 561.0 301.5 L 509.0 287.5 L 450.0 276.5 L 449.5 275.0 L 483.0 262.5 L 505.0 257.5 L 534.0 253.5 L 600.0 252.5 L 625.0 255.5 L 632.5 255.0 L 622.0 245.5 L 609.0 239.5 L 588.0 233.5 L 551.5 228.0 L 568.0 220.5 L 585.0 217.5 L 612.0 217.5 L 644.0 221.5 L 692.0 232.5 L 737.0 247.5 L 741.0 247.5 L 747.0 241.5 L 754.0 237.5 L 771.0 233.5 L 797.0 235.5 L 814.0 240.5 L 827.0 246.5 L 841.5 259.0 L 844.5 265.0 L 845.5 281.0 L 843.5 288.0 L 836.5 301.0 L 824.5 316.0 L 805.0 334.5 L 782.0 351.5 L 769.5 365.0 L 761.5 379.0 L 761.5 390.0 L 765.0 393.5 L 767.0 393.5 L 778.0 388.5 L 795.0 383.5 L 807.0 381.5 L 827.0 381.5 L 852.0 387.5 L 865.0 393.5 L 879.0 402.5 L 904.5 426.0 L 925.5 454.0 L 946.5 492.0 L 957.5 518.0 L 961.5 532.0 L 944.0 513.5 L 932.0 503.5 L 923.0 497.5 L 903.0 488.5 L 889.0 485.5 L 873.0 485.5 L 853.0 490.5 L 839.0 497.5 L 829.0 504.5 L 814.5 519.0 L 783.5 561.0 L 754.5 604.0 L 737.5 635.0 L 737.5 659.0 L 740.0 661.5 L 765.0 671.5 L 816.0 696.5 L 826.0 699.5 L 843.0 709.5 L 857.0 720.5 L 879.5 743.0 L 894.5 762.0 L 895.5 768.0 L 881.0 780.5 L 879.5 771.0 L 875.5 764.0 L 870.0 758.5 L 856.5 750.0 L 847.5 731.0 L 834.0 716.5 L 821.0 708.5 L 808.0 704.5 L 799.0 704.5 L 800.0 700.5 L 780.0 689.5 L 722.0 666.5 L 716.5 662.0 L 715.5 650.0 L 710.0 643.5 L 705.0 641.5 L 688.0 641.5 L 683.5 644.0 L 682.5 651.0 L 689.0 666.5 L 752.0 692.5 L 793.0 711.5 L 808.0 722.5 L 824.5 738.0 L 834.5 751.0 L 840.5 762.0 L 838.5 766.0 L 828.0 772.5 L 816.0 774.5 L 815.5 762.0 L 811.5 753.0 L 805.5 744.0 L 794.0 732.5 L 786.0 729.5 L 777.0 728.5 L 765.0 729.5 L 764.5 728.0 L 768.0 724.5 L 774.0 722.5 L 774.5 721.0 L 767.0 719.5 L 734.0 699.5 L 701.0 684.5 L 681.0 679.5 L 670.0 679.5 L 668.5 671.0 L 664.0 665.5 L 657.0 663.5 L 651.0 664.5 L 646.5 669.0 L 643.5 677.0 L 645.5 705.0 L 644.5 753.0 L 643.5 756.0 L 641.0 756.5 L 637.5 748.0 L 633.0 742.5 L 627.0 739.5 L 620.5 740.0 L 623.5 754.0 L 623.5 772.0 L 620.5 790.0 L 616.0 803.5 L 614.5 795.0 L 611.0 789.5 L 603.0 783.5 L 595.0 782.5 L 593.5 798.0 L 589.5 812.0 L 581.5 826.0 L 567.0 840.5 L 564.5 841.0 L 566.5 830.0 L 566.5 816.0 L 565.5 807.0 L 564.0 806.5 L 549.5 828.0 L 532.0 845.5 L 514.0 858.5 L 512.5 858.0 L 519.5 849.0 L 523.5 840.0 L 526.5 828.0 L 526.0 823.5 L 503.0 844.5 L 479.0 860.5 L 487.5 844.0 L 495.5 819.0 L 501.5 788.0 L 500.0 786.5 L 461.5 835.0 L 427.0 869.5 L 409.0 883.5 Z" fill="#d77757"/>
                         </svg>
                     </a>
                 </div>
