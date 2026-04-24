@@ -2,7 +2,7 @@
 node_modules/
 package-lock.json
 
-# Build outputs (electron-builder output — ship via GitHub Release assets)
+# Build outputs
 dist/
 out/
 

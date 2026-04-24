@@ -1,4 +1,4 @@
-const { app, Tray, Menu, shell, nativeImage } = require('electron');
+const { app, Tray, Menu, shell, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const ServerManager = require('./server-manager');
 const LaunchAgentInstaller = require('./launchagent-installer');
@@ -363,6 +363,83 @@ function createTray() {
 }
 
 /**
+ * Build the "Bind IP" submenu + "Copy URL" menu items.
+ *
+ * Exposed as a helper so the menu-template array in updateMenu() stays
+ * readable. Every call re-queries os.networkInterfaces() and the
+ * serverManager's current bind setting — so the radio selection and URL
+ * label stay in sync with the running server across polls.
+ *
+ * Radio semantics: Electron groups consecutive `type: 'radio'` items
+ * within the same submenu into a single radio group automatically.
+ * Don't insert non-radio items between them or the grouping breaks.
+ */
+function buildBindAndUrlItems() {
+  const bindHost = serverManager.getBindHost();
+  const localIps = serverManager.getLocalInterfaceIps();
+  const publishedUrl = serverManager.getPublishedUrl();
+
+  const bindSubmenu = [
+    {
+      label: '127.0.0.1  (localhost only)',
+      type: 'radio',
+      checked: bindHost === '127.0.0.1',
+      click: () => handleBindChange('127.0.0.1'),
+    },
+    ...localIps.map(({ iface, ip }) => ({
+      label: `${ip}  (${iface})`,
+      type: 'radio',
+      checked: bindHost === ip,
+      click: () => handleBindChange(ip),
+    })),
+    {
+      label: '0.0.0.0  (all interfaces, LAN-exposed)',
+      type: 'radio',
+      checked: bindHost === '0.0.0.0',
+      click: () => handleBindChange('0.0.0.0'),
+    },
+  ];
+
+  return [
+    {
+      label: `Bind IP: ${bindHost}`,
+      submenu: bindSubmenu,
+    },
+    {
+      label: `Copy URL: ${publishedUrl}`,
+      click: () => {
+        clipboard.writeText(publishedUrl);
+        console.log(`[clipboard] wrote: ${publishedUrl}`);
+      },
+    },
+  ];
+}
+
+/**
+ * Handle a bind-host change from the submenu. Updates tooltip to
+ * reflect in-flight restart, then refreshes the menu on completion.
+ */
+async function handleBindChange(ip) {
+  if (tray) tray.setToolTip(`Cloude Code — restarting on ${ip}...`);
+  try {
+    await serverManager.setBindHost(ip);
+  } catch (err) {
+    console.error('[bind-host] change failed:', err);
+    const { dialog } = require('electron');
+    dialog.showErrorBox(
+      'Bind IP change failed',
+      `Could not restart the server on ${ip}.\n\n${err.message || err}\n\nFalling back to the previous binding.`
+    );
+  } finally {
+    if (tray) tray.setToolTip('Cloude Code');
+    updateMenu();
+    // Health poll will auto-refresh menu within a few seconds; this just
+    // gets the instant visual feedback right after the restart settles.
+    setTimeout(updateMenu, 2500);
+  }
+}
+
+/**
  * Build and update the tray menu
  */
 function updateMenu() {
@@ -459,6 +536,7 @@ function updateMenu() {
       },
       enabled: isRunning
     },
+    ...buildBindAndUrlItems(),
     { type: 'separator' },
     {
       label: 'Server',

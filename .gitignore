@@ -6,7 +6,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-/dist/
+dist/
 downloads/
 eggs/
 .eggs/
@@ -33,11 +33,6 @@ config.json
 
 # Authentication
 totp-qr.png
-refresh_tokens.db
-
-# Electron builder output (DMG etc. — ship via GitHub Release assets)
-macOS/dist/
-macOS/node_modules/
 
 # IDE
 .vscode/

@@ -4,6 +4,21 @@ const axios = require('axios');
 const { app } = require('electron');
 const net = require('net');
 const fs = require('fs');
+const os = require('os');
+
+// Default bind host = 0.0.0.0 (listen on all interfaces). Matches the
+// pydantic Settings default in src/config.py; changing here without
+// changing there would cause a silent drift.
+const DEFAULT_BIND_HOST = '0.0.0.0';
+
+// macOS pseudo-interfaces that should NEVER appear in the Bind IP submenu.
+// awdl/llw = AirDrop/Apple Wireless Direct Link (link-local IPv6 only).
+// utun = VPN tunnels (link-local IPv6 usually; user-bound VPN, not a LAN
+// binding target). anpi/ap1 = internal radios on Apple Silicon. Skip them
+// wholesale by name — they never carry routable IPv4 even if one shows up.
+const PSEUDO_IFACE_PATTERNS = [
+  /^awdl/i, /^llw/i, /^utun/i, /^anpi/i, /^ap\d/i,
+];
 
 class ServerManager {
   constructor() {
@@ -36,6 +51,130 @@ class ServerManager {
     this.logFile = path.join(logDir, 'server.log');
     this.state = 'stopped'; // 'stopped', 'starting', 'running'
     this.startTime = null;
+
+    // Settings file for persistent menu-bar prefs (currently only bind_host).
+    // Lives in userData root — small, atomic-written, one object deep.
+    this.settingsPath = path.join(app.getPath('userData'), 'menubar-settings.json');
+    this._settings = this._loadSettings();
+  }
+
+  // ---------------------------------------------------------------------
+  // Settings persistence (menubar-settings.json)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Load settings from disk. Returns an object with defaults filled in.
+   * Silently recovers from missing/corrupt file by returning defaults.
+   */
+  _loadSettings() {
+    const defaults = { bind_host: DEFAULT_BIND_HOST };
+    try {
+      if (!fs.existsSync(this.settingsPath)) return defaults;
+      const raw = fs.readFileSync(this.settingsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      return { ...defaults, ...parsed };
+    } catch (err) {
+      console.warn('[settings] could not load, using defaults:', err.message);
+      return defaults;
+    }
+  }
+
+  /**
+   * Atomic write of settings to disk (write-temp-then-rename).
+   */
+  _saveSettings() {
+    try {
+      const tmp = this.settingsPath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(this._settings, null, 2), 'utf8');
+      fs.renameSync(tmp, this.settingsPath);
+    } catch (err) {
+      console.error('[settings] save failed:', err.message);
+    }
+  }
+
+  /**
+   * Current bind host ('0.0.0.0' | '127.0.0.1' | specific LAN IP).
+   */
+  getBindHost() {
+    return this._settings.bind_host || DEFAULT_BIND_HOST;
+  }
+
+  /**
+   * Persist a new bind host and trigger a server restart so uvicorn
+   * re-binds. No-op if the value is unchanged.
+   */
+  async setBindHost(ip) {
+    if (!ip || typeof ip !== 'string') {
+      throw new Error(`invalid bind host: ${ip}`);
+    }
+    if (this._settings.bind_host === ip) {
+      console.log(`[bind-host] already set to ${ip}, no-op`);
+      return;
+    }
+    console.log(`[bind-host] change: ${this._settings.bind_host} -> ${ip}`);
+    this._settings.bind_host = ip;
+    this._saveSettings();
+
+    // Full restart is required — uvicorn binds at startup and has no
+    // in-place rebind. tmux sessions survive because the tmux server is
+    // a separate daemon (session_manager rehydrates on lifespan_startup).
+    await this.restart();
+  }
+
+  /**
+   * Enumerate IPv4 LAN interface IPs suitable for binding.
+   * Filters out: loopback (internal), link-local 169.254.x, and macOS
+   * pseudo-interfaces (awdl/llw/utun/anpi/ap).
+   * Returns: [{iface: 'en0', ip: '192.168.1.250'}, ...]
+   */
+  getLocalInterfaceIps() {
+    const results = [];
+    let ifaces;
+    try {
+      ifaces = os.networkInterfaces();
+    } catch (err) {
+      console.warn('[bind-host] networkInterfaces() failed:', err.message);
+      return [];
+    }
+    for (const [name, addrs] of Object.entries(ifaces || {})) {
+      if (PSEUDO_IFACE_PATTERNS.some((rx) => rx.test(name))) continue;
+      if (!Array.isArray(addrs)) continue;
+      for (const a of addrs) {
+        if (!a || a.family !== 'IPv4') continue;
+        if (a.internal) continue;
+        if (typeof a.address !== 'string') continue;
+        if (a.address.startsWith('169.254.')) continue; // link-local
+        results.push({ iface: name, ip: a.address });
+      }
+    }
+    // Stable ordering by interface name (en0 before en13 etc.)
+    results.sort((a, b) => a.iface.localeCompare(b.iface));
+    return results;
+  }
+
+  /**
+   * Primary LAN IP — first non-loopback IPv4 from getLocalInterfaceIps().
+   * Used to resolve "0.0.0.0" into a copyable URL. Returns null if no
+   * LAN iface is available (airgapped Mac) — caller falls back to 127.
+   */
+  getPrimaryLanIp() {
+    const ips = this.getLocalInterfaceIps();
+    return ips.length > 0 ? ips[0].ip : null;
+  }
+
+  /**
+   * Compute the currently-reachable URL for this server based on bind
+   * host. Tunnel URL resolution is not done here because the /tunnels
+   * endpoint is auth-gated and the Electron app has no JWT — users with
+   * tunnels active get the LAN URL as a sensible fallback.
+   */
+  getPublishedUrl() {
+    const host = this.getBindHost();
+    if (host === '0.0.0.0') {
+      const lan = this.getPrimaryLanIp();
+      return `http://${lan || '127.0.0.1'}:${this.port}`;
+    }
+    return `http://${host}:${this.port}`;
   }
 
   /**
@@ -382,6 +521,13 @@ class ServerManager {
     const binDir = path.join(this.baseDir, 'bin');
     const env = { ...process.env };
     env.PATH = `${binDir}:/opt/homebrew/bin:/usr/local/bin:${env.PATH}`;
+
+    // Inject the bind host. pydantic-settings in src/config.py is
+    // case-insensitive, so plain HOST maps to settings.host which
+    // uvicorn.run reads in src/main.py. Always set explicitly — never
+    // rely on the .env baseline — so this is the single source of truth.
+    env.HOST = this.getBindHost();
+    console.log(`[spawn] HOST=${env.HOST}`);
 
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,
