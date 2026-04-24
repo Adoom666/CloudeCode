@@ -10,6 +10,25 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ---
 
+## Download
+
+**macOS (Apple Silicon):** [Cloude.Code-0.5.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.2/Cloude.Code-0.5.0-arm64.dmg) (93 MB)
+
+> Note: the release tag is **v0.5.2** but the DMG filename still reads `0.5.0`. The internal electron-builder version will be bumped in the next release; the file you're downloading is the v0.5.2 build.
+
+Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
+
+**Verify the download** (optional):
+
+```bash
+shasum -a 256 Cloude.Code-0.5.0-arm64.dmg
+# expected: 5e2c0336eeb9c145803a2b273c4e8a138d301836a99a547b78e89908af98e2b3
+```
+
+**Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
+
+---
+
 ## Overview
 
 Cloude Code is a hybrid Electron + FastAPI + tmux control plane for Claude Code CLI
