@@ -1,4 +1,8 @@
-"""Tunnel manager for creating Cloudflare tunnels."""
+"""Tunnel manager for creating Cloudflare tunnels.
+
+# LEGACY: inlined behavior behind tunnel.backends.quick_cloudflare.py;
+# slated for deletion in v3.2 follow-up PR.
+"""
 
 import asyncio
 import subprocess

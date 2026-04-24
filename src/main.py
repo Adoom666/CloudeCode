@@ -5,19 +5,25 @@ import asyncio
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
-from src.core.hybrid_tunnel_manager import HybridTunnelManager
+from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
+from src.core.refresh_store import RefreshStore
+from src.core.notifications import NotificationRouter
+from src.core.notifications import ntfy as ntfy_backend
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
-from src.api.auth import router as auth_router
+from src.api.auth import router as auth_router, limiter as auth_limiter
 
 # Configure structlog
 structlog.configure(
@@ -89,21 +95,67 @@ async def verify_public_access():
 # Global instances (will be initialized in lifespan)
 session_manager: SessionManager = None
 log_monitor: LogMonitor = None
-tunnel_manager: HybridTunnelManager = None
+tunnel_manager: TunnelManager = None
 auto_tunnel: AutoTunnelOrchestrator = None
+refresh_store: RefreshStore = None
+_refresh_purge_task: asyncio.Task = None
+notification_router: NotificationRouter = None
+
+
+# Six-hour cadence for the purge loop. Keep a module-level constant so
+# tests can monkeypatch to something fast.
+_REFRESH_PURGE_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+async def _refresh_purge_loop(store: RefreshStore):
+    """Background task — sweeps expired refresh tokens every 6 hours."""
+    while True:
+        try:
+            await asyncio.sleep(_REFRESH_PURGE_INTERVAL_SECONDS)
+            await store.purge_expired()
+        except asyncio.CancelledError:
+            # Normal shutdown path — let it propagate.
+            raise
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("refresh_purge_loop_error", error=str(e))
+            # Brief back-off before retrying so we don't hot-loop on a
+            # persistent error condition.
+            await asyncio.sleep(60)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global session_manager, log_monitor, tunnel_manager, auto_tunnel
+    global refresh_store, _refresh_purge_task, notification_router
 
     logger.info("application_starting", version="1.0.0")
 
     # Initialize core components
     session_manager = SessionManager()
+    # Re-adopt a surviving tmux session (if any) from previous server run.
+    # No-op for PTY backend (PTYs die with the parent).
+    await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
-    tunnel_manager = HybridTunnelManager(session_manager)
+
+    # Item 6: notification router. Wired AFTER log_monitor (which is the
+    # signal source for IdleWatcher in Item 7) but BEFORE auto_tunnel
+    # (which may want to fire a TUNNEL_CREATED event on bring-up).
+    auth_cfg = settings.load_auth_config()
+    notif_cfg = auth_cfg.notifications
+    await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
+    notification_router = NotificationRouter(
+        notif_cfg, asyncio.get_running_loop()
+    )
+    await notification_router.start()
+
+    # Item 7: inject the live router into SessionManager so IdleWatcher
+    # instances created via create_session have a valid emit target.
+    session_manager.attach_notification_router(notification_router)
+
+    tunnel_manager = TunnelManager.from_settings(
+        settings, session_manager=session_manager
+    )
 
     # Initialize tunnel manager
     await tunnel_manager.initialize()
@@ -116,26 +168,66 @@ async def lifespan(app: FastAPI):
     # Start log monitoring
     await log_monitor.start_monitoring()
 
+    # Item 5: refresh-token revocation store. Lives in the existing state
+    # directory (log_directory) so it rides along with the rest of the
+    # app's persistent state. Must be up BEFORE any request can hit
+    # /auth/verify — which in practice means before the yield below.
+    log_dir = settings.get_log_dir()
+    db_path = str(log_dir / "refresh_tokens.db")
+    refresh_store = RefreshStore(db_path)
+    await refresh_store.init()
+    _refresh_purge_task = asyncio.create_task(
+        _refresh_purge_loop(refresh_store)
+    )
+
     # Make components available to app state
     app.state.session_manager = session_manager
     app.state.log_monitor = log_monitor
     app.state.tunnel_manager = tunnel_manager
     app.state.auto_tunnel = auto_tunnel
+    app.state.refresh_store = refresh_store
+    app.state.notification_router = notification_router
 
     logger.info("application_ready")
 
-    # Verify public URL accessibility if using named tunnels
-    if tunnel_manager._is_named:
+    # Only probe public HTTPS when the active backend actually exposes
+    # the server publicly. LAN-only runs log the detected LAN URL instead.
+    if tunnel_manager.backend.supports_public():
         await verify_public_access()
+    else:
+        status = await tunnel_manager.backend.status()
+        logger.info(
+            "server_ready_local_only",
+            backend=status.get("backend"),
+            url=status.get("base_url"),
+        )
 
     yield
 
     # Cleanup on shutdown
     logger.info("application_shutting_down")
 
+    # Cancel the refresh-token purge loop first so it doesn't try to
+    # touch a closed DB connection.
+    if _refresh_purge_task is not None:
+        _refresh_purge_task.cancel()
+        try:
+            await _refresh_purge_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if refresh_store is not None:
+        await refresh_store.close()
+
     await log_monitor.stop_monitoring()
     await auto_tunnel.cleanup()
     await tunnel_manager.shutdown()
+
+    # Item 6: tear down notification pipeline AFTER everything else has
+    # stopped emitting. Router cancels its worker; ntfy backend closes
+    # the httpx client.
+    if notification_router is not None:
+        await notification_router.stop()
+    await ntfy_backend.shutdown()
 
     logger.info("application_shutdown_complete")
 
@@ -157,6 +249,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Item 9: Content-Security-Policy + hardening headers.
+#
+# Ordering note (Starlette LIFO): `add_middleware` registers outer-to-inner
+# as you call it, but they EXECUTE inner-to-outer on the request and
+# outer-to-inner on the response. We want CSP applied to EVERY response
+# including those produced by CORS preflight, static files, and the
+# catch-all SPA route — so we register it here, after CORS. On response
+# path it runs last, giving us a single place to stamp headers on
+# anything the app returns (including errors).
+#
+# Policy rationale for a local / LAN-only SPA:
+# - `default-src 'self'` — lock everything to same-origin by default.
+# - `script-src 'self'` — no inline or eval; all JS ships from /static.
+#   xterm.js is loaded from a CDN in index.html; if that stays, we will
+#   need to allow that CDN host here. The current policy will log CSP
+#   violations for CDN-hosted xterm until we self-host it (Item 14 follow-up).
+# - `style-src 'self' 'unsafe-inline'` — xterm addons (webgl, fit) inject
+#   inline style attributes on DOM nodes they manage. Without
+#   `'unsafe-inline'` the terminal renders blank. This is the smallest
+#   concession that keeps the terminal usable.
+# - `connect-src 'self' ws: wss:` — WebSocket terminal stream runs on
+#   the same origin; allow ws:/wss: so future tunnels (Cloudflare named)
+#   with a different scheme can still connect.
+# - `img-src 'self' data:` — data: URIs are used for QR codes / emoji SVGs.
+# - `font-src 'self' data:` — xterm embeds icon fonts as data: URIs.
+# - `frame-ancestors 'none'` — clickjack defense; Cloude Code is never
+#   meant to be iframed.
+@app.middleware("http")
+async def csp_headers(request: Request, call_next):
+    """Stamp CSP + hardening headers on every response."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "connect-src 'self' ws: wss:; "
+        "img-src 'self' data:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+# Wire slowapi rate limiter. The Limiter instance is defined in
+# src/api/auth.py (where the @limiter.limit decorators are applied).
+# Here we just bolt it onto the app:
+#   - app.state.limiter is where SlowAPIMiddleware looks it up.
+#   - _rate_limit_exceeded_handler emits a 429 with a Retry-After header
+#     derived from the exception's reset time. Do NOT override or duplicate
+#     its logging — slowapi already warns on 429 internally.
+app.state.limiter = auth_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
 app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
@@ -170,6 +318,32 @@ app.mount("/static", StaticFiles(directory=str(client_dir)), name="static")
 @app.get("/")
 async def root():
     """Serve the web interface."""
+    index_path = client_dir / "index.html"
+    return FileResponse(index_path)
+
+
+# Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
+# as `/` — the client-side router (client/js/router.js) reads the path
+# on load, validates the slug, and auto-selects the project after auth.
+#
+# Why a dedicated FastAPI route (not a catch-all):
+# - Keeps routing explicit; `/static/*`, `/ws/*`, `/api/*`, `/health` all
+#   resolve to their real handlers. FastAPI matches more-specific routes
+#   first, and this one is a SINGLE path segment under `/session/`, so
+#   there is no collision with anything else we mount.
+# - Path-level validation is intentionally permissive: we accept any
+#   non-empty path segment here and rely on the client router to enforce
+#   the strict slug regex and display a visible error for invalid names.
+#   That means a visitor who pastes a bad URL sees the app shell with an
+#   error banner — not a 404 from the server. Security posture is
+#   unchanged because no server-side state is touched by this route.
+@app.get("/session/{project}")
+async def session_deep_link(project: str):
+    """Serve the SPA shell for deep-link URLs.
+
+    The ``project`` path parameter is consumed by the client-side router
+    after the SPA boots; this handler does not inspect or validate it.
+    """
     index_path = client_dir / "index.html"
     return FileResponse(index_path)
 

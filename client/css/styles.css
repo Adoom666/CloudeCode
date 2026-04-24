@@ -431,6 +431,10 @@ button[data-tooltip]:hover::after {
     box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
 }
 
+.new-session-btn + .new-session-btn {
+    margin-top: 10px;
+}
+
 .reset-server-btn {
     width: 100%;
     padding: 16px 20px;
@@ -535,6 +539,22 @@ button[data-tooltip]:hover::after {
     padding: 20px;
     text-align: center;
 }
+
+/* Adopt-external-session disclosure. Native <details>/<summary> — we
+ * only restyle the summary marker so it's visible on the dark theme
+ * and reads as an inline help affordance next to the section title. */
+.adopt-disclosure { display: inline-block; margin-left: 8px; font-size: 0.85rem; font-weight: normal; }
+.adopt-disclosure > summary { cursor: help; color: #d77757; list-style: none; display: inline; padding: 0 6px; border: 1px solid rgba(215,119,87,0.4); border-radius: 50%; }
+.adopt-disclosure > summary::-webkit-details-marker { display: none; }
+.adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: #2d2d30; border: 1px solid #3e3e42; border-left: 3px solid #d77757; border-radius: 4px; color: #d4d4d4; font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
+.adopt-disclosure-body p + p { margin-top: 10px; }
+.adopt-disclosure-body code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 3px; color: #d77757; }
+.adopt-disclosure-code { background: rgba(215, 119, 87, 0.08); border: 1px solid rgba(215, 119, 87, 0.25); padding: 0.5rem; margin: 0.4rem 0; overflow-x: auto; font-size: 0.85em; white-space: pre-wrap; word-break: break-all; }
+
+/* Adopt row: reuses .project-item base; overlays an attach button
+ * in the upper-right slot the delete button normally occupies. */
+.adopt-item { padding-right: 100px; }
+.adopt-attach-btn { position: absolute; top: 12px; right: 12px; width: auto; height: auto; padding: 6px 14px; font-size: 0.85rem; }
 
 .launchpad-footer {
     margin-top: 40px;
@@ -1174,6 +1194,104 @@ button[data-tooltip]:hover::after {
     line-height: 1.4;
 }
 
+/* Folder picker modal */
+.folder-picker-modal {
+    max-width: 640px;
+}
+
+.folder-picker-path {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    color: #d4d4d4;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    word-break: break-all;
+}
+
+.folder-picker-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.folder-picker-toolbar-btn {
+    background: rgba(215, 119, 87, 0.1);
+    border: 1px solid rgba(215, 119, 87, 0.3);
+    color: #d77757;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    width: auto;
+    height: auto;
+}
+
+.folder-picker-toolbar-btn:hover:not(:disabled) {
+    background: rgba(215, 119, 87, 0.2);
+    border-color: #d77757;
+    box-shadow: 0 0 8px rgba(215, 119, 87, 0.3);
+}
+
+.folder-picker-toolbar-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.folder-picker-list {
+    background: #1e1e1e;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+.folder-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    color: #d4d4d4;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-bottom: 1px solid #2d2d30;
+    transition: background 0.15s ease;
+}
+
+.folder-picker-item:last-child {
+    border-bottom: none;
+}
+
+.folder-picker-item:hover {
+    background: #2d2d30;
+    color: #d77757;
+}
+
+.folder-picker-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.folder-picker-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-picker-empty {
+    padding: 24px;
+    text-align: center;
+    color: #858585;
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
 /* Mobile adjustments */
 @media (max-width: 768px) {
     .slash-commands-modal-content {
@@ -1203,4 +1321,117 @@ button[data-tooltip]:hover::after {
     .command-item {
         padding: 10px 12px;
     }
+
+    .folder-picker-list {
+        max-height: 240px;
+    }
+}
+
+/* ---- Running sessions section (Task 8) -------------------------- */
+
+.running-sessions-section {
+    margin-bottom: 1.5rem;
+}
+
+.running-session-row {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    background: rgba(215, 119, 87, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.running-session-row:hover {
+    background: rgba(215, 119, 87, 0.14);
+}
+
+.running-session-row.owned {
+    border-left: 3px solid #4ade80;
+}
+
+.running-session-row.external {
+    border-left: 3px solid #fbbf24;
+}
+
+.running-session-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.running-session-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.running-session-row.owned .running-session-dot {
+    background: #4ade80;
+    box-shadow: 0 0 8px #4ade80;
+}
+
+.running-session-row.external .running-session-dot {
+    background: #fbbf24;
+    box-shadow: 0 0 8px #fbbf24;
+}
+
+.running-session-name {
+    flex: 1;
+    font-weight: bold;
+    color: var(--accent, #d77757);
+}
+
+.running-session-kill {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #e88;
+    border-radius: 4px;
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.running-session-kill:hover {
+    color: #ff6b6b;
+    transform: scale(1.15);
+    background: rgba(255, 107, 107, 0.12);
+}
+
+.running-session-badges {
+    display: flex;
+    gap: 6px;
+    margin-left: 18px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.badge {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+}
+
+.badge-running { background: #2a3a2a; color: #4ade80; }
+.badge-tmux    { background: #2a2a3a; color: #8899ff; }
+.badge-external { background: #4a3a2a; color: #fbbf24; }
+
+.running-session-age {
+    color: #888;
+    font-size: 0.75em;
+    align-self: center;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
 }

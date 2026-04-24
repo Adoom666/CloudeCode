@@ -1,0 +1,22 @@
+# Node
+node_modules/
+package-lock.json
+
+# Build outputs — ignore dist/ except shippable DMG + blockmap
+dist/*
+!dist/*.dmg
+!dist/*.dmg.blockmap
+out/
+
+# Electron build cache
+.cache/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Claude
+.prompt_history/

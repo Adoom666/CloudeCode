@@ -1,16 +1,42 @@
 {
   "jwt_expiry_minutes": 30,
   "template_path": "claude-template",
+  "session": {
+    "backend": "auto",
+    "tmux_socket_name": "cloude",
+    "scrollback_lines": 3000
+  },
+  "tunnel": {
+    "backend": "local_only",
+    "enable_cloudflare": false,
+    "lan_hostname": "auto"
+  },
+  "auth_rate_limits": {
+    "totp_verify_per_minute": 5,
+    "totp_verify_per_hour": 20,
+    "trust_proxy_headers": false
+  },
+  "notifications": {
+    "enabled": false,
+    "ntfy_base_url": "https://ntfy.sh",
+    "ntfy_topic": "",
+    "public_base_url": "",
+    "idle_threshold_seconds": 30.0,
+    "rate_limit_global_cap": 10,
+    "rate_limit_window_seconds": 60.0,
+    "rate_limit_per_kind_cooldown_seconds": 10.0
+  },
   "common_slash_commands": [
-    "/agents",
     "/clear",
     "/compact",
     "/context",
-    "/hooks",
-    "/mcp",
     "/resume",
     "/rewind",
-    "/usage"
+    "/model",
+    "/effort",
+    "/plan",
+    "/tasks",
+    "/diff"
   ],
   "projects": [
     {

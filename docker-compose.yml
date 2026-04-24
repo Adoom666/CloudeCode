@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  cloude:
+    image: cloude-code:local
+    build:
+      context: .
+      args:
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+    ports:
+      # Bind to ${CLOUDE_BIND_IP} so only that interface exposes the port.
+      # Default to 127.0.0.1 so an unset/misconfigured value does NOT leak to 0.0.0.0.
+      - "${CLOUDE_BIND_IP:-127.0.0.1}:8000:8000"
+    volumes:
+      # Claude CLI credentials + MCP config
+      - "${HOME}/.claude:/home/cloude/.claude"
+      # Project dir — user provides via CLOUDE_PROJECT_PATH env
+      - "${CLOUDE_PROJECT_PATH:-./projects}:/workspace"
+      # Runtime config
+      - "./config.json:/app/config.json:ro"
+      # Runtime env
+      - "./.env:/app/.env:ro"
+      # Log/state directory (session metadata, refresh_tokens.db)
+      - "${CLOUDE_LOG_DIR:-./logs}:/var/log/cloude"
+    environment:
+      CLOUDECODE_LOG_DIR: /var/log/cloude
+      CLOUDECODE_DEFAULT_WORKING_DIR: /workspace
+      TZ: ${TZ:-UTC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -6,7 +6,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+/dist/
 downloads/
 eggs/
 .eggs/
@@ -33,6 +33,13 @@ config.json
 
 # Authentication
 totp-qr.png
+refresh_tokens.db
+
+# electron-builder byproducts (keep only DMG + blockmap)
+macOS/dist/builder-debug.yml
+macOS/dist/builder-effective-config.yaml
+macOS/dist/mac-arm64/
+macOS/node_modules/
 
 # IDE
 .vscode/
@@ -59,3 +66,9 @@ session_metadata.json
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Claude
+.prompt_history/
+troubleshooting/
+
+.superpowers/

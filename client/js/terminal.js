@@ -28,6 +28,17 @@ class Terminal {
         this.autoScrollEnabled = true;
         this.resizeDebounceTimer = null;
 
+        // Track last-sent dims so we only log + ship when they actually
+        // change. Multiple event sources (window.resize + visualViewport +
+        // ResizeObserver + orientationchange) can all fire for a single
+        // physical layout change; dedupe at the sendResize gate.
+        this.lastSentCols = null;
+        this.lastSentRows = null;
+
+        // ResizeObserver tracking the xterm container. Listener-lifetime is
+        // tied to the Terminal object; cleaned up in destroy paths.
+        this._resizeObserver = null;
+
         // UI elements
         this.destroySessionBtn = null;
         this.statusEl = null;
@@ -170,6 +181,20 @@ class Terminal {
 
         this.term.open(document.getElementById('terminal'));
 
+        // Intercept Shift+Enter → send ESC + CR so Claude CLI treats it as
+        // "insert newline without submitting" instead of the default behavior
+        // where xterm.js collapses it to plain Enter.
+        this.term.attachCustomKeyEventHandler((ev) => {
+            if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
+                !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(new TextEncoder().encode('\x1b\r'));
+                }
+                return false;  // swallow the event so xterm doesn't also emit \r
+            }
+            return true;  // all other keys pass through to default handling
+        });
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -186,18 +211,53 @@ class Terminal {
             }
         });
 
-        // Handle window resize with debouncing
-        window.addEventListener('resize', () => {
+        // ---- Dynamic resize pipeline ----
+        //
+        // All four sources funnel into a single 100ms debounced callback:
+        //   window.resize            - desktop viewport / browser window
+        //   orientationchange        - mobile device rotation
+        //   visualViewport.resize    - mobile keyboard popup / browser chrome
+        //                              show+hide / pinch-zoom. Provides more
+        //                              accurate viewport dims than window
+        //                              on iOS Safari.
+        //   ResizeObserver           - ANY layout change of the xterm
+        //                              container (sidebar collapse, split
+        //                              view, CSS transitions, font load).
+        //
+        // Single debounce gate means redundant fires during one layout
+        // change collapse to a single fit()+sendResize() call, and the
+        // sendResize dedup further suppresses duplicate frames when the
+        // cell grid hasn't actually changed. Graceful degradation: if any
+        // API is unavailable (old browser) the remaining listeners still
+        // catch their share of events.
+        const scheduleResize = (source) => {
             if (this.resizeDebounceTimer) {
                 clearTimeout(this.resizeDebounceTimer);
             }
             this.resizeDebounceTimer = setTimeout(() => {
                 if (this.fitAddon && this.term) {
                     this.fitAddon.fit();
-                    this.sendResize();
+                    this.sendResize(source);
                 }
             }, 100);
-        });
+        };
+
+        window.addEventListener('resize', () => scheduleResize('window.resize'));
+        window.addEventListener('orientationchange', () => scheduleResize('orientationchange'));
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => scheduleResize('visualViewport.resize'));
+        }
+
+        const termContainer = document.getElementById('terminal');
+        if (termContainer && typeof ResizeObserver !== 'undefined') {
+            try {
+                this._resizeObserver = new ResizeObserver(() => scheduleResize('ResizeObserver'));
+                this._resizeObserver.observe(termContainer);
+            } catch (e) {
+                console.warn('Terminal: ResizeObserver setup failed', e);
+            }
+        }
 
         // Setup scroll event listener for auto-scroll detection
         this.setupScrollListener();
@@ -322,16 +382,41 @@ class Terminal {
     }
 
     /**
-     * Send resize event to server
+     * Send resize event to server.
+     *
+     * Dedups on (cols, rows) so the four-source funnel doesn't ship
+     * redundant frames when a layout event fires but the cell grid
+     * didn't actually change (zoom-neutral pinch, background chrome
+     * collapse that stays within the same cell count, etc.).
+     *
+     * @param {string} source - Origin tag for the [TERM-RESIZE] log line.
+     *   Values: 'window.resize' | 'orientationchange' |
+     *   'visualViewport.resize' | 'ResizeObserver' | 'handshake' |
+     *   'ws.onopen'. Defaults to 'unknown' for callers that don't tag.
+     * @param {boolean} force - Bypass the dedup gate. Used by the
+     *   request_dims handshake so the server always gets a fresh frame
+     *   on reconnect even if the grid happens to match the last send.
      */
-    sendResize() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.term) {
-            this.ws.send(JSON.stringify({
-                type: 'pty_resize',
-                cols: this.term.cols,
-                rows: this.term.rows
-            }));
+    sendResize(source = 'unknown', force = false) {
+        if (!(this.ws && this.ws.readyState === WebSocket.OPEN && this.term)) return;
+
+        const cols = this.term.cols;
+        const rows = this.term.rows;
+
+        if (!force && cols === this.lastSentCols && rows === this.lastSentRows) {
+            return;
         }
+
+        this.ws.send(JSON.stringify({
+            type: 'pty_resize',
+            cols,
+            rows,
+        }));
+
+        console.log(`[TERM-RESIZE] ${cols}x${rows} source=${source}`);
+
+        this.lastSentCols = cols;
+        this.lastSentRows = rows;
     }
 
     /**
@@ -349,9 +434,55 @@ class Terminal {
     /**
      * Connect to session
      * @param {object} session - Session data
+     * @param {object} [opts]
+     * @param {string} [opts.initialScrollbackB64] - Base64-encoded bytes
+     *   captured server-side from `tmux capture-pane` for the external
+     *   session being adopted. Painted into xterm BEFORE the WS opens so
+     *   the server's WS tailer can seek the fifo to `fifoStartOffset`
+     *   without risking a tear or duplicate output. Ignored on normal
+     *   (non-adopt) session creates.
+     * @param {number} [opts.fifoStartOffset] - Byte offset into the
+     *   pipe-pane fifo that the server's tailer should begin streaming
+     *   from. Client doesn't consume this directly; it's the server's
+     *   contract — we accept it for symmetry and logging only.
      */
-    async connectToSession(session) {
-        console.log('Terminal: Connecting to session:', session.id);
+    async connectToSession(session, opts = {}) {
+        const { initialScrollbackB64 = '', fifoStartOffset = null } = opts;
+        console.log('Terminal: Connecting to session:', session.id, {
+            adopted: !!initialScrollbackB64,
+            fifoStartOffset,
+        });
+
+        // If a prior session was active, tear it down cleanly before painting the new one.
+        // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
+        // WebSocket readers competing for the same backend FIFO.
+        if (this.ws) {
+            try {
+                // Flag so our onclose handler doesn't trigger a reconnect loop.
+                this._intentionalClose = true;
+                this.ws.close();
+            } catch (e) {
+                console.warn('Terminal: error closing prior WS:', e);
+            }
+            this.ws = null;
+        }
+        // Reset the xterm buffer and cursor. term.reset() clears scrollback +
+        // alt-buffer + wraps state; term.clear() only clears the visible screen.
+        // We want reset() so the VT parser starts fresh for the new session.
+        if (this.term) {
+            try {
+                this.term.reset();
+            } catch (e) {
+                console.warn('Terminal: xterm reset failed:', e);
+            }
+        }
+        this._currentSession = null;
+        this.sessionActive = false;
+        this.reconnectAttempts = 0;
+
+        // Stash session on the controller so other modules (launchpad
+        // self-adopt filter, debug) can introspect without refetching.
+        this._currentSession = session;
 
         this.sessionActive = true;
         this.sessionInfoEl.textContent =
@@ -360,12 +491,113 @@ class Terminal {
         // Enable destroy button
         this.destroySessionBtn.disabled = false;
 
-        this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
+        // Adopt path: paint server-captured scrollback into xterm BEFORE
+        // the WS opens. Must be synchronous relative to the WS connect so
+        // the VT parser state is correct when the first streamed byte
+        // arrives at fifoStartOffset. atob() decodes to a binary string
+        // whose charCodeAt values are the raw bytes — we MUST NOT run
+        // these through TextDecoder, which would mangle non-UTF8 ANSI
+        // escape bytes. xterm.write() accepts Uint8Array directly and
+        // feeds the parser without re-encoding.
+        if (initialScrollbackB64) {
+            try {
+                const bin = atob(initialScrollbackB64);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) {
+                    bytes[i] = bin.charCodeAt(i) & 0xff;
+                }
+                this.term.write(bytes);
+                console.log(`Terminal: painted ${bytes.length} bytes of adopt scrollback`);
+            } catch (e) {
+                // Non-fatal — if the b64 is malformed we still want the
+                // session to come up. The user will just miss the pre-
+                // adopt scrollback, not the live stream.
+                console.warn('Terminal: scrollback paint failed, continuing without it:', e);
+            }
+        } else {
+            this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
+        }
 
         // Connect WebSocket
         setTimeout(() => this.connectWebSocket(), 500);
 
         // Load tunnels
+        this.loadTunnels();
+    }
+
+    /**
+     * Reconnect to an ALREADY-ACTIVE backend session.
+     *
+     * Used when the user returns to the launchpad while a session is
+     * running and clicks "return to terminal". The backend is already
+     * alive — we must NOT POST /sessions (would try to create) or
+     * POST /sessions/adopt (would re-pipe-pane the tmux session). We
+     * just re-open the WebSocket against the existing backend.
+     *
+     * Contract parity with connectToSession(): stashes the session on
+     * the controller, marks it active, wires the destroy button, then
+     * opens the WS on the same delay so the UI transition settles first.
+     *
+     * Safe to call multiple times. If a live WS is already open, we
+     * do nothing beyond re-painting the status (the server stream is
+     * unaffected). If xterm already holds state from the previous
+     * session view, we leave it alone — returning to an existing
+     * session should feel seamless, not like a reload.
+     *
+     * @param {object} session - Session object (shape matches what
+     *   GET /sessions returns under the ``session`` key).
+     */
+    reconnectToExistingSession(session) {
+        console.log('Terminal: Reconnecting to existing session:', session && session.id);
+
+        // If a prior session was active, tear it down cleanly before painting the new one.
+        // Prevents stale scrollback, stacked "[Session created...]" banners, and ghost
+        // WebSocket readers competing for the same backend FIFO.
+        if (this.ws) {
+            try {
+                // Flag so our onclose handler doesn't trigger a reconnect loop.
+                this._intentionalClose = true;
+                this.ws.close();
+            } catch (e) {
+                console.warn('Terminal: error closing prior WS:', e);
+            }
+            this.ws = null;
+        }
+        // Reset the xterm buffer and cursor. term.reset() clears scrollback +
+        // alt-buffer + wraps state; term.clear() only clears the visible screen.
+        // We want reset() so the VT parser starts fresh for the new session.
+        if (this.term) {
+            try {
+                this.term.reset();
+            } catch (e) {
+                console.warn('Terminal: xterm reset failed:', e);
+            }
+        }
+        this._currentSession = null;
+        this.sessionActive = false;
+        this.reconnectAttempts = 0;
+
+        // Stash so launchpad self-adopt filter + debug can introspect.
+        this._currentSession = session;
+        this.sessionActive = true;
+
+        if (this.sessionInfoEl) {
+            this.sessionInfoEl.textContent =
+                `Session: ${session.id} | PID: ${session.pty_pid || '?'}`;
+        }
+        if (this.destroySessionBtn) {
+            this.destroySessionBtn.disabled = false;
+        }
+
+        // Always reopen a fresh WS after teardown above, on the same delay
+        // connectToSession uses, so
+        // the terminal screen transition has time to settle and the
+        // fit/font readiness dance in connectWebSocket() has a stable
+        // container to measure.
+        setTimeout(() => this.connectWebSocket(), 500);
+
+        // Refresh tunnels panel in case tunnels were created/destroyed
+        // while the user was away on the launchpad.
         this.loadTunnels();
     }
 
@@ -412,11 +644,13 @@ class Terminal {
 
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
 
-        // Get WebSocket URL with token
+        // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
+        // the Sec-WebSocket-Protocol header, NOT in the URL — so no token
+        // redaction is needed when logging the URL.
         const wsURL = window.API.getWebSocketURL();
-        console.log('Terminal: Connecting to WebSocket:', wsURL.replace(/token=[^&]+/, 'token=***'));
+        console.log('Terminal: Connecting to WebSocket:', wsURL);
 
-        this.ws = new WebSocket(wsURL);
+        this.ws = window.API.openWebSocket();
         this.ws.binaryType = 'arraybuffer';
         this.setupWebSocketHandlers();
     }
@@ -433,6 +667,9 @@ class Terminal {
             // Reset reconnect state
             this.reconnectAttempts = 0;
             this.isReconnecting = false;
+            // Clear intentional-close flag now that a fresh WS is open —
+            // any FUTURE close is a natural disconnect and should reconnect.
+            this._intentionalClose = false;
             if (this.reconnectTimeout) {
                 clearTimeout(this.reconnectTimeout);
                 this.reconnectTimeout = null;
@@ -444,8 +681,10 @@ class Terminal {
                 this.term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
             }
 
-            // Send initial resize
-            this.sendResize();
+            // Send initial resize (legacy fallback path — the server's
+            // request_dims handshake will also arrive and trigger a
+            // handshake-tagged sendResize which dedupes if dims match).
+            this.sendResize('ws.onopen');
 
             // Start keepalive ping
             if (this.keepaliveInterval) {
@@ -489,6 +728,15 @@ class Terminal {
                 this.keepaliveInterval = null;
             }
 
+            // If the close was triggered by a deliberate session swap,
+            // skip the disconnect banner + reconnect loop — the new
+            // session's connect flow will paint its own state.
+            if (this._intentionalClose) {
+                console.log('Terminal: intentional close, skipping reconnect');
+                this._intentionalClose = false;
+                return;
+            }
+
             if (this.term) {
                 this.term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
             }
@@ -521,6 +769,20 @@ class Terminal {
             }
         } else if (type === 'pong') {
             console.log('Terminal: Received pong');
+        } else if (type === 'request_dims') {
+            // Server-driven resize handshake. Fit and reply IMMEDIATELY —
+            // bypass the 100ms debounce because the server is waiting in
+            // a bounded timeout window (2s). Any debounce here would eat
+            // into that budget and risk the server proceeding with stale
+            // birth dims.
+            if (this.fitAddon && this.term) {
+                try {
+                    this.fitAddon.fit();
+                } catch (e) {
+                    console.warn('[TERM-RESIZE] handshake fit failed', e);
+                }
+                this.sendResize('handshake', true /* force: always ship on handshake */);
+            }
         }
     }
 

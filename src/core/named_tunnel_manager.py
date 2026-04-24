@@ -1,9 +1,14 @@
-"""Named Cloudflare tunnel manager with single persistent tunnel."""
+"""Named Cloudflare tunnel manager with single persistent tunnel.
+
+# LEGACY: inlined behavior behind tunnel.backends.named_cloudflare.py;
+# slated for deletion in v3.2 follow-up PR.
+"""
 
 import asyncio
 import subprocess
 import json
 import yaml
+import re
 from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime
@@ -41,6 +46,42 @@ class NamedTunnelManager:
         self._tunnel_process: Optional[subprocess.Popen] = None
         self._config_path = Path.home() / ".cloudflared" / f"{self.tunnel_name}.yml"
 
+    def _persist_tunnel_id_to_env(self, tunnel_id: str) -> None:
+        """
+        Persist tunnel ID to .env file.
+
+        Args:
+            tunnel_id: The tunnel ID to persist
+        """
+        try:
+            # Find .env file - it's in the current working directory
+            env_path = Path(".env")
+
+            if not env_path.exists():
+                logger.warning("env_file_not_found", path=str(env_path))
+                return
+
+            # Read current .env content
+            with open(env_path, 'r') as f:
+                content = f.read()
+
+            # Use regex to replace CLOUDFLARE_TUNNEL_ID value
+            updated_content = re.sub(
+                r'^CLOUDFLARE_TUNNEL_ID=.*',
+                f'CLOUDFLARE_TUNNEL_ID={tunnel_id}',
+                content,
+                flags=re.MULTILINE
+            )
+
+            # Write back to .env
+            with open(env_path, 'w') as f:
+                f.write(updated_content)
+
+            logger.info("tunnel_id_persisted_to_env", tunnel_id=tunnel_id, path=str(env_path))
+
+        except Exception as e:
+            logger.error("failed_to_persist_tunnel_id", error=str(e))
+
     async def initialize(self) -> bool:
         """
         Initialize the named tunnel.
@@ -59,6 +100,9 @@ class NamedTunnelManager:
             self.tunnel_id = tunnel_id
             self.cloudflare_api.tunnel_id = tunnel_id  # Update CloudflareAPI with tunnel ID
             logger.info("tunnel_id_obtained", tunnel_id=tunnel_id)
+
+            # Persist tunnel ID to .env file for future use
+            self._persist_tunnel_id_to_env(tunnel_id)
 
             # Create initial config
             await self._create_tunnel_config()

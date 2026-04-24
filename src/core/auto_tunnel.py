@@ -1,12 +1,21 @@
-"""Auto-tunnel integration: automatically creates tunnels when ports are detected."""
+"""Auto-tunnel integration: automatically creates tunnels when ports are detected.
+
+Works with any tunnel backend: `LocalOnlyBackend` (just registers the LAN
+URL, no cloudflared spawn) or the Cloudflare backends (create a public
+tunnel). The orchestrator only cares about the
+:class:`src.core.tunnel.manager.TunnelManager` interface.
+"""
 
 import asyncio
-from typing import Set
+from typing import Set, TYPE_CHECKING
 import structlog
 
 from src.config import settings
 from src.utils.patterns import PatternMatch
-from src.models import WSTunnelMessage, WSMessageType
+from src.models import Tunnel, TunnelStatus, WSTunnelMessage, WSMessageType
+
+if TYPE_CHECKING:  # pragma: no cover — typing-only
+    from src.core.tunnel.manager import TunnelManager
 
 logger = structlog.get_logger()
 
@@ -14,13 +23,15 @@ logger = structlog.get_logger()
 class AutoTunnelOrchestrator:
     """Orchestrates automatic tunnel creation when ports are detected."""
 
-    def __init__(self, log_monitor, tunnel_manager):
+    def __init__(self, log_monitor, tunnel_manager: "TunnelManager"):
         """
         Initialize the auto-tunnel orchestrator.
 
         Args:
             log_monitor: LogMonitor instance
-            tunnel_manager: TunnelManager instance
+            tunnel_manager: Active :class:`TunnelManager` (router around the
+                selected backend). Backend-agnostic; this code path uses
+                only ``create_tunnel`` / ``destroy_all_tunnels``.
         """
         self.log_monitor = log_monitor
         self.tunnel_manager = tunnel_manager
@@ -89,8 +100,13 @@ class AutoTunnelOrchestrator:
         logger.info("port_detected_creating_tunnel", port=port)
 
         try:
-            # Create tunnel
-            tunnel = await self.tunnel_manager.create_tunnel(port)
+            # Create tunnel via the active backend (router decides flavor).
+            tunnel_info = await self.tunnel_manager.create_tunnel(port)
+
+            # Coerce whatever shape came back (dict from local_only /
+            # Tunnel pydantic obj from legacy wrappers) into a Tunnel model
+            # so WS consumers see a consistent schema.
+            tunnel_model = _coerce_to_tunnel_model(tunnel_info, port=port)
 
             # Mark port as handled
             self._detected_ports.add(port)
@@ -98,7 +114,7 @@ class AutoTunnelOrchestrator:
             # Broadcast tunnel creation event
             event = WSTunnelMessage(
                 type=WSMessageType.TUNNEL_CREATED,
-                tunnel=tunnel
+                tunnel=tunnel_model,
             )
 
             await self._broadcast_tunnel_event(event)
@@ -106,7 +122,7 @@ class AutoTunnelOrchestrator:
             logger.info(
                 "tunnel_auto_created",
                 port=port,
-                public_url=tunnel.public_url
+                public_url=tunnel_model.public_url,
             )
 
         except Exception as e:
@@ -162,3 +178,38 @@ class AutoTunnelOrchestrator:
         self._subscribers.clear()
 
         logger.info("auto_tunnel_cleanup_complete")
+
+
+def _coerce_to_tunnel_model(obj, *, port: int) -> Tunnel:
+    """Turn whatever the backend returned into a :class:`Tunnel` model.
+
+    Backends return either a plain dict (``local_only``) or a pydantic
+    ``Tunnel`` object (legacy Cloudflare wrappers). Both paths end up as a
+    single pydantic ``Tunnel`` here so downstream WS messages are uniform.
+    """
+    if isinstance(obj, Tunnel):
+        return obj
+
+    if obj is None:
+        data = {}
+    elif isinstance(obj, dict):
+        data = dict(obj)
+    else:
+        # pydantic-ish but not our Tunnel model
+        try:
+            data = obj.model_dump()
+        except AttributeError:
+            try:
+                data = obj.dict()
+            except AttributeError:
+                data = {}
+
+    url = data.get("public_url") or data.get("url") or ""
+    return Tunnel(
+        id=data.get("id") or f"tun_{port}",
+        session_id=data.get("session_id") or "local",
+        port=int(data.get("port") or port),
+        public_url=url,
+        status=TunnelStatus.ACTIVE,
+        process_pid=data.get("process_pid"),
+    )

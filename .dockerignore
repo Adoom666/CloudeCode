@@ -1,0 +1,58 @@
+# Version control
+.git
+.github
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.tox
+.coverage
+coverage
+htmlcov
+venv
+.venv
+env
+
+# Node (we install Claude CLI via npm inside the image; don't ship host node_modules)
+node_modules
+**/node_modules
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# macOS Electron build artifacts (not part of the container image)
+macOS
+dist
+
+# Secrets and local runtime state
+.env
+.env.local
+.env.*.local
+totp-qr.png
+*.totp-qr.png
+refresh_tokens.db
+session_metadata.json
+logs/
+projects/
+.claude/
+
+# Test artifacts
+tests/.pytest_cache
+
+# Keep .env.example reachable for the image (setup_auth.py reads it)
+!.env.example
+
+# Planning / docs that aren't needed at runtime
+*.md
+!README.md

@@ -1,7 +1,7 @@
 """Configuration management using pydantic-settings."""
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
@@ -15,14 +15,138 @@ class ProjectConfig(BaseModel):
     description: Optional[str] = None
 
 
+class SessionConfig(BaseModel):
+    """Session backend configuration.
+
+    - ``backend``: ``"auto"`` (tmux if available, else pty), ``"tmux"``, or ``"pty"``.
+    - ``tmux_socket_name``: name passed to ``tmux -L <name>``. Defaults to
+      ``"cloude"`` so we never touch the user's default tmux server.
+    - ``scrollback_lines``: how many lines the backend captures on re-attach
+      for scrollback replay. Too high = slow reconnects; too low = lost
+      context. 3000 lines is a reasonable middle ground.
+    """
+    backend: str = Field(
+        default="auto",
+        description="Session backend: 'auto' | 'tmux' | 'pty'",
+    )
+    tmux_socket_name: str = Field(
+        default="cloude",
+        description="Dedicated tmux socket name (tmux -L <name>)",
+    )
+    scrollback_lines: int = Field(
+        default=3000,
+        description="Lines of scrollback to capture on re-attach",
+        ge=0,
+    )
+
+
+class TunnelConfig(BaseModel):
+    """Tunnel backend configuration.
+
+    - ``backend``: ``"local_only"`` (default, LAN-only, zero deps),
+      ``"quick_cloudflare"`` (cloudflared --url quick tunnel), or
+      ``"named_cloudflare"`` (persistent named tunnel with CNAME ingress).
+    - ``enable_cloudflare``: second-layer feature flag. Cloudflare
+      backends refuse to instantiate unless this is True, even if
+      selected by name. This is the "double-flag guard" — you have to
+      both pick a Cloudflare backend AND flip the master switch to
+      actually go public.
+    - ``lan_hostname``: override for the LAN hostname used by
+      ``local_only``. Default ``"auto"`` triggers detection (socket →
+      netifaces → UDP-connect trick → 127.0.0.1 fallback).
+    """
+    backend: str = Field(
+        default="local_only",
+        description=(
+            "Tunnel backend: 'local_only' | 'quick_cloudflare' | "
+            "'named_cloudflare'"
+        ),
+    )
+    enable_cloudflare: bool = Field(
+        default=False,
+        description="Master flag — must be true to use any Cloudflare backend",
+    )
+    lan_hostname: str = Field(
+        default="auto",
+        description="LAN hostname/IP for local_only backend ('auto' = detect)",
+    )
+
+
+class NotificationsConfig(BaseModel):
+    """Push notification configuration (Item 6).
+
+    - ``enabled``: master flag. False = the router is wired but every
+      ``emit()`` is a no-op. No background traffic, no warnings.
+    - ``ntfy_base_url``: the ntfy server. Default is the public
+      sh.ntfy.sh; self-hosted users override.
+    - ``ntfy_topic``: the secret topic name. EMPTY by default —
+      ``setup_auth.py`` generates a 32-hex value on first run. Treat
+      as a credential: anyone with the topic name can read your
+      notifications.
+    - ``public_base_url``: e.g. ``"http://mac.lan:8000"``. When set,
+      notifications include a Click deep link back to the session.
+      When unset, notifications fire without a Click header.
+    - ``idle_threshold_seconds``: Item 7 — seconds of PTY silence after
+      which an IdleWatcher fires TASK_COMPLETE, provided the tail ends
+      on a Claude Code prompt frame. 30s is the plan v3.1 default;
+      operators may tune downward if false-positive rate is acceptable.
+    """
+    enabled: bool = False
+    ntfy_base_url: str = Field(default="https://ntfy.sh")
+    ntfy_topic: str = Field(default="")
+    public_base_url: str = Field(default="")
+    idle_threshold_seconds: float = Field(default=30.0, ge=1.0)
+    # Plan v3.1 Item 8 — rate limiter knobs (single global bucket + per-kind dedup).
+    # ``rate_limit_global_cap`` / ``rate_limit_window_seconds``: rolling-window
+    # cap on total notifications dispatched (default 10 per 60s). Guards against
+    # pattern-match storms.
+    # ``rate_limit_per_kind_cooldown_seconds``: minimum seconds between two
+    # emits of the same EventType (default 10s). Deduplicates bursts like
+    # repeated "Error:" pattern matches in test output.
+    rate_limit_global_cap: int = Field(default=10, ge=1)
+    rate_limit_window_seconds: float = Field(default=60.0, ge=1.0)
+    rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
+
+
+class AuthRateLimits(BaseModel):
+    """Rate-limit knobs for authentication endpoints.
+
+    - ``totp_verify_per_minute`` / ``totp_verify_per_hour``: dual-window
+      limits applied to the TOTP verify endpoint. Both must be satisfied;
+      the per-minute bucket stops rapid brute-force bursts, the per-hour
+      bucket caps sustained hammering.
+    - ``trust_proxy_headers``: when True, the rate-limit key comes from the
+      first value of ``X-Forwarded-For``; otherwise the direct peer
+      ``request.client.host`` is used. MUST stay False when the app is
+      reachable directly (LAN bind). Flip to True only when terminating
+      TLS behind a trusted reverse proxy (Cloudflare tunnel, nginx, ALB).
+    """
+    totp_verify_per_minute: int = Field(default=5, ge=1)
+    totp_verify_per_hour: int = Field(default=20, ge=1)
+    trust_proxy_headers: bool = False
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     totp_secret: Optional[str] = None  # Populated from Settings (.env)
     jwt_secret: Optional[str] = None   # Populated from Settings (.env)
-    jwt_expiry_minutes: int = 30
+    jwt_expiry_minutes: int = 30       # Legacy — used only if access TTL unset.
+    # Item 5: access/refresh token pair. Access is short-lived (15m default)
+    # so a leaked token has a tight blast radius; refresh is long-lived
+    # (7d default) but stored server-side with rotation + reuse detection.
+    access_token_ttl_seconds: int = 900       # 15 minutes
+    refresh_token_ttl_seconds: int = 604800   # 7 days
+    # Grace window during which a just-rotated refresh token can still be
+    # used. Tolerates near-simultaneous requests (client fires two refreshes
+    # at once) without tripping reuse-detection.
+    refresh_grace_seconds: int = 10
     template_path: Optional[str] = None
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
+    session: SessionConfig = Field(default_factory=SessionConfig)
+    tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
+    auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
 
 class Settings(BaseSettings):
@@ -159,15 +283,86 @@ class Settings(BaseSettings):
             projects_data = data.get("projects", [])
             projects = [ProjectConfig(**p) for p in projects_data]
 
+            # Build SessionConfig from optional "session" block; missing keys
+            # fall back to SessionConfig defaults.
+            session_data = data.get("session", {}) or {}
+            try:
+                session_config = SessionConfig(**session_data)
+            except Exception:
+                # Malformed session block — log + use defaults rather than
+                # killing the whole config load.
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_session_config_block",
+                    raw=session_data,
+                )
+                session_config = SessionConfig()
+
+            # Build TunnelConfig from optional "tunnel" block; same
+            # malformed-block tolerance as session.
+            tunnel_data = data.get("tunnel", {}) or {}
+            try:
+                tunnel_config = TunnelConfig(**tunnel_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_tunnel_config_block",
+                    raw=tunnel_data,
+                )
+                tunnel_config = TunnelConfig()
+
+            # Build AuthRateLimits from optional "auth_rate_limits" block;
+            # same malformed-block tolerance as session/tunnel.
+            rate_limits_data = data.get("auth_rate_limits", {}) or {}
+            try:
+                rate_limits_config = AuthRateLimits(**rate_limits_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_auth_rate_limits_block",
+                    raw=rate_limits_data,
+                )
+                rate_limits_config = AuthRateLimits()
+
+            # Build NotificationsConfig from optional "notifications" block;
+            # same malformed-block tolerance as session/tunnel.
+            notifications_data = data.get("notifications", {}) or {}
+            try:
+                notifications_config = NotificationsConfig(**notifications_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_notifications_config_block",
+                    raw=notifications_data,
+                )
+                notifications_config = NotificationsConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
                 totp_secret=self.totp_secret,  # From .env via Settings
                 jwt_secret=self.jwt_secret,    # From .env via Settings
                 jwt_expiry_minutes=data.get("jwt_expiry_minutes", 30),
+                # Item 5 — optional JSON overrides for token lifetimes.
+                # Defaults (900s / 604800s / 10s) are sensible for the
+                # single-user LAN MVP; expose them so operators can tune
+                # without editing source.
+                access_token_ttl_seconds=int(
+                    data.get("access_token_ttl_seconds", 900)
+                ),
+                refresh_token_ttl_seconds=int(
+                    data.get("refresh_token_ttl_seconds", 604800)
+                ),
+                refresh_grace_seconds=int(
+                    data.get("refresh_grace_seconds", 10)
+                ),
                 template_path=data.get("template_path"),
                 projects=projects,
-                common_slash_commands=data.get("common_slash_commands", [])
+                common_slash_commands=data.get("common_slash_commands", []),
+                session=session_config,
+                tunnel=tunnel_config,
+                auth_rate_limits=rate_limits_config,
+                notifications=notifications_config,
             )
 
             # Validate secrets are set
@@ -356,4 +551,51 @@ class Settings(BaseSettings):
 
 
 # Global settings instance
-settings = Settings()
+# Wrap in try/catch to provide helpful error messages if .env is misconfigured
+try:
+    settings = Settings()
+except Exception as e:
+    import sys
+    from pathlib import Path
+
+    error_msg = f"""
+========================================
+CLOUDE CODE - CONFIGURATION ERROR
+========================================
+
+Failed to load configuration from .env file.
+
+Error: {str(e)}
+
+This usually means:
+1. Required fields are missing from .env (DEFAULT_WORKING_DIR, LOG_DIRECTORY)
+2. Required auth fields are empty (TOTP_SECRET, JWT_SECRET)
+3. .env file is malformed or has invalid values
+
+To fix:
+1. Run setup_auth.py to regenerate .env with all required fields
+2. Or manually edit .env and ensure all required fields are present
+
+Required fields:
+- DEFAULT_WORKING_DIR (path to projects directory)
+- LOG_DIRECTORY (path to logs directory)
+- TOTP_SECRET (generated by setup_auth.py)
+- JWT_SECRET (generated by setup_auth.py)
+
+========================================
+"""
+
+    # Write to stderr (will be captured by Electron app logs)
+    print(error_msg, file=sys.stderr)
+
+    # Also write to temp file for debugging
+    error_log = Path("/tmp/cloude-code-startup-error.log")
+    try:
+        with open(error_log, "w") as f:
+            f.write(error_msg)
+        print(f"\nError details written to: {error_log}", file=sys.stderr)
+    except:
+        pass
+
+    # Exit with error code
+    sys.exit(1)

@@ -8,6 +8,13 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // Running tmux sessions on the `cloude` socket. Populated by
+        // loadRunningSessions() — a merged view of:
+        //   (a) the currently-active backend (from GET /sessions), and
+        //   (b) attachable/external sessions (from GET /sessions/attachable).
+        // Each row carries an is_active flag so the render pass can style
+        // the live one differently without a second DOM query.
+        this.runningSessions = [];
     }
 
     /**
@@ -20,7 +27,35 @@ class Launchpad {
     }
 
     /**
-     * Load and display projects
+     * Best-effort: get current xterm cell-grid dims from the live Terminal
+     * instance so we can pass them to POST /sessions. Returns {} when the
+     * terminal isn't ready yet (the server falls back to its own defaults
+     * and the WS handshake reshapes shortly after anyway).
+     */
+    _getTerminalDims() {
+        try {
+            const t = window.TerminalController && window.TerminalController.term;
+            if (t && typeof t.cols === 'number' && typeof t.rows === 'number'
+                    && t.cols > 0 && t.rows > 0) {
+                // Try to fit first so we hand over the dims the xterm.js
+                // renderer will actually use post-connect.
+                try {
+                    if (window.TerminalController.fitAddon) {
+                        window.TerminalController.fitAddon.fit();
+                    }
+                } catch (_) { /* non-fatal */ }
+                return { cols: t.cols, rows: t.rows };
+            }
+        } catch (e) {
+            console.warn('Launchpad: _getTerminalDims failed', e);
+        }
+        return {};
+    }
+
+    /**
+     * Load and display projects, then refresh the running-sessions list.
+     * Both fetches are non-fatal — the projects error path shows a UI
+     * error, the sessions path is logged and silently renders empty.
      */
     async loadProjects() {
         try {
@@ -29,6 +64,298 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
+        }
+        // Refresh running sessions in parallel with the projects view.
+        // Failure is non-fatal and handled inside loadRunningSessions.
+        this.loadRunningSessions();
+    }
+
+    /**
+     * Fetch the unified "running sessions" list and repaint the section.
+     *
+     * Combines two server endpoints:
+     *   - ``GET /sessions/attachable`` — external tmux sessions on the
+     *     cloude socket, plus cloude-owned sessions NOT currently bound
+     *     to an active backend (detached-but-alive).
+     *   - ``GET /sessions`` — the currently-active backend, if any. The
+     *     server's /attachable filter drops this row to prevent a
+     *     self-adopt footgun, so we refetch and merge it in here.
+     *
+     * Each merged row gains an ``is_active`` flag and the list is sorted:
+     * active first, then owned (cloude-created), then external; within
+     * each bucket, newest first by ``created_at_epoch``.
+     */
+    async loadRunningSessions() {
+        try {
+            const list = await window.API.listAttachableSessions();
+            this.runningSessions = Array.isArray(list) ? list : [];
+        } catch (err) {
+            console.warn('Launchpad: listAttachableSessions failed:', err);
+            this.runningSessions = [];
+        }
+        // Augment with the CURRENTLY ACTIVE backend, which the server filters
+        // out of /sessions/attachable to prevent self-adopt. Refetch via GET
+        // /sessions (returns 404 when none active) and merge.
+        try {
+            const current = await window.API.getCurrentSession();
+            if (current && current.tmux_session) {
+                const already = this.runningSessions.some(s => s.name === current.tmux_session);
+                if (!already) {
+                    this.runningSessions.unshift({
+                        name: current.tmux_session,
+                        created_by_cloude: true,
+                        created_at_epoch: current.created_at_epoch || 0,
+                        window_count: 1,
+                        is_active: true,
+                    });
+                } else {
+                    const row = this.runningSessions.find(s => s.name === current.tmux_session);
+                    if (row) row.is_active = true;
+                }
+            }
+        } catch (err) {
+            // 404 = no active session, fine
+        }
+        // Sort: active first, then owned, then external; within each, newest first
+        this.runningSessions.sort((a, b) => {
+            if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
+            if (!!a.created_by_cloude !== !!b.created_by_cloude) {
+                return a.created_by_cloude ? -1 : 1;
+            }
+            return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
+        });
+        this.renderRunningSessions();
+    }
+
+    /**
+     * Paint (or hide) the Running Sessions section. Hides via display:none
+     * when empty — opacity:0 would still capture clicks, which we don't want.
+     *
+     * Click handlers (row → return/adopt, X → kill) land in Task 10; this
+     * pass only builds the DOM. ``data-name`` / ``data-active`` attributes
+     * are the hooks event delegation will use.
+     */
+    renderRunningSessions() {
+        const container = document.getElementById('running-sessions-list');
+        if (!container) return;
+        const section = document.getElementById('running-sessions-section');
+        if (!this.runningSessions || this.runningSessions.length === 0) {
+            if (section) section.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+        if (section) section.style.display = '';
+        container.innerHTML = this.runningSessions.map(s => {
+            const owned = !!s.created_by_cloude;
+            const displayName = this._deriveRunningSessionDisplayName(s.name);
+            const ageStr = s.created_at_epoch ? this._formatRelativeTime(s.created_at_epoch) : '';
+            const escapedName = this._escapeHtml(s.name);
+            const escapedDisplay = this._escapeHtml(displayName);
+            return `
+                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}">
+                  <div class="running-session-top">
+                    <span class="running-session-dot" aria-hidden="true"></span>
+                    <span class="running-session-name">${escapedDisplay}</span>
+                    <span class="running-session-kill" role="button" aria-label="Kill session" data-kill="${escapedName}">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                        <line x1="6" y1="18" x2="18" y2="6"/>
+                      </svg>
+                    </span>
+                  </div>
+                  <div class="running-session-badges">
+                    <span class="badge badge-running">RUNNING</span>
+                    <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
+                    ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
+                  </div>
+                </div>
+            `;
+        }).join('');
+        // Idempotent — re-calling after subsequent renders is a no-op
+        // because the listener is bound to the (stable) container element,
+        // not the (re-painted) row children, and the flag gates re-bind.
+        this._bindRunningSessionClicks();
+    }
+
+    /**
+     * Strip the ``cloude_`` prefix from tmux session names for display.
+     * Non-cloude (external) names are rendered verbatim.
+     */
+    _deriveRunningSessionDisplayName(tmuxName) {
+        if (tmuxName && tmuxName.startsWith('cloude_')) {
+            return tmuxName.slice('cloude_'.length);
+        }
+        return tmuxName;
+    }
+
+    /**
+     * Best-effort read of the currently-active backend's tmux session name.
+     * Used for the self-adopt UI filter and the session-collision modal copy.
+     * Returns null when no session is active or the controller isn't wired
+     * up yet.
+     */
+    _getActiveSessionName() {
+        try {
+            const t = window.TerminalController;
+            if (t && t.sessionActive && t._currentSession && t._currentSession.tmux_session) {
+                return t._currentSession.tmux_session;
+            }
+        } catch (_) { /* non-fatal */ }
+        return null;
+    }
+
+    /**
+     * HTML-escape helper. Session names come from the tmux daemon and are
+     * technically user-controlled — any embedded `<`, `>`, `"`, `'`, `&`
+     * in a name would break innerHTML.
+     */
+    _escapeHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    /**
+     * Format "N seconds / minutes / hours / days ago" for a unix epoch
+     * timestamp. Mirrors standard UX copy for session-age display.
+     */
+    _formatRelativeTime(epochSeconds) {
+        if (!epochSeconds || typeof epochSeconds !== 'number') return 'unknown';
+        const delta = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+        if (delta < 60) return `${delta}s ago`;
+        if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+        if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+        return `${Math.floor(delta / 86400)}d ago`;
+    }
+
+    /**
+     * Bind a single delegated click listener on #running-sessions-list.
+     *
+     * Event delegation over per-row listeners: avoids re-binding on every
+     * render and survives DOM swaps. The `__boundRunningClicks` flag is
+     * a one-shot idempotence guard — re-calling from renderRunningSessions
+     * is a no-op after the first paint.
+     *
+     * Click target disambiguation:
+     *   - `.running-session-kill` (or its SVG child) → kill flow
+     *   - anywhere else on `.running-session-row`   → return/swap flow
+     *
+     * stopPropagation on the kill branch is the important bit — without it
+     * the row handler would also fire and we'd race a swap against a
+     * destroy.
+     */
+    _bindRunningSessionClicks() {
+        const container = document.getElementById('running-sessions-list');
+        if (!container || container.__boundRunningClicks) return;
+        container.addEventListener('click', async (e) => {
+            const killEl = e.target.closest('.running-session-kill');
+            const rowEl = e.target.closest('.running-session-row');
+            if (!rowEl) return;
+
+            // X icon path — explicit destroy
+            if (killEl) {
+                e.stopPropagation();
+                const name = killEl.dataset.kill;
+                await this._handleKillRunningSession(name);
+                return;
+            }
+
+            // Row click — return or swap
+            const name = rowEl.dataset.name;
+            const isActive = rowEl.dataset.active === '1';
+            if (isActive) {
+                // Already the active backend → jump straight to terminal
+                try {
+                    const current = await window.API.getCurrentSession();
+                    if (current) {
+                        window.App.returnToExistingTerminal(current);
+                    }
+                } catch (err) {
+                    this.showError('failed to return to terminal: ' + (err.message || err));
+                }
+                return;
+            }
+            // Different session → swap
+            await this._handleAttachRunningSession(name);
+        });
+        container.__boundRunningClicks = true;
+    }
+
+    /**
+     * Kill flow for a running tmux session.
+     *
+     * Two paths, both end at destroySession():
+     *   1. Target IS the currently-active backend → destroy directly.
+     *   2. Target is a different session → adopt-then-destroy. destroy
+     *      only works on the currently-attached backend, so we pivot the
+     *      active session to the target first, then tear it down.
+     *
+     * confirmDetach=true on the adopt call avoids a 409 when there was a
+     * prior active session.
+     */
+    async _handleKillRunningSession(tmuxName) {
+        const display = this._deriveRunningSessionDisplayName(tmuxName);
+        const confirmed = await this.showConfirmModal(
+            'end session?',
+            `destroy "${this._escapeHtml(display)}"? this kills the tmux session permanently.`,
+            'this is the only destructive action. session data in the pane will be lost.',
+            'destroy',
+            'cancel'
+        );
+        if (!confirmed) return;
+        try {
+            const current = await window.API.getCurrentSession().catch(() => null);
+            if (current && current.tmux_session === tmuxName) {
+                await window.API.destroySession();
+            } else {
+                await window.API.adoptSession(tmuxName, true);
+                await window.API.destroySession();
+            }
+        } catch (err) {
+            this.showError(`destroy failed: ${err.message || err}`);
+        }
+        await this.loadRunningSessions();
+    }
+
+    /**
+     * Attach/swap flow for a running tmux session (non-active row click).
+     *
+     * If a different session is currently active, prompt for detach
+     * confirmation — swap, not kill, so the prior session stays alive in
+     * tmux. On adopt success, dispatch `session-created` with the full
+     * adopt-specific detail payload (initialScrollbackB64, fifoStartOffset,
+     * adopted:true) so App.showTerminal() can plumb scrollback into the
+     * terminal controller.
+     */
+    async _handleAttachRunningSession(tmuxName) {
+        const display = this._deriveRunningSessionDisplayName(tmuxName);
+        const current = await window.API.getCurrentSession().catch(() => null);
+        if (current && current.tmux_session && current.tmux_session !== tmuxName) {
+            const currentDisplay = this._deriveRunningSessionDisplayName(current.tmux_session);
+            const ok = await this.showConfirmModal(
+                'switch session?',
+                `attaching to "${this._escapeHtml(display)}" will detach from your current session "${this._escapeHtml(currentDisplay)}".`,
+                'the tmux session will keep running — you can rejoin it later from the running-sessions list. cancel to stay on the launchpad.',
+                `attach to ${display}`,
+                'cancel'
+            );
+            if (!ok) return;
+        }
+        try {
+            const response = await window.API.adoptSession(tmuxName, true);
+            const session = response.session || response;
+            const initialScrollbackB64 = response.initial_scrollback_b64 || '';
+            const fifoStartOffset = typeof response.fifo_start_offset === 'number'
+                ? response.fifo_start_offset
+                : null;
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
+            }));
+        } catch (err) {
+            this.showError(`attach failed: ${err.message || err}`);
         }
     }
 
@@ -41,11 +368,34 @@ class Launchpad {
                 <div class="launchpad-header">☁️ Cloude Code Launcher</div>
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
+                <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
+                    <div class="launchpad-section-title">
+                        ► running sessions
+                        <details class="adopt-disclosure">
+                            <summary>?</summary>
+                            <div class="adopt-disclosure-body">
+                                <p>Sessions shown here run on the <code>cloude</code> tmux socket. Start one externally with <code>tmux -L cloude new -s &lt;name&gt;</code> — it'll appear here.</p>
+                                <p>To launch claude in one line:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
+                                <p>The <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
+                                <p>If you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
+                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                            </div>
+                        </details>
+                    </div>
+                    <div id="running-sessions-list"></div>
+                </div>
+
                 <div class="launchpad-section">
                     <div class="launchpad-section-title">► new project</div>
                     <button class="new-session-btn" id="new-session-btn">
                         <span>⚡</span>
                         <span>create new project</span>
+                    </button>
+                    <button class="new-session-btn" id="open-folder-btn">
+                        <span>📁</span>
+                        <span>open project from folder</span>
                     </button>
                 </div>
 
@@ -83,11 +433,17 @@ class Launchpad {
             this.createNewSession();
         });
 
+        document.getElementById('open-folder-btn').addEventListener('click', () => {
+            this.openProjectFromFolder();
+        });
+
         document.getElementById('reset-server-btn').addEventListener('click', () => {
             this.resetServer();
         });
 
-        // Note: loadProjects() will be called by App.showLaunchpad()
+        // Note: loadProjects() will be called by App.showLaunchpad().
+        // Running-sessions row/X click handlers land in Task 10 via event
+        // delegation on #running-sessions-list.
     }
 
     /**
@@ -187,7 +543,7 @@ class Launchpad {
             const confirmed = await this.showConfirmModal(
                 'reset server',
                 'are you sure you want to reset the server?',
-                'this will stop and restart the server. any active sessions will be terminated.'
+                'the python server will restart and re-attach your tmux sessions — sessions keep running, only the web connection briefly drops.'
             );
 
             if (!confirmed) {
@@ -220,10 +576,12 @@ class Launchpad {
      * Show confirmation modal
      * @param {string} title - Modal title
      * @param {string} message - Main message
-     * @param {string} details - Additional details (optional)
-     * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+     * @param {string} [details] - Additional details (optional)
+     * @param {string} [primaryLabel='confirm'] - Label for the primary (destructive / intent) button
+     * @param {string} [secondaryLabel='cancel'] - Label for the safe no-op button
+     * @returns {Promise<boolean>} - True if confirmed, false if cancelled. Cancel is ALWAYS a no-op — callers must never map cancel to a destructive action.
      */
-    showConfirmModal(title, message, details = null) {
+    showConfirmModal(title, message, details = null, primaryLabel = 'confirm', secondaryLabel = 'cancel') {
         return new Promise((resolve) => {
             // Create modal overlay
             const overlay = document.createElement('div');
@@ -238,8 +596,8 @@ class Launchpad {
                         ${details ? `<div class="modal-description">${details}</div>` : ''}
                     </div>
                     <div class="modal-footer">
-                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">confirm</button>
+                        <button class="modal-btn modal-btn-secondary" id="modal-cancel">${this._escapeHtml(secondaryLabel)}</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${this._escapeHtml(primaryLabel)}</button>
                     </div>
                 </div>
             `;
@@ -300,10 +658,16 @@ class Launchpad {
             // Show loading state
             this.updateStatus('creating new project...');
 
-            // Create session with auto-generated path and template copying
+            // Create session with auto-generated path and template copying.
+            // Include current xterm cell grid dims so the tmux pane is
+            // birthed at the right size (avoids the 132x40 default → resize
+            // flash before the WS handshake reshapes it).
+            const _dims = this._getTerminalDims();
             const session = await window.API.createSession({
                 auto_start_claude: true,
-                copy_templates: true
+                copy_templates: true,
+                project_name: projectDetails.name,
+                ..._dims
             });
 
             console.log('Launchpad: New project created:', session);
@@ -331,15 +695,23 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to create session:', error);
 
-            // If session already exists, offer to connect or destroy
+            // If a session already exists, the user's stated intent was
+            // "create a new project". Primary = carry out that intent
+            // (detach + create). Cancel = safe no-op. Rejoin the running
+            // session via the banner's "return to terminal" button.
             if (error.message.includes('already running')) {
-                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and create new)')) {
-                    // Connect to existing session
-                    this.connectToExistingSession();
-                } else {
-                    // Destroy and recreate
-                    this.destroyAndCreateNew();
+                const currentName = this._getCurrentSessionLabel() || 'running session';
+                const confirmed = await this.showConfirmModal(
+                    'switch session?',
+                    `creating a new project will detach from your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
+                    'create new session',
+                    'cancel'
+                );
+                if (confirmed) {
+                    this.detachAndCreateNew();
                 }
+                // Cancelled → deliberate no-op.
             } else {
                 this.showError('failed to create session: ' + error.message);
             }
@@ -348,19 +720,43 @@ class Launchpad {
 
     /**
      * Show modal to prompt for project name and description
+     * @param {object} [options]
+     * @param {string} [options.defaultName] - Prefill the name input
+     * @param {string} [options.title] - Override the modal title
+     * @param {string} [options.confirmLabel] - Override the confirm button label
+     * @param {string} [options.pathHint] - Display the path being added as a hint
      * @returns {Promise<{name: string, description: string}|null>} Project details or null if cancelled
      */
-    showProjectNameModal() {
+    showProjectNameModal(options = {}) {
+        const {
+            defaultName = '',
+            title = 'name this project',
+            confirmLabel = 'create session',
+            pathHint = null,
+        } = options;
+
         return new Promise((resolve) => {
             // Create modal overlay
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
 
+            const escapeHtml = (s) => String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            const pathHintHtml = pathHint
+                ? `<div class="modal-input-group"><div class="modal-label">folder</div><div class="folder-picker-path">${escapeHtml(pathHint)}</div></div>`
+                : '';
+
             // Create modal content
             overlay.innerHTML = `
                 <div class="modal-content">
-                    <div class="modal-header">» name this project</div>
+                    <div class="modal-header">» ${escapeHtml(title)}</div>
                     <div class="modal-body">
+                        ${pathHintHtml}
                         <div class="modal-input-group">
                             <label class="modal-label">project name</label>
                             <input
@@ -368,6 +764,7 @@ class Launchpad {
                                 class="modal-input"
                                 id="modal-project-name"
                                 placeholder="e.g., My Awesome Project"
+                                value="${escapeHtml(defaultName)}"
                                 autocomplete="off"
                             />
                             <div class="modal-description">
@@ -390,7 +787,7 @@ class Launchpad {
                     </div>
                     <div class="modal-footer">
                         <button class="modal-btn modal-btn-secondary" id="modal-cancel">cancel</button>
-                        <button class="modal-btn modal-btn-primary" id="modal-confirm">create session</button>
+                        <button class="modal-btn modal-btn-primary" id="modal-confirm">${escapeHtml(confirmLabel)}</button>
                     </div>
                 </div>
             `;
@@ -402,8 +799,13 @@ class Launchpad {
             const confirmBtn = overlay.querySelector('#modal-confirm');
             const cancelBtn = overlay.querySelector('#modal-cancel');
 
-            // Focus name input
-            setTimeout(() => nameInput.focus(), 100);
+            // Focus name input and select existing content if prefilled
+            setTimeout(() => {
+                nameInput.focus();
+                if (defaultName) {
+                    nameInput.select();
+                }
+            }, 100);
 
             // Handle Enter key on name input (moves to description)
             nameInput.addEventListener('keypress', (e) => {
@@ -488,19 +890,259 @@ class Launchpad {
     }
 
     /**
-     * Destroy existing session and create new one
+     * Detach from the existing session (tmux keeps running) and create a
+     * fresh one. Mirror of ``detachAndOpenProject`` for the "new project"
+     * path — prior session lingers and can be re-adopted later.
      */
-    async destroyAndCreateNew() {
+    async detachAndCreateNew() {
         try {
-            this.updateStatus('destroying old session...');
-            await window.API.destroySession();
+            this.updateStatus('detaching from current session...');
+            await window.API.detachSession();
 
-            // Wait a moment, then create new
+            // Wait a moment, then create new. Same race-avoidance rationale
+            // as ``detachAndOpenProject``.
             setTimeout(() => this.createNewSession(), 500);
         } catch (error) {
-            console.error('Launchpad: Failed to destroy session:', error);
-            this.showError('failed to destroy session: ' + error.message);
+            console.error('Launchpad: Failed to detach session:', error);
+            this.showError('failed to detach session: ' + error.message);
         }
+    }
+
+    /**
+     * Open a project by name (used by the deep-link router, Item 9).
+     *
+     * The router already validated the name against a strict regex, but
+     * we re-verify membership in `this.projects` before calling into
+     * `selectProject` — if the user clicks a deep link for a project
+     * that was deleted / renamed, we surface a clear error instead of
+     * calling the backend with an unknown path.
+     *
+     * This method is idempotent and safe to call before `loadProjects()`
+     * completes — it waits up to ~2s for the project list to populate,
+     * which is normally ready within one tick of `App.showLaunchpad()`.
+     */
+    async openProjectByName(name) {
+        console.log('Launchpad: openProjectByName:', name);
+
+        // Wait for the project list if it hasn't loaded yet. App.showLaunchpad
+        // calls loadProjects() inline; this handles the race where the
+        // router fires right after auth but before loadProjects resolves.
+        const deadline = Date.now() + 2000;
+        while ((!this.projects || this.projects.length === 0) && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+
+        // Match by exact name first, then case-insensitive fallback.
+        let project = (this.projects || []).find(p => p.name === name);
+        if (!project) {
+            project = (this.projects || []).find(
+                p => p.name && p.name.toLowerCase() === name.toLowerCase()
+            );
+        }
+
+        if (!project) {
+            console.warn('Launchpad: deep-link project not found:', name);
+            this.showError(`project not found: ${name}`);
+            return;
+        }
+
+        await this.selectProject(project);
+    }
+
+    /**
+     * Open a project by picking a folder via the server-side filesystem browser,
+     * then save it to the project list (history) before opening.
+     */
+    async openProjectFromFolder() {
+        console.log('Launchpad: Opening project from folder');
+
+        try {
+            const selectedPath = await this.showFolderPickerModal();
+            if (!selectedPath) {
+                console.log('Launchpad: Folder selection cancelled');
+                return;
+            }
+
+            // Derive a default name from the folder basename
+            const defaultName = selectedPath.split('/').filter(Boolean).pop() || selectedPath;
+
+            // Ask the user to confirm/adjust name + description
+            const details = await this.showProjectNameModal({
+                defaultName,
+                title: 'add project',
+                confirmLabel: 'open project',
+                pathHint: selectedPath,
+            });
+            if (!details) {
+                console.log('Launchpad: Project metadata entry cancelled');
+                return;
+            }
+
+            this.updateStatus(`adding ${details.name}...`);
+
+            // Save to projects config so it shows up in history.
+            // If the name collides, append a short suffix until it's unique.
+            const savedName = await this.saveProjectWithUniqueName({
+                name: details.name,
+                path: selectedPath,
+                description: details.description || null,
+            });
+
+            // Refresh project list so the new entry shows up at the top
+            await this.loadProjects();
+
+            // Open the project
+            await this.selectProject({
+                name: savedName,
+                path: selectedPath,
+                description: details.description || null,
+            });
+        } catch (error) {
+            console.error('Launchpad: Failed to open project from folder:', error);
+            this.showError('failed to open folder: ' + error.message);
+        }
+    }
+
+    /**
+     * Try to save a project, appending a suffix if the name already exists.
+     * Returns the name that was actually saved, or the original name if the
+     * project already existed (we treat that as success).
+     */
+    async saveProjectWithUniqueName({ name, path, description }) {
+        let attempt = name;
+        for (let i = 0; i < 20; i++) {
+            try {
+                await window.API.createProject({ name: attempt, path, description });
+                return attempt;
+            } catch (error) {
+                if (!error.message || !error.message.includes('already exists')) {
+                    throw error;
+                }
+                // If an existing project already has this path, reuse it
+                const existing = this.projects.find(p => p.path === path);
+                if (existing) {
+                    return existing.name;
+                }
+                attempt = `${name} (${i + 2})`;
+            }
+        }
+        throw new Error('could not find a unique name for this project');
+    }
+
+    /**
+     * Show a folder-picker modal that browses the server filesystem.
+     * Resolves with the chosen absolute path, or null if cancelled.
+     */
+    showFolderPickerModal() {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            overlay.innerHTML = `
+                <div class="modal-content folder-picker-modal">
+                    <div class="modal-header">» select a folder</div>
+                    <div class="modal-body">
+                        <div class="folder-picker-path" id="folder-picker-path">loading...</div>
+                        <div class="folder-picker-toolbar">
+                            <button class="folder-picker-toolbar-btn" id="folder-picker-up" title="go to parent directory">⬆ up</button>
+                            <button class="folder-picker-toolbar-btn" id="folder-picker-home" title="go to home directory">🏠 home</button>
+                        </div>
+                        <div class="folder-picker-list" id="folder-picker-list">
+                            <div class="folder-picker-empty">loading...</div>
+                        </div>
+                        <div class="modal-description">
+                            select a folder, then click "open here" to use it as the project root.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="folder-picker-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="folder-picker-confirm">open here</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const pathEl = overlay.querySelector('#folder-picker-path');
+            const listEl = overlay.querySelector('#folder-picker-list');
+            const upBtn = overlay.querySelector('#folder-picker-up');
+            const homeBtn = overlay.querySelector('#folder-picker-home');
+            const confirmBtn = overlay.querySelector('#folder-picker-confirm');
+            const cancelBtn = overlay.querySelector('#folder-picker-cancel');
+
+            let currentPath = null;
+            let currentParent = null;
+
+            const close = (value) => {
+                document.body.removeChild(overlay);
+                resolve(value);
+            };
+
+            const loadPath = async (targetPath) => {
+                listEl.innerHTML = '<div class="folder-picker-empty">loading...</div>';
+                try {
+                    const data = await window.API.browseDirectory(targetPath);
+                    currentPath = data.path;
+                    currentParent = data.parent;
+                    pathEl.textContent = data.path;
+                    upBtn.disabled = !data.parent;
+
+                    if (!data.entries || data.entries.length === 0) {
+                        listEl.innerHTML = '<div class="folder-picker-empty">no subfolders here</div>';
+                        return;
+                    }
+
+                    listEl.innerHTML = data.entries.map(entry => `
+                        <div class="folder-picker-item" data-path="${entry.path.replace(/"/g, '&quot;')}">
+                            <span class="folder-picker-icon">📁</span>
+                            <span class="folder-picker-name">${entry.name}</span>
+                        </div>
+                    `).join('');
+
+                    listEl.querySelectorAll('.folder-picker-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            loadPath(item.dataset.path);
+                        });
+                    });
+                } catch (error) {
+                    console.error('Launchpad: Folder browse failed:', error);
+                    listEl.innerHTML = `<div class="folder-picker-empty">error: ${error.message}</div>`;
+                }
+            };
+
+            upBtn.addEventListener('click', () => {
+                if (currentParent) {
+                    loadPath(currentParent);
+                }
+            });
+
+            homeBtn.addEventListener('click', () => {
+                loadPath('~');
+            });
+
+            confirmBtn.addEventListener('click', () => {
+                if (currentPath) {
+                    close(currentPath);
+                }
+            });
+
+            cancelBtn.addEventListener('click', () => close(null));
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    close(null);
+                }
+            });
+
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') close(null);
+            });
+
+            // Start at the server's default location
+            loadPath(null);
+
+            setTimeout(() => confirmBtn.focus(), 100);
+        });
     }
 
     /**
@@ -513,11 +1155,16 @@ class Launchpad {
             // Show loading state
             this.updateStatus(`opening ${project.name}...`);
 
-            // Create session with project path (no template copying for existing projects)
+            // Create session with project path (no template copying for existing projects).
+            // Include current xterm cell grid dims so the tmux pane is birthed
+            // at the right size — see the "new project" path for rationale.
+            const _dims = this._getTerminalDims();
             const session = await window.API.createSession({
                 working_dir: project.path,
                 auto_start_claude: true,
-                copy_templates: false
+                copy_templates: false,
+                project_name: project.name,
+                ..._dims
             });
 
             console.log('Launchpad: Project session created:', session);
@@ -530,15 +1177,27 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to open project:', error);
 
-            // If session already exists, offer to connect or destroy
+            // If a session already exists, offer to SWAP to the project the
+            // user just clicked. Primary button = user's stated intent
+            // (open the new project, which DETACHES — not destroys — the
+            // old tmux session so it keeps running on the server). Cancel
+            // = strict no-op: stays on the launchpad, the banner still
+            // shows the running session, user can rejoin it via the
+            // banner's "Return to terminal" button if they want.
             if (error.message.includes('already running')) {
-                if (confirm('A session is already running. Do you want to connect to it?\n\n(Click OK to connect, Cancel to destroy and open this project)')) {
-                    // Connect to existing session
-                    this.connectToExistingSession();
-                } else {
-                    // Destroy and recreate with this project
-                    this.destroyAndOpenProject(project);
+                const currentName = this._getCurrentSessionLabel() || 'running session';
+                const confirmed = await this.showConfirmModal(
+                    'switch session?',
+                    `opening "${this._escapeHtml(project.name)}" will detach from your current session "${this._escapeHtml(currentName)}".`,
+                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
+                    `open ${project.name}`,
+                    'cancel'
+                );
+                if (confirmed) {
+                    this.detachAndOpenProject(project);
                 }
+                // Cancelled → deliberate no-op. Do NOT detach, do NOT
+                // reconnect. User stays on launchpad with banner intact.
             } else {
                 this.showError(`failed to open ${project.name}: ${error.message}`);
             }
@@ -546,18 +1205,43 @@ class Launchpad {
     }
 
     /**
-     * Destroy existing session and open project
+     * Best-effort label for the running server-side session, used by the
+     * session-collision modal copy. Prefers the runningSessions row flagged
+     * ``is_active`` (freshest, includes tmux_session name), falls back to
+     * the terminal controller's local cache. Returns null if nothing is
+     * known.
      */
-    async destroyAndOpenProject(project) {
+    _getCurrentSessionLabel() {
         try {
-            this.updateStatus('destroying old session...');
-            await window.API.destroySession();
+            const active = (this.runningSessions || []).find(s => s.is_active);
+            if (active && active.name) {
+                return this._deriveRunningSessionDisplayName(active.name);
+            }
+            const name = this._getActiveSessionName();
+            if (name) return this._deriveRunningSessionDisplayName(name);
+        } catch (_) { /* non-fatal */ }
+        return null;
+    }
 
-            // Wait a moment, then open project
+    /**
+     * Detach from the existing session (tmux keeps running) and open the
+     * selected project in a fresh session. The prior session lingers on
+     * the tmux side and shows up in the Adopt list tagged as cloude-owned,
+     * so the user can rejoin it later without losing any state.
+     */
+    async detachAndOpenProject(project) {
+        try {
+            this.updateStatus('detaching from current session...');
+            await window.API.detachSession();
+
+            // Wait a moment, then open project. The brief delay lets the
+            // server finish clearing its backend handles before the new
+            // create-session call lands — avoids a race where we try to
+            // create while the old backend is still tearing down.
             setTimeout(() => this.selectProject(project), 500);
         } catch (error) {
-            console.error('Launchpad: Failed to destroy session:', error);
-            this.showError('failed to destroy session: ' + error.message);
+            console.error('Launchpad: Failed to detach session:', error);
+            this.showError('failed to detach session: ' + error.message);
         }
     }
 

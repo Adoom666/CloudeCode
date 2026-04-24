@@ -7,45 +7,97 @@ console.log('[SlashCommands Module] Loading...');
 
 // Complete list of Claude Code slash commands with descriptions
 const ALL_SLASH_COMMANDS = [
-    // Workflow Management
-    { command: '/clear', category: 'Workflow', description: 'Clear conversation history' },
-    { command: '/compact', category: 'Workflow', description: 'Compress conversation with optional focus' },
-    { command: '/rewind', category: 'Workflow', description: 'Undo changes and revert to earlier states' },
+    // Session & Context
+    { command: '/clear', category: 'Session & Context', description: 'Clear history and free context' },
+    { command: '/compact', category: 'Session & Context', description: 'Compact conversation, optionally focused' },
+    { command: '/context', category: 'Session & Context', description: 'Visualize context usage as a grid' },
+    { command: '/rewind', category: 'Session & Context', description: 'Roll conversation/code back to a prior point' },
+    { command: '/resume', category: 'Session & Context', description: 'Resume by ID/name or open picker' },
+    { command: '/branch', category: 'Session & Context', description: 'Branch the conversation at this point' },
+    { command: '/rename', category: 'Session & Context', description: 'Rename the session' },
+    { command: '/export', category: 'Session & Context', description: 'Export conversation as plain text' },
+    { command: '/copy', category: 'Session & Context', description: 'Copy the Nth-latest assistant response to clipboard' },
+    { command: '/btw', category: 'Session & Context', description: 'Ask a side question without polluting the main thread' },
+    { command: '/exit', category: 'Session & Context', description: 'Exit Claude Code' },
 
-    // Configuration & Settings
-    { command: '/config', category: 'Config', description: 'Open settings interface' },
-    { command: '/model', category: 'Config', description: 'Select AI model' },
-    { command: '/permissions', category: 'Config', description: 'View/update access controls' },
-    { command: '/settings', category: 'Config', description: 'Configuration options' },
+    // Models & Effort
+    { command: '/model', category: 'Models & Effort', description: 'Select/change model' },
+    { command: '/effort', category: 'Models & Effort', description: 'Set reasoning effort (low / medium / high / max / auto)' },
+    { command: '/fast', category: 'Models & Effort', description: 'Toggle fast mode' },
 
-    // Account & Authentication
-    { command: '/login', category: 'Account', description: 'Switch accounts' },
-    { command: '/logout', category: 'Account', description: 'Sign out' },
-    { command: '/status', category: 'Account', description: 'Display version and connectivity info' },
+    // Planning & Execution
+    { command: '/plan', category: 'Planning & Execution', description: 'Enter plan mode, optionally with a starter task' },
+    { command: '/ultraplan', category: 'Planning & Execution', description: 'Draft a plan in an ultraplan session, review, then execute' },
+    { command: '/loop', category: 'Planning & Execution', description: 'Run a prompt on a schedule while session is open' },
+    { command: '/schedule', category: 'Planning & Execution', description: 'Create/manage routines' },
+    { command: '/batch', category: 'Planning & Execution', description: 'Decompose large changes into units and spawn background agents per unit' },
+    { command: '/simplify', category: 'Planning & Execution', description: 'Parallel review agents scan recent changes and apply fixes' },
+    { command: '/debug', category: 'Planning & Execution', description: 'Enable debug logging and troubleshoot' },
+    { command: '/security-review', category: 'Planning & Execution', description: 'Scan the branch diff for vulnerabilities' },
+    { command: '/tasks', category: 'Planning & Execution', description: 'Manage background tasks' },
+    { command: '/diff', category: 'Planning & Execution', description: 'Interactive diff viewer for uncommitted and per-turn changes' },
 
-    // Development Tools
-    { command: '/sandbox', category: 'Dev Tools', description: 'Enable isolated bash execution' },
-    { command: '/review', category: 'Dev Tools', description: 'Request code review' },
-    { command: '/cost', category: 'Dev Tools', description: 'Show token usage' },
-    { command: '/usage', category: 'Dev Tools', description: 'Display plan limits' },
-    { command: '/help', category: 'Dev Tools', description: 'Get command assistance' },
+    // Files, Tools & Permissions
+    { command: '/add-dir', category: 'Files, Tools & Permissions', description: 'Add a working directory for file access' },
+    { command: '/permissions', category: 'Files, Tools & Permissions', description: 'Manage allow/ask/deny rules' },
+    { command: '/sandbox', category: 'Files, Tools & Permissions', description: 'Toggle sandbox mode (supported platforms)' },
+    { command: '/hooks', category: 'Files, Tools & Permissions', description: 'View hook configurations' },
+    { command: '/agents', category: 'Files, Tools & Permissions', description: 'Manage sub-agent configs' },
+    { command: '/skills', category: 'Files, Tools & Permissions', description: 'List skills' },
+    { command: '/plugin', category: 'Files, Tools & Permissions', description: 'Manage plugins' },
+    { command: '/reload-plugins', category: 'Files, Tools & Permissions', description: 'Hot-reload plugins' },
+    { command: '/mcp', category: 'Files, Tools & Permissions', description: 'Manage MCP servers and OAuth' },
 
-    // Project Setup
-    { command: '/init', category: 'Project', description: 'Initialize project with CLAUDE.md guide' },
-    { command: '/add-dir', category: 'Project', description: 'Add working directories' },
-    { command: '/agents', category: 'Project', description: 'Manage AI subagents' },
+    // Configuration & UI
+    { command: '/config', category: 'Configuration & UI', description: 'Open Settings' },
+    { command: '/status', category: 'Configuration & UI', description: 'Settings > Status tab (works mid-response)' },
+    { command: '/theme', category: 'Configuration & UI', description: 'Change color theme' },
+    { command: '/color', category: 'Configuration & UI', description: 'Set prompt bar color' },
+    { command: '/statusline', category: 'Configuration & UI', description: 'Configure status line' },
+    { command: '/keybindings', category: 'Configuration & UI', description: 'Edit keybindings config' },
+    { command: '/terminal-setup', category: 'Configuration & UI', description: 'Configure Shift+Enter and other terminal shortcuts' },
+    { command: '/memory', category: 'Configuration & UI', description: 'Edit CLAUDE.md files, manage auto-memory' },
+    { command: '/init', category: 'Configuration & UI', description: 'Initialize project with a CLAUDE.md' },
+    { command: '/ide', category: 'Configuration & UI', description: 'IDE integrations' },
+    { command: '/chrome', category: 'Configuration & UI', description: 'Claude in Chrome settings' },
 
-    // Utilities
-    { command: '/doctor', category: 'Utilities', description: 'Check installation health' },
-    { command: '/mcp', category: 'Utilities', description: 'Manage MCP server connections' },
-    { command: '/memory', category: 'Utilities', description: 'Edit memory files' },
-    { command: '/vim', category: 'Utilities', description: 'Enter vim mode' },
-    { command: '/bug', category: 'Utilities', description: 'Report issues' },
-    { command: '/pr_comments', category: 'Utilities', description: 'View PR feedback' },
-    { command: '/terminal-setup', category: 'Utilities', description: 'Configure key bindings' },
-    { command: '/context', category: 'Utilities', description: 'View context information' },
-    { command: '/hooks', category: 'Utilities', description: 'Manage hooks' },
-    { command: '/resume', category: 'Utilities', description: 'Resume previous session' }
+    // Integrations & Remote
+    { command: '/install-github-app', category: 'Integrations & Remote', description: 'Set up Claude GitHub Actions' },
+    { command: '/install-slack-app', category: 'Integrations & Remote', description: 'Install Claude Slack app' },
+    { command: '/web-setup', category: 'Integrations & Remote', description: 'Connect GitHub for Claude Code on the web' },
+    { command: '/remote-control', category: 'Integrations & Remote', description: 'Expose session for remote control from claude.ai' },
+    { command: '/remote-env', category: 'Integrations & Remote', description: 'Configure default remote env for --remote web sessions' },
+    { command: '/teleport', category: 'Integrations & Remote', description: 'Pull a web session into the current terminal' },
+    { command: '/autofix-pr', category: 'Integrations & Remote', description: 'Spawn a web session that auto-fixes PR CI failures' },
+    { command: '/desktop', category: 'Integrations & Remote', description: 'Continue session in desktop app (macOS/Windows)' },
+    { command: '/mobile', category: 'Integrations & Remote', description: 'QR code for mobile app' },
+    { command: '/voice', category: 'Integrations & Remote', description: 'Toggle push-to-talk dictation' },
+
+    // Enterprise Auth
+    { command: '/setup-bedrock', category: 'Enterprise Auth', description: 'Amazon Bedrock config' },
+    { command: '/setup-vertex', category: 'Enterprise Auth', description: 'Google Vertex AI config' },
+
+    // Account, Plan & Billing
+    { command: '/login', category: 'Account, Plan & Billing', description: 'Sign in / switch accounts' },
+    { command: '/logout', category: 'Account, Plan & Billing', description: 'Sign out' },
+    { command: '/upgrade', category: 'Account, Plan & Billing', description: 'Upgrade plan (Pro/Max only)' },
+    { command: '/usage', category: 'Account, Plan & Billing', description: 'Plan limits and rate-limit status' },
+    { command: '/cost', category: 'Account, Plan & Billing', description: 'Token usage stats' },
+    { command: '/extra-usage', category: 'Account, Plan & Billing', description: 'Configure extra usage past rate limits' },
+    { command: '/privacy-settings', category: 'Account, Plan & Billing', description: 'Privacy settings (Pro/Max only)' },
+    { command: '/passes', category: 'Account, Plan & Billing', description: 'Share a free week with friends (if eligible)' },
+    { command: '/stats', category: 'Account, Plan & Billing', description: 'Daily usage, streaks, model preferences' },
+    { command: '/insights', category: 'Account, Plan & Billing', description: 'Report on project areas and interaction patterns' },
+    { command: '/team-onboarding', category: 'Account, Plan & Billing', description: 'Generate an onboarding guide from your last 30 days' },
+
+    // Help & Reference
+    { command: '/help', category: 'Help & Reference', description: 'Get command assistance' },
+    { command: '/doctor', category: 'Help & Reference', description: 'Diagnose install/settings; press f to let Claude fix issues' },
+    { command: '/release-notes', category: 'Help & Reference', description: 'Interactive changelog picker' },
+    { command: '/powerup', category: 'Help & Reference', description: 'Interactive feature lessons' },
+    { command: '/claude-api', category: 'Help & Reference', description: 'Load Claude API reference material' },
+    { command: '/feedback', category: 'Help & Reference', description: 'Report issues or feedback' },
+    { command: '/stickers', category: 'Help & Reference', description: 'Request stickers' }
 ];
 
 class SlashCommandsModal {

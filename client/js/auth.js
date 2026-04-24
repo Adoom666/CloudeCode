@@ -7,6 +7,11 @@ console.log('[Auth Module] Loading...');
 class Auth {
     constructor() {
         this.tokenKey = 'claude_tunnel_token';
+        // Item 5: refresh token lives in its own localStorage slot so it
+        // can be revoked (logout) or rotated independently of the access
+        // token. We keep them in separate keys so a future migration to
+        // HttpOnly cookies for the refresh token only touches this file.
+        this.refreshKey = 'claude_refresh_token';
         this.authScreen = null;
         this.errorElement = null;
         this.infoElement = null;
@@ -115,16 +120,31 @@ class Auth {
      * Handle login button click
      */
     async handleLogin() {
+        // Re-entry guard: the `input` listener auto-submits at 6 digits AND
+        // the button click handler also calls handleLogin. Without this
+        // guard, a rapid sequence (auto-submit fires → fetch pending →
+        // post-error input clear → re-entry) can run client validation
+        // against an empty input, producing "must be 6 digits" that
+        // clobbers the real server error (e.g. a 429 rate-limit message)
+        // in the UI. Rule: exactly one in-flight submit at a time. Any
+        // re-entry while a fetch is pending is ignored, NOT re-validated.
+        if (this._submitting) {
+            return;
+        }
+        this._submitting = true;
+
         const totpCode = this.totpInput.value.trim();
 
         // Validate input
         if (totpCode.length !== 6) {
             this.showError('totp code must be 6 digits');
+            this._submitting = false;
             return;
         }
 
         if (!/^\d{6}$/.test(totpCode)) {
             this.showError('totp code must contain only numbers');
+            this._submitting = false;
             return;
         }
 
@@ -138,8 +158,14 @@ class Auth {
             // Verify TOTP code
             const response = await window.API.verifyTOTP(totpCode);
 
-            // Store token
-            this.setToken(response.token);
+            // Server returns an access+refresh pair under the new contract.
+            // Fall back to the deprecated `response.token` alias so clients
+            // built against a slightly older build still work during rollout.
+            const access = response.access_token || response.token;
+            this.setToken(access);
+            if (response.refresh_token) {
+                this.setRefreshToken(response.refresh_token);
+            }
 
             // Success - trigger authenticated event
             console.log('Auth: Login successful');
@@ -154,6 +180,7 @@ class Auth {
         } finally {
             this.loginButton.disabled = false;
             this.loginButton.textContent = 'login';
+            this._submitting = false;
         }
     }
 
@@ -194,10 +221,84 @@ class Auth {
     }
 
     /**
-     * Clear auth token
+     * Clear auth token(s). By default clears BOTH access + refresh, which
+     * is what you want on logout / 401-with-failed-refresh. Pass
+     * ``{ accessOnly: true }`` for the rare case where only the access
+     * token should be dropped.
      */
-    clearToken() {
+    clearToken(opts = {}) {
         localStorage.removeItem(this.tokenKey);
+        if (!opts.accessOnly) {
+            localStorage.removeItem(this.refreshKey);
+        }
+    }
+
+    /**
+     * Refresh-token accessors (Item 5).
+     */
+    getRefreshToken() {
+        return localStorage.getItem(this.refreshKey);
+    }
+
+    setRefreshToken(token) {
+        if (token) {
+            localStorage.setItem(this.refreshKey, token);
+        }
+    }
+
+    /**
+     * Exchange the stored refresh token for a new access+refresh pair.
+     *
+     * Returns true on success (tokens rotated in localStorage), false on
+     * any failure (401, network error, no stored refresh). The API layer's
+     * 401 interceptor uses this to transparently recover from expired
+     * access tokens.
+     *
+     * NOTE: callers MUST funnel through the single-flight mutex in
+     * `api.js` — calling this in parallel from multiple in-flight requests
+     * will race and burn the refresh-token chain via server-side reuse
+     * detection.
+     *
+     * @returns {Promise<boolean>}
+     */
+    async refresh() {
+        const refreshToken = this.getRefreshToken();
+        if (!refreshToken) {
+            console.warn('Auth: refresh() called with no stored refresh token');
+            return false;
+        }
+
+        try {
+            const response = await fetch(`${window.API.baseURL}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken })
+            });
+
+            if (!response.ok) {
+                // 401 = refresh rejected (expired, revoked, reuse-detected).
+                // Any other non-2xx means the server is sick — treat it as
+                // a refresh failure so the caller can fall back to login.
+                console.warn('Auth: refresh failed with status', response.status);
+                return false;
+            }
+
+            const data = await response.json();
+            const access = data.access_token || data.token;
+            if (!access) {
+                console.warn('Auth: refresh response missing access_token');
+                return false;
+            }
+            this.setToken(access);
+            if (data.refresh_token) {
+                this.setRefreshToken(data.refresh_token);
+            }
+            console.log('Auth: refreshed tokens');
+            return true;
+        } catch (e) {
+            console.error('Auth: refresh threw', e);
+            return false;
+        }
     }
 
     /**
@@ -208,10 +309,24 @@ class Auth {
     }
 
     /**
-     * Logout user
+     * Logout user. Best-effort server-side revocation of the refresh
+     * token, then clear local state regardless. We do NOT await the
+     * server call to keep logout snappy — the server-side revoke is a
+     * defense-in-depth nicety, not a blocking dependency.
      */
     logout() {
         console.log('Auth: Logging out');
+        const refreshToken = this.getRefreshToken();
+        if (refreshToken) {
+            // Fire-and-forget: we don't care if this fails (the token
+            // will expire on its own schedule) and we definitely don't
+            // want to block the UI on a network round-trip.
+            fetch(`${window.API.baseURL}/auth/logout`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken })
+            }).catch((e) => console.warn('Auth: logout revoke failed', e));
+        }
         this.clearToken();
         window.dispatchEvent(new CustomEvent('logged-out'));
     }

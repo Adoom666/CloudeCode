@@ -2,9 +2,17 @@
 """Setup script for Cloude Code authentication.
 
 Generates TOTP secret and JWT secret, creates config file.
+
+Subcommands:
+- (no args): full interactive setup.
+- ``--rotate-topic``: regenerate the ntfy push topic, write it to
+  config.json, print the new ntfy URL, and exit. Used after a
+  suspected topic leak or as a periodic hygiene rotation.
 """
+import argparse
 import json
 import secrets
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -149,8 +157,461 @@ def generate_qr_code(secret: str, account_name: str = "Cloude Code"):
 
     return uri, qr_path
 
+def prompt_with_default(prompt_text, default_value=""):
+    """Prompt user for input with optional default value."""
+    if default_value:
+        user_input = input(f"{prompt_text} [{default_value}]: ").strip()
+        return user_input if user_input else default_value
+    else:
+        return input(f"{prompt_text}: ").strip()
+
+
+def setup_env_file(env_path):
+    """Interactive setup for .env file configuration."""
+    print("=" * 70)
+    print("Cloudflare Configuration")
+    print("=" * 70)
+    print()
+    print("You'll need:")
+    print("  1. A Cloudflare account with a domain added")
+    print("  2. API token (with Zone.DNS Edit and Tunnel Edit permissions)")
+    print("  3. Your Cloudflare Zone ID")
+    print()
+    print("IMPORTANT: DNS records will be created AUTOMATICALLY!")
+    print("  You don't need to manually create any DNS records.")
+    print("  Cloude Code will create them via the Cloudflare API.")
+    print()
+
+    # Get current values if .env exists
+    current_values = {}
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.split('=', 1)
+                    current_values[key] = value
+
+    # Prompt for values
+    cf_domain = prompt_with_default(
+        "Cloudflare domain (e.g., claude.yourdomain.com)",
+        current_values.get('CLOUDFLARE_DOMAIN', '')
+    )
+
+    print()
+    print("=" * 70)
+    print("How to Create a Cloudflare API Token:")
+    print("=" * 70)
+    print()
+    print("1. Go to: https://dash.cloudflare.com/profile/api-tokens")
+    print("2. Click 'Create Token'")
+    print("3. Click 'Create Custom Token'")
+    print("4. Set token name: 'Cloude Code'")
+    print("5. Add these permissions:")
+    print("   - Zone > DNS > Edit")
+    print("   - Account > Cloudflare Tunnel > Edit")
+    print("6. Set Zone Resources:")
+    print("   - Include > Specific zone > [select your domain]")
+    print("7. Click 'Continue to summary' then 'Create Token'")
+    print("8. Copy the token (you won't see it again!)")
+    print()
+    print("=" * 70)
+    print()
+
+    cf_token = prompt_with_default(
+        "Cloudflare API token",
+        current_values.get('CLOUDFLARE_API_TOKEN', '')
+    )
+
+    print()
+    print("=" * 70)
+    print("How to Find Your Zone ID:")
+    print("=" * 70)
+    print()
+    print("1. Go to: https://dash.cloudflare.com")
+    print("2. Click on your domain")
+    print("3. Scroll down on the Overview page")
+    print("4. Look for 'Zone ID' on the right sidebar")
+    print("5. Copy the Zone ID")
+    print()
+    print("=" * 70)
+    print()
+
+    cf_zone = prompt_with_default(
+        "Cloudflare Zone ID",
+        current_values.get('CLOUDFLARE_ZONE_ID', '')
+    )
+
+    cf_tunnel_name = prompt_with_default(
+        "Tunnel name",
+        current_values.get('CLOUDFLARE_TUNNEL_NAME', 'claude-tunnel')
+    )
+
+    # Optional settings
+    print()
+    print("=" * 70)
+    print("Optional Settings (press Enter to use defaults)")
+    print("=" * 70)
+    print()
+
+    # Try to auto-detect Claude CLI path
+    import shutil
+    auto_claude_path = shutil.which('claude')
+    if not auto_claude_path:
+        # Check common locations
+        common_paths = [
+            str(Path.home() / '.claude' / 'local' / 'claude'),
+            '/usr/local/bin/claude',
+            '/opt/homebrew/bin/claude'
+        ]
+        for path_str in common_paths:
+            if Path(path_str).exists():
+                auto_claude_path = path_str
+                break
+
+    default_claude_path = current_values.get('CLAUDE_CLI_PATH', auto_claude_path or '/path/to/claude')
+    if auto_claude_path:
+        print(f"📍 Detected Claude CLI at: {auto_claude_path}")
+
+    claude_cli_path = prompt_with_default(
+        "Claude CLI path (leave empty for auto-detect)",
+        default_claude_path if not auto_claude_path else auto_claude_path
+    )
+
+    default_working_dir = current_values.get('DEFAULT_WORKING_DIR', '~/cloude-projects')
+    working_dir = prompt_with_default(
+        "Default working directory for projects",
+        default_working_dir
+    )
+
+    default_log_dir = current_values.get('LOG_DIRECTORY', '/tmp/cloude-code-logs')
+    log_dir = prompt_with_default(
+        "Log directory",
+        default_log_dir
+    )
+
+    print()
+
+    # Update .env file with all values
+    env_template_path = env_path.parent / ".env.example"
+    if env_template_path.exists():
+        with open(env_template_path) as f:
+            content = f.read()
+    else:
+        # Minimal template if .env.example doesn't exist
+        # Should match .env.example to ensure all fields are present
+        content = (
+            "# Server Configuration\n"
+            "HOST=0.0.0.0\n"
+            "PORT=8000\n"
+            "\n"
+            "# Session Configuration\n"
+            "DEFAULT_WORKING_DIR=~/cloude-projects\n"
+            "SESSION_TIMEOUT=3600\n"
+            "\n"
+            "# Claude CLI Configuration\n"
+            "CLAUDE_CLI_PATH=/path/to/claude\n"
+            "\n"
+            "# Logging\n"
+            "LOG_BUFFER_SIZE=1000\n"
+            "LOG_FILE_RETENTION=7\n"
+            "LOG_DIRECTORY=/tmp/cloude-code-logs\n"
+            "\n"
+            "# Tunnels\n"
+            "TUNNEL_PROVIDER=cloudflare\n"
+            "AUTO_CREATE_TUNNELS=true\n"
+            "TUNNEL_TIMEOUT=30\n"
+            "USE_NAMED_TUNNELS=true\n"
+            "\n"
+            "# Cloudflare Configuration\n"
+            "CLOUDFLARE_API_TOKEN=\n"
+            "CLOUDFLARE_ZONE_ID=\n"
+            "CLOUDFLARE_DOMAIN=cloude.mydomain.nyc\n"
+            "CLOUDFLARE_TUNNEL_NAME=cloude-controller\n"
+            "CLOUDFLARE_TUNNEL_ID=\n"
+            "\n"
+            "# Security (Optional)\n"
+            "API_KEY=\n"
+            "# ALLOWED_ORIGINS defaults to [\"*\"] - only set if you need to restrict origins\n"
+            "\n"
+            "# Authentication Secrets\n"
+            "TOTP_SECRET=\n"
+            "JWT_SECRET=\n"
+            "\n"
+            "# Authentication Configuration\n"
+            "AUTH_CONFIG_FILE=./config.json\n"
+        )
+
+    # Replace placeholders using regex for reliability
+    import re
+
+    # Cloudflare Configuration - use regex to replace any existing value
+    content = re.sub(r'^CLOUDFLARE_DOMAIN=.*$', f'CLOUDFLARE_DOMAIN={cf_domain}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_API_TOKEN=.*$', f'CLOUDFLARE_API_TOKEN={cf_token}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_ZONE_ID=.*$', f'CLOUDFLARE_ZONE_ID={cf_zone}', content, flags=re.MULTILINE)
+    content = re.sub(r'^CLOUDFLARE_TUNNEL_NAME=.*$', f'CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}', content, flags=re.MULTILINE)
+
+    # Replace optional settings
+    # Handle CLAUDE_CLI_PATH
+    if 'CLAUDE_CLI_PATH=' in content:
+        content = re.sub(r'^CLAUDE_CLI_PATH=.*$', f'CLAUDE_CLI_PATH={claude_cli_path}', content, flags=re.MULTILINE)
+    else:
+        content += f"\nCLAUDE_CLI_PATH={claude_cli_path}\n"
+
+    # Handle DEFAULT_WORKING_DIR
+    if 'DEFAULT_WORKING_DIR=' in content:
+        content = re.sub(r'^DEFAULT_WORKING_DIR=.*$', f'DEFAULT_WORKING_DIR={working_dir}', content, flags=re.MULTILINE)
+    else:
+        content += f"DEFAULT_WORKING_DIR={working_dir}\n"
+
+    # Handle LOG_DIRECTORY
+    if 'LOG_DIRECTORY=' in content:
+        content = re.sub(r'^LOG_DIRECTORY=.*$', f'LOG_DIRECTORY={log_dir}', content, flags=re.MULTILINE)
+    else:
+        content += f"LOG_DIRECTORY={log_dir}\n"
+
+    # Write .env
+    with open(env_path, 'w') as f:
+        f.write(content)
+
+    print()
+    print(f"✅ Configuration written to {env_path}")
+    print()
+
+    # Validate Claude CLI path
+    if claude_cli_path and claude_cli_path != '/path/to/claude':
+        if not Path(claude_cli_path).exists():
+            print(f"⚠️  Claude CLI not found at: {claude_cli_path}")
+            print("   This may cause issues when creating projects.")
+            print("   You can update CLAUDE_CLI_PATH in .env later.")
+            print()
+
+    return cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir
+
+
+def _generate_ntfy_topic() -> str:
+    """Generate a fresh 32-hex-char ntfy topic.
+
+    Treat as a credential — anyone with this string can read your
+    notifications. We use ``secrets.token_hex(16)`` for 128 bits of
+    entropy in a URL-safe form (ntfy topics are ASCII-only paths).
+    """
+    return f"cloude-{secrets.token_hex(16)}"
+
+
+def _default_public_base_url() -> str:
+    """Best-effort guess at this machine's mDNS-resolvable URL."""
+    try:
+        hostname = socket.gethostname()
+        # Strip any existing .local suffix to avoid double-suffixing.
+        if hostname.endswith(".local"):
+            hostname = hostname[: -len(".local")]
+        return f"http://{hostname}.local:8000"
+    except Exception:
+        return "http://localhost:8000"
+
+
+def _validate_url_reachable(url: str, timeout: float = 3.0) -> bool:
+    """HEAD probe a URL. Returns True on any 2xx-4xx (server is alive).
+
+    Connection refused / timeout / DNS failure → False. We warn-and-
+    continue rather than block setup; the user may be configuring on
+    a different network than they'll deploy on.
+
+    TLS verification is disabled here on purpose: users on a LAN often
+    run Cloude Code behind self-signed certs (mkcert, Caddy local CA),
+    and this probe is a liveness check — not an authenticity check.
+    The real request a user makes from their phone will use whatever
+    trust store their OS provides. False negatives here are far more
+    painful than the zero-risk of accepting a self-signed response
+    from a host the user just typed.
+    """
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout, follow_redirects=False, verify=False) as client:
+            resp = client.head(url)
+            # Any HTTP response means SOMETHING is listening.
+            return 200 <= resp.status_code < 500
+    except Exception:
+        return False
+
+
+def setup_notifications_block(config_path: Path) -> None:
+    """Interactive ntfy push setup. Updates config.json in place.
+
+    Asks the user if they want notifications. If yes:
+    - Generates a fresh 32-hex topic.
+    - Prompts for public_base_url with a sensible mDNS default.
+    - HEAD-probes the URL; warns if unreachable but does not block.
+    - Writes the notifications block to config.json.
+    """
+    print()
+    print("=" * 70)
+    print("Push Notifications (ntfy.sh)")
+    print("=" * 70)
+    print()
+    print("Cloude Code can push permission prompts, task-complete,")
+    print("and other signals to your phone via ntfy.sh.")
+    print()
+    print("Privacy note: titles/bodies contain NO project name. The")
+    print("only identifying data is the deep-link URL (LAN-only).")
+    print()
+    answer = input("Enable push notifications? [y/N]: ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("Skipping notifications setup.")
+        return
+
+    topic = _generate_ntfy_topic()
+    base_url = "https://ntfy.sh"
+
+    print()
+    print("Subscribe in the ntfy app to this exact URL:")
+    print()
+    print(f"   {base_url}/{topic}")
+    print()
+    print("(iOS: ntfy app → + → Subscribe to topic)")
+    print()
+    input("Press Enter once you're subscribed...")
+
+    print()
+    default_pub = _default_public_base_url()
+    public_base_url = prompt_with_default(
+        "Public/LAN base URL for deep links",
+        default_pub,
+    )
+
+    if public_base_url:
+        print(f"Probing {public_base_url}/health ...")
+        ok = _validate_url_reachable(f"{public_base_url}/health")
+        if ok:
+            print(f"OK — server reachable at {public_base_url}")
+        else:
+            print(f"WARN: {public_base_url} not reachable from here.")
+            print("      Notifications will still work; deep-link clicks")
+            print("      will only resolve from inside your LAN.")
+
+    # Read existing config (created earlier in main()).
+    if not config_path.exists():
+        print(f"WARN: {config_path} not found — skipping notifications write.")
+        return
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"WARN: could not read {config_path}: {e}")
+        return
+
+    data["notifications"] = {
+        "enabled": True,
+        "ntfy_base_url": base_url,
+        "ntfy_topic": topic,
+        "public_base_url": public_base_url,
+    }
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(data, f, indent=2)
+        print()
+        print(f"Notifications configured in {config_path}")
+        print()
+        # Item 9: tap-to-validate hint. After setup finishes, encourage
+        # the user to open the deep-link base URL on their phone so they
+        # confirm LAN reachability end-to-end before they rely on push
+        # notifications. We print the base URL itself (not a specific
+        # session deep link) because no session exists at setup time.
+        if public_base_url:
+            print("=" * 70)
+            print("Confirm LAN reachability from your phone")
+            print("=" * 70)
+            print()
+            print("Open this URL on the device where you'll receive ntfy pushes:")
+            print()
+            print(f"   {public_base_url}")
+            print()
+            print("If the Cloude Code login screen loads, push-notification")
+            print("deep links will work from your phone's lock-screen.")
+            print()
+    except Exception as e:
+        print(f"WARN: could not write {config_path}: {e}")
+
+
+def rotate_topic_command() -> int:
+    """Regenerate the ntfy topic and write to config.json.
+
+    Reads the existing config to preserve ``ntfy_base_url`` and
+    ``public_base_url``. If the notifications block is missing, we
+    create one with ``enabled=false`` and ``public_base_url=""`` so
+    the user can wire up the rest later.
+
+    Returns process exit code.
+    """
+    project_root = Path(__file__).parent
+    config_path = project_root / "config.json"
+
+    if not config_path.exists():
+        print(f"ERROR: {config_path} not found. Run setup_auth.py first.")
+        return 1
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"ERROR: could not read {config_path}: {e}")
+        return 1
+
+    existing = data.get("notifications") or {}
+    base_url = existing.get("ntfy_base_url") or "https://ntfy.sh"
+    public_base_url = existing.get("public_base_url") or ""
+    enabled = existing.get("enabled", True)
+
+    new_topic = _generate_ntfy_topic()
+    data["notifications"] = {
+        "enabled": enabled,
+        "ntfy_base_url": base_url,
+        "ntfy_topic": new_topic,
+        "public_base_url": public_base_url,
+    }
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"ERROR: could not write {config_path}: {e}")
+        return 1
+
+    print()
+    print("=" * 70)
+    print("ntfy topic rotated")
+    print("=" * 70)
+    print()
+    print("Re-subscribe in the ntfy app to this exact URL:")
+    print()
+    print(f"   {base_url}/{new_topic}")
+    print()
+    print("Old topic is now invalid — restart the Cloude Code server")
+    print("to pick up the new topic.")
+    print()
+    return 0
+
+
 def main():
     """Main setup function."""
+    # Handle --rotate-topic before requiring full venv / cloudflared.
+    parser = argparse.ArgumentParser(
+        description="Cloude Code authentication / notifications setup",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--rotate-topic",
+        action="store_true",
+        help="Regenerate ntfy push topic, write to config.json, exit.",
+    )
+    args = parser.parse_args()
+
+    if args.rotate_topic:
+        sys.exit(rotate_topic_command())
+
     # Ensure venv has required dependencies
     check_and_setup_venv()
 
@@ -159,18 +620,87 @@ def main():
     print("=" * 70)
     print()
 
+    # Show Python version
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    print(f"🐍 Python {python_version}")
+    print()
+
+    # Check cloudflared installation
+    import shutil
+    if not shutil.which('cloudflared'):
+        print("❌ cloudflared is not installed")
+        print()
+        print("Install with: brew install cloudflared")
+        print()
+        print("Visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/")
+        print()
+        input("Press Enter after installing cloudflared...")
+        # Check again
+        if not shutil.which('cloudflared'):
+            print("❌ cloudflared still not found. Please install and try again.")
+            sys.exit(1)
+
+    print("✅ cloudflared is installed")
+
+    # Check cloudflared authentication
+    cert_path = Path.home() / '.cloudflared' / 'cert.pem'
+    if not cert_path.exists():
+        print("⚠️  cloudflared is not authenticated")
+        print()
+        print("Authenticating with Cloudflare...")
+        print("A browser window will open. Please log in and authorize.")
+        print()
+
+        # Run cloudflared login
+        result = subprocess.run(['cloudflared', 'login'], capture_output=False)
+
+        if result.returncode != 0 or not cert_path.exists():
+            print("❌ cloudflared authentication failed")
+            print("Please run 'cloudflared login' manually and try again.")
+            sys.exit(1)
+
+        print("✅ cloudflared authenticated successfully")
+    else:
+        print("✅ cloudflared is authenticated")
+
+    print()
+
+    # Project root
+    project_root = Path(__file__).parent
+    env_path = project_root / ".env"
+
+    # Interactive .env setup
+    cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
+
+    # Create directories
+    import os
+    print("Creating directories...")
+    log_dir_expanded = os.path.expanduser(os.path.expandvars(log_dir))
+    working_dir_expanded = os.path.expanduser(os.path.expandvars(working_dir))
+
+    try:
+        Path(log_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created log directory: {log_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create log directory: {e}")
+
+    try:
+        Path(working_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created projects directory: {working_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create projects directory: {e}")
+
+    print()
+
     # Generate new secrets
     totp_secret = generate_totp_secret()
     jwt_secret = generate_jwt_secret()
     print("🔑 Generated new authentication secrets\n")
 
-    # Update .env file in project root
-    project_root = Path(__file__).parent
-    env_path = project_root / ".env"
-
-    print(f"Updating .env file at: {env_path}")
+    # Update .env file with secrets
+    print(f"Adding authentication secrets to .env...")
     update_env_file(env_path, totp_secret, jwt_secret)
-    print(f"✅ Secrets written to .env\n")
+    print(f"✅ Secrets added to .env\n")
 
     # Config file in project directory
     config_path = project_root / "config.json"
@@ -214,34 +744,96 @@ def main():
 
         print(f"✅ Configuration file created at: {config_path}\n")
 
+    # Item 6: optional ntfy push notification setup. Runs AFTER the
+    # config file exists (we mutate it in place).
+    setup_notifications_block(config_path)
+
     print("=" * 70)
     print("TOTP Setup")
     print("=" * 70)
-    print()
-    print("Scan this QR code with your authenticator app:")
     print()
 
     # Generate and display QR code
     uri, qr_path = generate_qr_code(totp_secret)
 
+    # Open QR code with Preview
     print()
-    print(f"QR code also saved to: {qr_path}")
-    print()
-    print(f"Or manually enter this secret in your app: {totp_secret}")
+    print(f"📱 Opening QR code...")
+    try:
+        subprocess.run(['open', str(qr_path)], check=False)
+        print(f"✅ QR code opened in Preview: {qr_path}")
+    except Exception as e:
+        print(f"⚠️  Could not open QR code automatically: {e}")
+        print(f"   Please open manually: {qr_path}")
+
     print()
     print("=" * 70)
-    print("Next Steps")
+    print(f"📱 SCAN THE QR CODE that just opened in Preview!")
     print("=" * 70)
     print()
-    print("1. Scan the QR code above with Google Authenticator, Authy, or similar")
-    print("2. Edit your config file to update project paths:")
+    print("Use Google Authenticator, Authy, or any TOTP app")
+    print()
+    print(f"Or manually enter this secret: {totp_secret}")
+    print()
+
+    input("Press Enter after scanning the QR code...")
+
+    print()
+    print("=" * 70)
+    print("Setup Complete!")
+    print("=" * 70)
+    print()
+    print(f"✅ Configuration: {env_path}")
+    print(f"✅ App config: {config_path}")
+    print()
+    print("You can find and modify the app config here:")
     print(f"   {config_path}")
-    print("3. Update the template_path to your .claude template directory")
-    print("4. Start the Cloude Code server:")
-    print("   ./start.sh")
     print()
-    print("You're all set! Access the app and log in with your TOTP code.")
+    print("Starting Cloude Code server...")
     print()
+
+    # Start the server
+    try:
+        venv_python = project_root / "venv" / "bin" / "python3"
+        if venv_python.exists():
+            subprocess.Popen([str(venv_python), '-m', 'src.main'],
+                           cwd=str(project_root),
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            print("✅ Server started in background")
+        else:
+            print("⚠️  Could not find venv, please start server manually with: ./start.sh")
+    except Exception as e:
+        print(f"⚠️  Could not start server: {e}")
+        print("   Start manually with: ./start.sh")
+
+    # Restart Cloude Code app if it's running
+    print()
+    print("Restarting Cloude Code app to apply changes...")
+    try:
+        # Check if the app is running
+        result = subprocess.run(['pgrep', '-x', 'Cloude Code'], capture_output=True)
+        if result.returncode == 0:
+            # App is running, restart it
+            subprocess.run(['killall', 'Cloude Code'], check=False)
+            import time
+            time.sleep(2)  # Wait for graceful shutdown
+            subprocess.run(['open', '-a', 'Cloude Code'], check=False)
+            print("✅ Cloude Code app restarted")
+        else:
+            print("ℹ️  Cloude Code app not running (launch it from Applications)")
+    except Exception as e:
+        print(f"⚠️  Could not restart app: {e}")
+        print("   Please restart Cloude Code manually from Applications")
+
+    print()
+    print("This window will close in 3 seconds...")
+    import time
+    time.sleep(3)
+
+    # Close terminal window
+    subprocess.run(['osascript', '-e', 'tell application "Terminal" to close first window'],
+                  check=False)
 
 if __name__ == "__main__":
     main()
