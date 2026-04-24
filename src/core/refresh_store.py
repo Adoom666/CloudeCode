@@ -98,6 +98,15 @@ class RefreshStore:
             "ON refresh_tokens(exp)"
         )
         await self._conn.commit()
+        # Tighten perms on the SQLite DB — it stores refresh-token jtis.
+        # The file is guaranteed to exist here because CREATE TABLE + commit
+        # just ran. Idempotent: safe to chmod every startup even if already
+        # 0600. Wrapped in try/except OSError for defensive safety (e.g.
+        # read-only FS, unusual ownership).
+        try:
+            Path(self._db_path).chmod(0o600)
+        except OSError as e:
+            logger.warning("refresh_store_chmod_failed", db=self._db_path, err=str(e))
         logger.info("refresh_store_initialized", db=self._db_path)
 
     async def close(self) -> None:

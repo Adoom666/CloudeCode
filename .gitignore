@@ -33,6 +33,8 @@ config.json
 
 # Authentication
 totp-qr.png
+# TOTP pairing sentinel (runtime state)
+.totp_paired
 
 # IDE
 .vscode/

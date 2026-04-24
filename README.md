@@ -12,17 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.5.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.2/Cloude.Code-0.5.0-arm64.dmg) (93 MB)
-
-> Note: the release tag is **v0.5.2** but the DMG filename still reads `0.5.0`. The internal electron-builder version will be bumped in the next release; the file you're downloading is the v0.5.2 build.
+**macOS (Apple Silicon):** [Cloude.Code-0.5.4-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.4/Cloude.Code-0.5.4-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 Cloude.Code-0.5.0-arm64.dmg
-# expected: 5e2c0336eeb9c145803a2b273c4e8a138d301836a99a547b78e89908af98e2b3
+shasum -a 256 Cloude.Code-0.5.4-arm64.dmg
+# expected: 915ddc64bd54e42bb71cd145384cddb6bf53170ade20bcaf459802e16e5c3a6f
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -85,12 +83,30 @@ because the app has been hardened for hostile traffic.
 - **Pluggable tunnel backend** — `local_only` (default), `quick_cloudflare`,
   `named_cloudflare`. Double-flag guard: you have to pick a Cloudflare backend
   *and* flip `enable_cloudflare=true` to actually go public.
-- **Electron menu bar (macOS)** — tray icon, server start/stop, health polling,
-  launch-at-login via LaunchAgent.
+- **Electron menu bar (macOS)** — tray icon, server start/stop, health polling
+  (against the configured bind host), launch-at-login via LaunchAgent.
+  Tray menu surfaces a **Bind IP submenu** (loopback / LAN / `0.0.0.0`),
+  a **Copy OTP** item that shows the live 6-digit code with roll hint,
+  and a **Copy Published URL** item.
 - **Docker (alternative)** — pure-container deployment for Linux / headless
   hosts. Python server + Claude CLI both run in the container.
 - **Strict CSP** — no inline `<script>`, SVG allowlisted from `cdn.jsdelivr.net`,
   `frame-ancestors 'none'`, clickjack defense, no-referrer policy.
+- **First-run auto-bootstrap (macOS)** — Electron menu-bar app self-provisions
+  a Python venv under `~/Library/Application Support/cloude-code-menubar/`,
+  installs requirements, mints `.env` + TOTP secret, and pops the QR. Zero
+  terminal interaction required. Subsequent launches fast-path in <50ms by
+  verifying a venv + `.env` + deps-hash sentinel trio. Bundled `src/` and
+  `client/` are re-synced on every launch so upgrades land cleanly.
+- **Mobile cache-busting** — iOS Safari aggressively caches `.html` and `.js`
+  served over LAN HTTP. `NoCacheStaticFiles` stamps
+  `Cache-Control: no-cache, must-revalidate` on every HTML/JS response so
+  the phone sees the latest UI after every app upgrade.
+- **Shift+Enter newline** — survives session swap; tmux-side `extended-keys on`
+  + `terminal-features ":extkeys"` + `escape-time 0` interpret CSI-u
+  encodings; client emits ESC+CR (`\x1b\r`) and suppresses xterm's hidden-
+  textarea duplicate `\r` via `ev.preventDefault()`. Forensic logging via
+  `ws_input_short` traces the exact bytes hitting tmux.
 
 ---
 
@@ -285,14 +301,23 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude Code.dmg` from releases (or build from source — see below).
+1. Grab `Cloude Code-0.5.4-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
-3. First run copies default config to `~/Library/Application Support/cloude-code-menubar/`.
-4. Click the menu bar icon → **Setup** to run the interactive auth wizard
-   (generates TOTP + JWT secrets; prompts for optional Cloudflare / ntfy).
-5. Scan the displayed QR code with your TOTP app.
+3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
+   - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
+     If none found → modal dialog instructs `brew install python@3.12`.
+   - Creates `~/Library/Application Support/cloude-code-menubar/server/venv/`.
+   - Runs `pip install -r requirements.txt` against the venv.
+   - Generates `.env` with TOTP secret + JWT secret (`chmod 0600`).
+   - Pops the QR window — scan with your authenticator app.
+   - First successful TOTP verify writes a `.totp_paired` sentinel.
+4. Tray tooltip narrates the state machine
+   (`creating-venv` → `installing-deps` → `ready`).
+5. Subsequent launches fast-path in <50ms by verifying a venv + `.env`
+   + deps-hash sentinel trio. Bundled `src/` and `client/` are re-synced
+   on every launch so DMG upgrades land cleanly.
 6. Open `http://localhost:8000` or `http://<mac-lan-ip>:8000` from any device
-   on the same LAN.
+   on the same LAN. Or use the **Copy Published URL** menu item.
 
 **Developer (clone + setup):**
 
@@ -381,6 +406,7 @@ optional Cloudflare/ntfy values.
 | `CLOUDE_BIND_IP`         | Docker only        | `127.0.0.1`      | Host IP to publish port 8000 on (Mode 2)                      |
 | `CLOUDE_PROJECT_PATH`    | Docker only        | `./projects`     | Host path mounted as `/workspace` in the container            |
 | `CLOUDE_LOG_DIR`         | Docker only        | `./logs`         | Host path for state (`refresh_tokens.db`, FIFOs)              |
+| `CLOUDE_ALLOW_QR_REPAIR` | No                 | unset            | Set to `1` to re-enable `/auth/qr` after the `.totp_paired` sentinel exists (re-pair on lost device) |
 
 ### `config.json` — feature configuration
 
@@ -479,6 +505,35 @@ config to `~/Library/Application Support/cloude-code-menubar/`.
 
 `nuke.sh` deletes remote Cloudflare resources. Review before running on a shared
 account.
+
+### Local development against the packaged menu-bar venv
+
+If you've installed the DMG and want to run the server from the working tree
+without setting up a separate venv, use the venv that the menu-bar app
+provisioned in Application Support:
+
+```bash
+nohup "/Users/Adam/Library/Application Support/cloude-code-menubar/server/venv/bin/python" \
+      -m src.main > /tmp/cloude.log 2>&1 &
+
+# Tail it:
+tail -f /tmp/cloude.log
+```
+
+Same Python interpreter, same dependency set, same `.env` path resolution as
+the packaged app — but iterates against the source tree you're editing.
+Useful for live-debugging WS handshake / Shift+Enter / tmux-options changes
+without rebuilding the DMG. Stop the menu-bar Electron app first
+(or it'll race for port 8000 and confuse the tray icon).
+
+To run the test suite against the same venv:
+
+```bash
+"/Users/Adam/Library/Application Support/cloude-code-menubar/server/venv/bin/python" \
+    -m pytest tests/ -v
+```
+
+177 tests should pass on a Mac with tmux installed.
 
 ---
 
@@ -580,9 +635,9 @@ Base URL: `http://<host>:8000` · REST prefix: `/api/v1`
 | ------ | -------------------------- | -------------------- | ------------------------------------------ |
 | `GET`  | `/health`                  | —                    | `{ status, session_active, monitoring }`   |
 | `GET`  | `/api/v1/health`           | —                    | `HealthResponse` (menu-bar uses this)      |
-| `GET`  | `/api/v1/auth/qr`          | —                    | `{ qr_image, secret, uri }` (data URL PNG) |
-| `POST` | `/api/v1/auth/verify`      | `VerifyTOTPRequest`  | `AuthTokenResponse` (access + refresh)     |
-| `POST` | `/api/v1/auth/refresh`     | `{ refresh_token }`  | `AuthTokenResponse`                        |
+| `GET`  | `/api/v1/auth/qr`          | —                    | `{ qr_image, secret, uri }` (data URL PNG); **403** once `.totp_paired` exists |
+| `POST` | `/api/v1/auth/verify`      | `VerifyTOTPRequest`  | `AuthTokenResponse` (access + refresh) — **5/min, 20/hour**            |
+| `POST` | `/api/v1/auth/refresh`     | `{ refresh_token }`  | `AuthTokenResponse` — **10/min**                                        |
 | `POST` | `/api/v1/auth/logout`      | `{ refresh_token }`  | `SuccessResponse`                          |
 
 ### Authenticated — `Authorization: Bearer <access_jwt>`
@@ -704,6 +759,29 @@ buffer) dedups submitted TOTP codes. Serialized under an asyncio lock to
 prevent TOCTOU where two concurrent submissions of the same code both
 slip through.
 
+**`.totp_paired` qr-gate** — first successful `/auth/verify` writes a
+`.totp_paired` sentinel next to the auth config. From that point forward,
+`GET /api/v1/auth/qr` returns **403** so a stolen LAN-reachable URL
+can't drain the QR (and therefore the TOTP secret) post-pairing. To
+re-pair after losing your device:
+
+```bash
+export CLOUDE_ALLOW_QR_REPAIR=1
+# restart the server (menu-bar app: Stop → Start, or relaunch)
+```
+
+The web UI hides its "Setup Required" banner on a 403 from `/auth/qr`,
+so the gate is invisible during normal operation.
+
+**Refresh rate limit** — `POST /auth/refresh` is capped at 10/min per
+client IP (separate from the 5/min cap on `/auth/verify`). Both windows
+use slowapi's leaky-bucket key function and emit `Retry-After`.
+
+**File permissions** — `.env`, `config.json`, and `refresh_tokens.db`
+are chmod'd to `0600` on create by `setup_auth.py` and the lifespan
+init paths. JWT secrets, TOTP seeds, and refresh-token jtis are not
+world-readable.
+
 ---
 
 ## Tmux integration
@@ -769,6 +847,24 @@ Escape (0x1b), arrows (`\x1b[A..D`), Ctrl chords, and F-keys. `send-keys -l`
 would treat them as literal characters; `paste-buffer` would wrap them in
 paste markers. Three paths exist because there is no single tmux command that
 handles all three cases correctly.
+
+Every short-payload (`send-keys -l` / `send-keys -H`) write also emits a
+`ws_input_short hex=<bytes> length=<n>` structlog line. That's the forensic
+trail used to debug Shift+Enter, arrows, escape sequences — you can see
+exactly what hit tmux.
+
+### Tmux options the app sets
+
+On every `start()`, `TmuxBackend` applies three server-scoped options:
+
+| Option                               | Value          | Why                                                                              |
+| ------------------------------------ | -------------- | -------------------------------------------------------------------------------- |
+| `extended-keys`                      | `on`           | Enable CSI-u / modified-key encodings so Shift+Enter, Ctrl+Shift+key etc. survive |
+| `terminal-features ":extkeys"` (-as) | append-and-set | Tells tmux the outer terminal accepts extended-key sequences (without it tmux still processes them but won't *forward* them) |
+| `escape-time`                        | `0`            | Zero-ms ESC timeout — multi-byte escape sequences (`\x1b\r` for Shift+Enter, arrow keys, function keys) deliver as a single chord instead of getting split |
+
+These are set with `check=False` so a tmux build that doesn't recognize one
+of them doesn't take down the whole start path.
 
 ### Output streaming
 
@@ -926,7 +1022,8 @@ Test suite covers:
 - `test_deep_link_routing.py` — `/session/<project>` deep link
 
 Tmux-adjacent tests skip cleanly when tmux isn't on PATH. Install tmux for
-full coverage.
+full coverage. **177 tests** total — should all pass on a Mac with tmux
+installed.
 
 ### Electron dev
 
@@ -936,6 +1033,60 @@ npm install
 npm start                          # dev mode — spawns Python server
 npm run build                      # produces dist/Cloude Code.dmg
 ```
+
+---
+
+## Recent changes
+
+### v0.5.4 (current)
+
+- **Setup-required banner fix.** The web UI's "Setup Required" banner now
+  hides when `GET /api/v1/auth/qr` returns `403` — meaning the server is
+  already paired (`.totp_paired` sentinel exists). Prior behavior left the
+  banner visible on every page load even after successful pairing.
+
+### v0.5.3
+
+- **Shift+Enter newline.** Inserts `\n` instead of submitting. Implemented
+  via tmux `extended-keys on` + `terminal-features ":extkeys"` (CSI-u
+  encoding) + `escape-time 0` (server-side), and on the client an
+  `attachCustomKeyEventHandler` that:
+  - emits ESC+CR (`\x1b\r`) so Claude's TTY interprets it as
+    Alt+Enter / newline-insert;
+  - calls `ev.preventDefault()` to suppress xterm's hidden-textarea
+    duplicate `\r`;
+  - **re-attaches on every `term.reset()` / session swap** — xterm
+    clears its single custom-key handler slot on reset, so without the
+    re-attach Shift+Enter goes dead the moment you swap sessions.
+  - emits a `ws_input_short` structlog line on every short-payload write
+    (`hex=<bytes> length=<n>`) for forensic trace of exactly what tmux
+    received.
+- **Phone sessions** — running-sessions panel auto-refreshes every 5s
+  on mobile so a session started from another device shows up without
+  a manual reload.
+- **Auth hardening:**
+  - CORS allowlist tightened: no `*`, explicit origins required.
+  - `.totp_paired` sentinel + `CLOUDE_ALLOW_QR_REPAIR=1` escape hatch
+    (see Auth Flow below).
+  - TOTP rate limit affirmed: 5/min, 20/hour with `Retry-After` header.
+  - Refresh rotation with chain revocation on replay (10s grace window).
+  - `.env`, `config.json`, and `refresh_tokens.db` chmod'd to `0600` on
+    create.
+- **Cache-Control no-cache** on HTML/JS — fixes mobile staleness after
+  app upgrade.
+
+### v0.5.2
+
+- **Menu-bar polish.** Bind-IP submenu (loopback / LAN / `0.0.0.0`),
+  Copy OTP menu item that surfaces the live 6-digit code, Copy
+  Published URL menu item.
+- **First-run auto-bootstrap** — install the DMG, double-click, the
+  app provisions Python venv + secrets + TOTP QR with zero terminal
+  interaction.
+- **Classic drag-to-Applications DMG** layout for end-user installs.
+- **QR endpoint** returns JSON (`{ qr_image: <data url> }`) instead of
+  raw PNG bytes — menu-bar app fetches from server endpoint instead of
+  reading a local file.
 
 ---
 

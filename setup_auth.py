@@ -129,6 +129,12 @@ def update_env_file(env_path: Path, totp_secret: str, jwt_secret: str):
     # Write back
     with open(env_path, 'w') as f:
         f.writelines(lines)
+    # Tighten perms — .env holds JWT_SECRET / TOTP_SECRET / PASSWORD_HASH.
+    # Must not be world- or group-readable. Idempotent: safe on re-run.
+    try:
+        Path(env_path).chmod(0o600)
+    except OSError:
+        pass
 
 
 def generate_qr_code(secret: str, account_name: str = "Cloude Code"):
@@ -373,6 +379,13 @@ def setup_env_file(env_path):
     # Write .env
     with open(env_path, 'w') as f:
         f.write(content)
+    # Tighten perms — .env will hold JWT_SECRET / TOTP_SECRET / PASSWORD_HASH
+    # once update_env_file() runs. Chmod here too so the window between the
+    # two writes is never world-readable. Idempotent.
+    try:
+        Path(env_path).chmod(0o600)
+    except OSError:
+        pass
 
     print()
     print(f"✅ Configuration written to {env_path}")

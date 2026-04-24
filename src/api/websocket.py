@@ -324,6 +324,8 @@ async def receive_messages(websocket: WebSocket, session_manager):
                     data = message["bytes"]
                     logger.debug("pty_input_received", data_len=len(data))
                     try:
+                        if len(data) <= 16:
+                            logger.info("ws_input_short", hex=data.hex(), length=len(data))
                         # Convert bytes to string for PTY input
                         text = data.decode('utf-8')
                         await session_manager.send_input(text)

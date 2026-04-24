@@ -248,6 +248,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger.info("CORS allowed origins", origins=settings.allowed_origins)
 
 
 # Item 9: Content-Security-Policy + hardening headers.
@@ -312,14 +313,52 @@ app.include_router(ws_router)                       # WebSocket routes
 
 # Mount static files
 client_dir = Path(__file__).parent.parent / "client"
-app.mount("/static", StaticFiles(directory=str(client_dir)), name="static")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles subclass that forces revalidation on .html and .js assets.
+
+    Why: mobile browsers (iOS Safari in particular) aggressively heuristic-
+    cache JS served over LAN HTTP with no ``Cache-Control`` header. That
+    was producing a ghost bug where a phone would render a pre-v3.1
+    ``launchpad.js`` bundle that predates the running-sessions feature,
+    so the section silently stayed hidden.
+
+    Fix: stamp ``Cache-Control: no-cache, must-revalidate`` on HTML and JS
+    responses. ``no-cache`` still allows caching but forces a conditional
+    GET (If-None-Match / If-Modified-Since) on every load, so the browser
+    gets an instant 304 when the file is unchanged and the new bytes when
+    it isn't. CSS / images / fonts keep the default (browser heuristic)
+    since they version far less often and a stale stylesheet is cosmetic.
+
+    Applied via subclass rather than ASGI middleware because (a) it only
+    runs on static hits, (b) it can't accidentally leak Cache-Control
+    onto API JSON responses, and (c) it sidesteps any ordering tangles
+    with the existing CSP middleware.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        lower = path.lower()
+        if lower.endswith(".js") or lower.endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static")
 
 
 @app.get("/")
 async def root():
     """Serve the web interface."""
     index_path = client_dir / "index.html"
-    return FileResponse(index_path)
+    # See NoCacheStaticFiles docstring — the HTML shell served from "/"
+    # bypasses StaticFiles, so stamp the no-cache header here too or the
+    # phone will keep booting a stale shell that references old JS URLs.
+    return FileResponse(
+        index_path,
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 # Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
@@ -345,7 +384,13 @@ async def session_deep_link(project: str):
     after the SPA boots; this handler does not inspect or validate it.
     """
     index_path = client_dir / "index.html"
-    return FileResponse(index_path)
+    # Same no-cache rationale as root(): force the HTML shell to
+    # revalidate on every load so a stale cached shell doesn't pin
+    # the phone to an old JS bundle.
+    return FileResponse(
+        index_path,
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/health")

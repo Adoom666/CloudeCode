@@ -98,7 +98,19 @@ class Auth {
             // Try to get QR code - if this fails, config doesn't exist
             await window.API.getQRCode();
         } catch (error) {
-            // Config missing - show setup instructions
+            // 403 = qr endpoint is locked because the device is already
+            // paired (server enforces .totp_paired sentinel). That's the
+            // happy path for the login screen — user just needs to type
+            // their TOTP, no setup banner required. Bail silently.
+            //
+            // Any OTHER non-200 (404 missing config, 500 server error,
+            // network failure, etc.) means setup truly hasn't been done
+            // or the backend is broken — surface the setup banner so the
+            // first-run user knows to run setup_auth.py.
+            if (error && error.status === 403) {
+                this.infoElement.classList.add('hidden');
+                return;
+            }
             this.showSetupInstructions();
         }
     }

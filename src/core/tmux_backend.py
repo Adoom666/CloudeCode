@@ -379,6 +379,38 @@ class TmuxBackend(SessionBackend):
             "set-option", "-t", self.tmux_session, "remain-on-exit", "on", check=False
         )
 
+        # Enable extended keys (tmux 3.2+) so modifier+key sequences like
+        # Shift+Enter arrive as CSI u (`\x1b[13;2u`) at the pane intact,
+        # instead of being collapsed to bare CR. Required for Claude Code
+        # CLI's multi-line input prompt to recognize Shift+Enter as
+        # "newline-insert" vs. CR=submit. Paired with the terminal-features
+        # `extkeys` flag below which advertises extended-key support to the
+        # pane's $TERM — Claude reads the terminfo to decide whether to
+        # emit CSI u or legacy keys.
+        #
+        # ``-s`` targets the tmux server (global, persists for the life of
+        # the tmux socket). Safe to re-run per session; tmux ignores repeat
+        # sets of the same value.
+        await self._run_tmux(
+            "set-option", "-s", "extended-keys", "on", check=False
+        )
+        # ``-as`` = append-and-set to the terminal-features option list.
+        # We target xterm-256color (our default TERM set above) and add the
+        # ``extkeys`` feature flag which tells tmux this terminal supports
+        # extended keys. Without this, tmux still processes extended-keys
+        # internally but may not advertise the capability to the pane.
+        await self._run_tmux(
+            "set-option", "-as", "terminal-features",
+            "xterm-256color:extkeys", check=False
+        )
+        # Drop the ESC key-timeout to 0ms on this tmux server so ESC-prefixed
+        # sequences aren't split into "ESC then CR" by the default 500ms
+        # wait window. Defense-in-depth for any fallback client that sends
+        # `\x1b\r` (Alt+Enter) instead of CSI u.
+        await self._run_tmux(
+            "set-option", "-s", "escape-time", "0", check=False
+        )
+
         # Critical for headless (no-client) operation: lock the window size to
         # manual so only `resize-window` changes it. Default is ``latest``
         # which sizes to the most recent attached client; with zero clients

@@ -181,19 +181,11 @@ class Terminal {
 
         this.term.open(document.getElementById('terminal'));
 
-        // Intercept Shift+Enter → send ESC + CR so Claude CLI treats it as
-        // "insert newline without submitting" instead of the default behavior
-        // where xterm.js collapses it to plain Enter.
-        this.term.attachCustomKeyEventHandler((ev) => {
-            if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
-                !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(new TextEncoder().encode('\x1b\r'));
-                }
-                return false;  // swallow the event so xterm doesn't also emit \r
-            }
-            return true;  // all other keys pass through to default handling
-        });
+        // Wire Shift+Enter interceptor. Handler body lives in
+        // _applyKeyHandlers() so we can re-attach after term.reset()
+        // (xterm wipes the custom key handler during core reset on
+        // session swap, which would otherwise leave Shift+Enter dead).
+        this._applyKeyHandlers();
 
         // Handle terminal input
         this.term.onData(data => {
@@ -292,6 +284,39 @@ class Terminal {
         this.term.writeln('  £  = Shift+Tab');
         this.term.writeln('');
         this.term.writeln('Waiting for session...\n');
+    }
+
+    /**
+     * Attach the Shift+Enter custom key handler to the current xterm
+     * instance. Called from initTerminal() on first boot and from every
+     * term.reset() site on session swap — xterm's core reset wipes the
+     * custom key event handler slot, so without re-attachment Shift+Enter
+     * silently goes back to default (submit) behavior for the rest of
+     * the session's life.
+     *
+     * Payload: 2-byte ESC+CR (`\x1b\r`) — the VSCode / Alacritty
+     * convention documented by Claude Code's /terminal-setup guide for
+     * "insert newline without submitting". Claude Code's Ink input
+     * parser recognizes ESC+CR as Meta+Enter without requiring kitty
+     * keyboard protocol negotiation (which CSI u `\x1b[13;2u` depends
+     * on, and which our node-pty/tmux stack does not reliably forward).
+     */
+    _applyKeyHandlers() {
+        if (!this.term) return;
+        this.term.attachCustomKeyEventHandler((ev) => {
+            if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey &&
+                !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r — VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
+                    console.log('[SHIFT-ENTER] sending ESC+CR (\\x1b\\r), bytes:', bytes);
+                    this.ws.send(bytes);
+                }
+                return false;  // swallow the event so xterm doesn't also emit \r
+            }
+            return true;  // all other keys pass through to default handling
+        });
     }
 
     /**
@@ -475,6 +500,10 @@ class Terminal {
             } catch (e) {
                 console.warn('Terminal: xterm reset failed:', e);
             }
+            // term.reset() wipes xterm's custom key handler slot.
+            // Re-attach so Shift+Enter continues to emit ESC+CR for the
+            // new session instead of silently falling back to default \r.
+            this._applyKeyHandlers();
         }
         this._currentSession = null;
         this.sessionActive = false;
@@ -572,6 +601,10 @@ class Terminal {
             } catch (e) {
                 console.warn('Terminal: xterm reset failed:', e);
             }
+            // term.reset() wipes xterm's custom key handler slot.
+            // Re-attach so Shift+Enter continues to emit ESC+CR for the
+            // new session instead of silently falling back to default \r.
+            this._applyKeyHandlers();
         }
         this._currentSession = null;
         this.sessionActive = false;

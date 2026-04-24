@@ -117,7 +117,41 @@ class Launchpad {
             const list = await window.API.listAttachableSessions();
             this.runningSessions = Array.isArray(list) ? list : [];
         } catch (err) {
-            console.warn('Launchpad: listAttachableSessions failed:', err);
+            // Surface the failure loud + observable in DevTools instead of
+            // swallowing it — a silent catch here was masking 401s / CORS /
+            // stale-cache bugs where mobile browsers would render an empty
+            // section with zero diagnostic trail. Keep the [] fallback so
+            // the rest of the render pipeline stays stable.
+            //
+            // Status extraction: the `call()` wrapper in api.js throws
+            // Error("HTTP <code>") for non-401s and Error("Authentication
+            // required...") for 401s after refresh fails. Parse what we
+            // can from the message so the log line is actionable.
+            let status = null;
+            if (err && typeof err.status === 'number') {
+                status = err.status;
+            } else if (err && typeof err.message === 'string') {
+                const m = err.message.match(/HTTP\s+(\d{3})/);
+                if (m) status = parseInt(m[1], 10);
+                else if (/Authentication required/i.test(err.message)) status = 401;
+            }
+            console.error(
+                '[launchpad] loadRunningSessions failed:',
+                status !== null ? `status=${status}` : '(no status)',
+                err
+            );
+            // On 401, fire a reauth event for the auth layer to pick up.
+            // NOTE: api.js:call() already dispatches `auth-required` on 401
+            // after refresh fails, so this is defense-in-depth only. If
+            // Auth.js doesn't listen for `cloude:reauth-needed` that's fine
+            // — `auth-required` remains the primary signal.
+            if (status === 401) {
+                try {
+                    window.dispatchEvent(new CustomEvent('cloude:reauth-needed', {
+                        detail: { source: 'launchpad.loadRunningSessions' }
+                    }));
+                } catch (_) { /* non-fatal */ }
+            }
             this.runningSessions = [];
         }
         // Augment with the CURRENTLY ACTIVE backend, which the server filters

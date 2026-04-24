@@ -227,7 +227,14 @@ class API {
         const response = await fetch(`${this.baseURL}/auth/qr`);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || 'Failed to get QR code');
+            // Attach HTTP status so callers can discriminate semantic
+            // outcomes — e.g. 403 here means "qr endpoint locked because
+            // pairing is already complete", which is success state for the
+            // login screen, NOT a setup-required failure. Mirrors the
+            // err.status pattern used in verifyTOTP() above.
+            const err = new Error(errorData.detail || 'Failed to get QR code');
+            err.status = response.status;
+            throw err;
         }
         return await response.json();
     }

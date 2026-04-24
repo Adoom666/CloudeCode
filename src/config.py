@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import os
 import json
+import socket
 
 
 class ProjectConfig(BaseModel):
@@ -187,7 +188,24 @@ class Settings(BaseSettings):
 
     # Security Configuration
     api_key: Optional[str] = None
-    allowed_origins: List[str] = ["*"]
+    # CORS allowed origins. Default is computed from HOST/PORT + local
+    # hostname variants (see ``_compute_default_allowed_origins``). The
+    # default NEVER includes "*", because the CORS middleware is wired with
+    # ``allow_credentials=True`` and the wildcard-with-credentials combo is
+    # a well-known footgun that lets any LAN neighbor fire credentialed
+    # XHRs at the API. To override (e.g. to add a tunnel hostname), set
+    # the ``ALLOWED_ORIGINS`` env var to a comma-separated list — that
+    # value is used verbatim and takes precedence over the computed
+    # default (see ``allowed_origins`` property below).
+    allowed_origins_override: Optional[str] = Field(
+        default=None,
+        alias="ALLOWED_ORIGINS",
+        description=(
+            "Comma-separated CORS origin override. When set, replaces the "
+            "computed default wholesale. Leave unset to use the safe "
+            "HOST/PORT + hostname-derived default."
+        ),
+    )
 
     # Authentication Secrets (from .env)
     totp_secret: Optional[str] = None
@@ -200,6 +218,67 @@ class Settings(BaseSettings):
     claude_cli_path: Optional[str] = None
 
     _auth_config_cache: Optional[AuthConfig] = None
+
+    @property
+    def allowed_origins(self) -> List[str]:
+        """Compute the CORS allowed-origins list.
+
+        Precedence:
+        1. If ``ALLOWED_ORIGINS`` env var is set, split on ``,`` and return
+           verbatim (trimmed). Operator override — trust the operator.
+        2. Otherwise, build a safe allowlist from ``HOST`` + ``PORT`` plus
+           loopback + mDNS hostname variants. NEVER includes ``"*"``,
+           because CORS middleware is wired with ``allow_credentials=True``
+           and the wildcard-with-credentials combo lets any LAN neighbor
+           fire credentialed XHRs at the API.
+
+        The computed list covers the three ways a user can hit the server:
+        - ``http://<HOST>:<PORT>`` — literal bind address
+        - ``http://localhost:<PORT>`` / ``http://127.0.0.1:<PORT>`` — loopback
+        - ``http://<hostname>:<PORT>`` / ``http://<hostname>.local:<PORT>``
+          — mDNS / Bonjour hostname (e.g. ``adoom`` → ``adoom.local``)
+
+        When ``HOST == "0.0.0.0"`` (bind-all), we substitute localhost +
+        127.0.0.1 + hostname + hostname.local instead of literally
+        whitelisting ``0.0.0.0`` (which no browser would ever send as an
+        Origin header anyway).
+        """
+        override = self.allowed_origins_override
+        if override:
+            parts = [p.strip() for p in override.split(",")]
+            return [p for p in parts if p]
+
+        port = self.port
+        origins: List[str] = []
+
+        # Best-effort hostname lookup. ``socket.gethostname()`` is cheap and
+        # doesn't hit DNS; tolerate failure and just skip those entries.
+        try:
+            hostname = socket.gethostname()
+        except Exception:
+            hostname = ""
+        # Strip any trailing ".local" so we can emit bare-host + .local
+        # variants deterministically.
+        hostname_bare = hostname[:-6] if hostname.endswith(".local") else hostname
+
+        if self.host and self.host != "0.0.0.0":
+            origins.append(f"http://{self.host}:{port}")
+
+        origins.append(f"http://localhost:{port}")
+        origins.append(f"http://127.0.0.1:{port}")
+
+        if hostname_bare:
+            origins.append(f"http://{hostname_bare}:{port}")
+            origins.append(f"http://{hostname_bare}.local:{port}")
+
+        # De-dupe while preserving order.
+        seen = set()
+        deduped: List[str] = []
+        for o in origins:
+            if o not in seen:
+                seen.add(o)
+                deduped.append(o)
+        return deduped
 
     def get_working_dir(self) -> Path:
         """Get the absolute path for the working directory."""

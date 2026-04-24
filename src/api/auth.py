@@ -3,9 +3,11 @@
 import asyncio
 import base64
 import io
+import os
 import secrets
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import jwt
@@ -21,6 +23,20 @@ from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
 from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, SuccessResponse
+
+
+def _totp_paired_sentinel_path() -> Path:
+    """
+    Path to the TOTP-pairing sentinel file.
+
+    Anchored to the same directory as ``config.json`` so it follows the
+    user's actual config location (``~/.config/cloudecode/`` when launched
+    from the Electron bundle, ``./`` in dev) instead of inventing a new
+    convention. The sentinel is a marker only — its presence (not contents)
+    signals that TOTP has been paired at least once, gating ``/auth/qr``
+    from re-serving the secret.
+    """
+    return Path(settings.auth_config_file).expanduser().parent / ".totp_paired"
 
 logger = structlog.get_logger()
 
@@ -391,6 +407,18 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
 
         logger.info("totp_verification_success")
 
+        # Fix 4b — mark TOTP as paired. Idempotent: touch() with exist_ok=True
+        # is safe if the sentinel already exists (all subsequent verifies).
+        # Best-effort: a filesystem hiccup here must NOT fail the auth flow,
+        # but we log loudly because a persistently unwritable config dir
+        # means /auth/qr will keep serving the secret unguarded.
+        try:
+            sentinel = _totp_paired_sentinel_path()
+            sentinel.parent.mkdir(parents=True, exist_ok=True)
+            sentinel.touch(exist_ok=True)
+        except Exception as e:
+            logger.error("totp_paired_sentinel_write_failed", error=str(e))
+
         # Populate BOTH `access_token` and the deprecated `token` alias
         # so clients on the old contract (pre-Item-5) keep working for
         # one release. Clients should migrate to `access_token`.
@@ -424,7 +452,7 @@ class RefreshTokenRequest(BaseModel):
 
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)
-@limiter.limit("30/minute")
+@limiter.limit("10/minute")
 async def refresh_tokens(request: Request, response: Response, body: RefreshTokenRequest):
     """
     Rotate a refresh token into a new access+refresh pair.
@@ -441,9 +469,10 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
         descendant. Both parties (legitimate user + attacker) must
         re-authenticate via TOTP.
       * Rotation itself is atomic inside ``RefreshStore.rotate``.
-      * Rate-limited at 30/minute to cap abusive retry storms — 30 is
-        generous enough for legitimate clients (refresh only fires on 401s)
-        but low enough that a brute-force campaign is throttled.
+      * Rate-limited at 10/minute to cap abusive retry storms — legitimate
+        clients refresh roughly once per ~14min (15min access TTL minus a
+        safety margin), so 10/min is ample headroom while throttling
+        brute-force campaigns hard.
     """
     store = getattr(request.app.state, "refresh_store", None)
     if store is None:
@@ -545,12 +574,36 @@ async def get_totp_qr():
     """
     Generate QR code for TOTP setup.
 
+    Gated by a ``.totp_paired`` sentinel file (Fix 4b): on first-run the
+    endpoint serves the QR freely so the user can pair an authenticator,
+    but once ``/auth/verify`` has succeeded at least once it refuses to
+    serve the secret again. Any LAN scanner hitting this endpoint after
+    pairing would otherwise be able to re-pair their own authenticator.
+    Escape hatch: set ``CLOUDE_ALLOW_QR_REPAIR=1`` and restart the server
+    to temporarily reopen the endpoint for re-pairing.
+
     Returns:
         Base64-encoded PNG image of QR code
 
     Raises:
-        HTTPException: If generation fails
+        HTTPException: 403 if already paired (and re-pair not enabled),
+        500 if generation fails.
     """
+    # Fix 4b — refuse to serve the secret once pairing is complete,
+    # unless the operator has explicitly opened the re-pair window.
+    if (
+        _totp_paired_sentinel_path().exists()
+        and os.getenv("CLOUDE_ALLOW_QR_REPAIR") != "1"
+    ):
+        logger.warning("qr_endpoint_blocked_already_paired")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "TOTP already paired; set CLOUDE_ALLOW_QR_REPAIR=1 and "
+                "restart to re-pair"
+            ),
+        )
+
     try:
         auth_config = settings.load_auth_config()
 
