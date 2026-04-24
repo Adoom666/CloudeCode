@@ -35,10 +35,8 @@ config.json
 totp-qr.png
 refresh_tokens.db
 
-# electron-builder byproducts (keep only DMG + blockmap)
-macOS/dist/builder-debug.yml
-macOS/dist/builder-effective-config.yaml
-macOS/dist/mac-arm64/
+# Electron builder output (DMG etc. — ship via GitHub Release assets)
+macOS/dist/
 macOS/node_modules/
 
 # IDE

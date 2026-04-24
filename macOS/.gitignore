@@ -2,10 +2,8 @@
 node_modules/
 package-lock.json
 
-# Build outputs — ignore dist/ except shippable DMG + blockmap
-dist/*
-!dist/*.dmg
-!dist/*.dmg.blockmap
+# Build outputs (electron-builder output — ship via GitHub Release assets)
+dist/
 out/
 
 # Electron build cache
