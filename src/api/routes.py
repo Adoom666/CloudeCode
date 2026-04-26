@@ -1,5 +1,8 @@
 """REST API routes for Claude Code Controller."""
 
+import json
+import os
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends
 from typing import List, Optional
 import structlog
@@ -20,6 +23,8 @@ from src.models import (
     AttachableSession,
     AdoptSessionRequest,
     AdoptSessionResponse,
+    ThemeManifest,
+    UpdatePinnedThemeRequest,
 )
 from src.api.auth import require_auth
 from src.config import settings
@@ -57,6 +62,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             copy_templates=body.copy_templates,
             cols=body.cols,
             rows=body.rows,
+            agent_type=body.agent_type,
         )
 
         session = await session_manager.create_session(
@@ -67,6 +73,7 @@ async def create_session(request: Request, body: CreateSessionRequest):
             initial_cols=body.cols,
             initial_rows=body.rows,
             project_name=body.project_name,
+            agent_type=body.agent_type,
         )
 
         # Move this project to the top of the list (most recently used)
@@ -224,6 +231,107 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
     )
 
     return AdoptSessionResponse(**result)
+
+
+@router.delete(
+    "/sessions/external/{name}",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def destroy_external_session(request: Request, name: str):
+    """Destroy an external (non-active) tmux session by name.
+
+    The launchpad's "X" button on a non-active running-session row used
+    to call adopt-then-destroy, which 500'd whenever the target pane was
+    dead (foreground process exited). This endpoint kills the tmux
+    session directly via ``tmux -L <socket> kill-session -t <name>``,
+    skipping adoption — so dead-pane sessions can still be cleaned up.
+
+    Returns:
+        SuccessResponse. ``message`` indicates whether the session was
+        actually killed or was already gone.
+
+    Raises:
+        HTTPException(400): name is unsafe (contains ``:`` or ``.``) OR
+            name matches the currently-active session (use
+            ``DELETE /sessions`` for that).
+        HTTPException(500): genuine tmux failure.
+    """
+    session_manager = request.app.state.session_manager
+
+    logger.info("api_destroy_external_session_request", name=name)
+
+    try:
+        result = await session_manager.destroy_external_session(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(
+            "external_session_destruction_failed", name=name, error=str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to destroy external session {name!r}: {e}",
+        )
+
+    msg = (
+        f"External session {name!r} already gone"
+        if result.get("already_gone")
+        else f"External session {name!r} destroyed"
+    )
+    return SuccessResponse(message=msg)
+
+
+@router.patch(
+    "/sessions/{session_name}/pinned-theme",
+    response_model=SessionInfo,
+    dependencies=[Depends(require_auth)],
+)
+async def set_pinned_theme(
+    request: Request, session_name: str, body: UpdatePinnedThemeRequest
+):
+    """Pin (or clear) a theme on a session by tmux session name.
+
+    SESSION-IDENTITY-V2 — the pinned theme overrides the user's global
+    localStorage theme whenever this session is active. ``pinned_theme``
+    null/None clears the pin. The matching session must be the currently
+    active one (single-active-session model); other names return 404.
+    """
+    session_manager = request.app.state.session_manager
+
+    if not session_manager.has_active_session():
+        raise HTTPException(status_code=404, detail="No active session")
+
+    session = session_manager.session
+    backend = session_manager.backend
+    active_name = getattr(backend, "tmux_session", None) if backend else None
+
+    # Match either the tmux session name (the canonical client-side handle)
+    # or the internal Session.id — covers both adopt-path callers (where
+    # session.name = tmux name) and create-path callers that may only know
+    # the session id locally.
+    if session_name not in (active_name, session.id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_name!r} is not the active session",
+        )
+
+    session.pinned_theme = body.pinned_theme
+    session_manager._save_session_metadata()
+
+    logger.info(
+        "api_set_pinned_theme",
+        session_name=session_name,
+        pinned_theme=body.pinned_theme,
+    )
+
+    info = await session_manager.get_session_info()
+    if info is None:
+        # Should be unreachable given the has_active_session() guard above,
+        # but pydantic-typed return demands a concrete value.
+        raise HTTPException(status_code=404, detail="Session vanished mid-update")
+    info.pinned_theme = session.pinned_theme
+    return info
 
 
 @router.post("/sessions/command", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
@@ -504,6 +612,161 @@ async def health_endpoint(request: Request):
         session_name=session_name,
         tunnel_count=tunnel_count
     )
+
+
+# ---------------------------------------------------------------------------
+# Theme manifest discovery (Phase 2)
+# ---------------------------------------------------------------------------
+# Endpoint scans two roots:
+#   1. `client/css/themes/*/theme.json`  → bundled, ships with the app
+#   2. `<user_themes_dir>/*/theme.json`  → user-authored, default location is
+#      `~/Library/Application Support/cloude-code-menubar/themes/`
+#
+# Each `theme.json` is try-parsed against `ThemeManifest`. Failures are
+# LOGGED-AND-SKIPPED — never 500, never silently substituted with claude
+# defaults. The endpoint must always return a usable list (possibly empty
+# in pathological cases; the client has its own claude fallback).
+#
+# `id` mismatch (manifest.id != directory name) is treated as a manifest
+# error: skip + log. This avoids two themes colliding on the same id when
+# they live in different folders.
+def _bundled_themes_root() -> Path:
+    """Return repo's `client/css/themes/` dir. Matches the static mount."""
+    # routes.py lives at src/api/routes.py — parent.parent.parent = repo root
+    return Path(__file__).resolve().parent.parent.parent / "client" / "css" / "themes"
+
+
+def _user_themes_root() -> Optional[Path]:
+    """Resolve user themes dir from settings/env, default macOS Application
+    Support path. Returns None when no resolved path exists on disk.
+    """
+    # Phase 6 will wire ThemesConfig.user_themes_dir into Settings; for Phase
+    # 2 we honor an env override or fall back to the documented macOS path.
+    env_dir = os.environ.get("CLOUDE_USER_THEMES_DIR")
+    if env_dir:
+        p = Path(env_dir).expanduser()
+        return p if p.is_dir() else None
+    default = Path.home() / "Library" / "Application Support" / "cloude-code-menubar" / "themes"
+    return default if default.is_dir() else None
+
+
+def _load_manifest(theme_dir: Path, source: str) -> Optional[ThemeManifest]:
+    """Try-parse one theme.json. Return None on any error (logged)."""
+    manifest_path = theme_dir / "theme.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        with manifest_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        # UnicodeDecodeError is NOT an OSError (it's a ValueError subclass)
+        # — explicitly catch it so binary garbage masquerading as a
+        # theme.json gets logged + skipped instead of 500'ing the
+        # endpoint. Other ValueErrors are intentionally left to surface
+        # since they'd indicate a real bug in our code, not bad input.
+        logger.warning(
+            "theme_manifest_parse_failed",
+            path=str(manifest_path),
+            error=str(e),
+        )
+        return None
+
+    # Server stamps `source`. Reject any client-supplied source value to keep
+    # the contract one-way.
+    raw["source"] = source
+
+    try:
+        manifest = ThemeManifest(**raw)
+    except Exception as e:
+        logger.warning(
+            "theme_manifest_validation_failed",
+            path=str(manifest_path),
+            error=str(e),
+        )
+        return None
+
+    # Enforce id == directory name. A mismatch is almost always a copy-paste
+    # bug; surfacing it as a skip + log avoids silent collisions.
+    if manifest.id != theme_dir.name:
+        logger.warning(
+            "theme_manifest_id_dir_mismatch",
+            manifest_id=manifest.id,
+            dir_name=theme_dir.name,
+            path=str(manifest_path),
+        )
+        return None
+
+    return manifest
+
+
+def _scan_themes_root(root: Optional[Path], source: str) -> List[ThemeManifest]:
+    """Scan one root for theme.json files. Returns valid manifests only."""
+    if root is None or not root.is_dir():
+        return []
+    out: List[ThemeManifest] = []
+    seen_ids = set()
+    try:
+        entries = sorted(root.iterdir(), key=lambda p: p.name.lower())
+    except OSError as e:
+        logger.warning("themes_root_scan_failed", root=str(root), error=str(e))
+        return []
+    for child in entries:
+        if not child.is_dir():
+            continue
+        if child.name.startswith("."):
+            continue
+        m = _load_manifest(child, source)
+        if m is None:
+            continue
+        if m.id in seen_ids:
+            logger.warning(
+                "theme_duplicate_id_skipped",
+                id=m.id,
+                root=str(root),
+            )
+            continue
+        seen_ids.add(m.id)
+        out.append(m)
+    return out
+
+
+@router.get(
+    "/themes",
+    response_model=List[ThemeManifest],
+    dependencies=[Depends(require_auth)],
+)
+async def list_themes() -> List[ThemeManifest]:
+    """List discovered theme manifests (bundled + user).
+
+    Bundled themes are sorted first (alphabetical by name within each group).
+    Malformed manifests are skipped with a warning log — never 500.
+    The client has its own Claude fallback, so an empty list is acceptable
+    in degraded states.
+
+    Cross-root id collision rule (Phase 9): a user theme whose id matches
+    a bundled theme id is silently dropped with a warning. Bundled wins.
+    Rationale: lets us ship breaking-change updates to bundled themes
+    without a stale user-cloned copy shadowing them, and avoids ambiguity
+    in the selector UI.
+    """
+    bundled = _scan_themes_root(_bundled_themes_root(), "builtin")
+    user = _scan_themes_root(_user_themes_root(), "user")
+    bundled.sort(key=lambda m: m.name.lower())
+    user.sort(key=lambda m: m.id.lower())
+
+    bundled_ids = {m.id for m in bundled}
+    deduped_user: List[ThemeManifest] = []
+    for m in user:
+        if m.id in bundled_ids:
+            logger.warning(
+                "theme_user_shadowed_by_builtin",
+                id=m.id,
+                reason="user theme id collides with a bundled theme; bundled wins",
+            )
+            continue
+        deduped_user.append(m)
+
+    return bundled + deduped_user
 
 
 @router.post("/shutdown", response_model=SuccessResponse, dependencies=[Depends(require_auth)])

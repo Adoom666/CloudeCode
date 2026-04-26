@@ -1,0 +1,124 @@
+/* Alien theme — Nostromo MOTHER 6000.
+   Diegetic 1979-era CRT: P1 phosphor green on coal-black, hazard yellow
+   for caution, claxon red for terminal states, blue-grey for telemetry.
+
+   Pure CSS — no effects.js. Scanlines are a body-level
+   repeating-linear-gradient overlay; phosphor bloom is text-shadow.
+   Header glow is amplified to mimic CRT brightness blowout on heading rows. */
+
+:root[data-theme="alien"] {
+  color-scheme: dark;
+}
+
+/* Body — coal-black with green undertone, NOT pure #000.
+   Scanlines: 3px period, ~15% darkness — period matches a real ~480-line
+   interlaced CRT scaled to web pixels. Stronger than that reads as venetian
+   blinds; weaker disappears. */
+:root[data-theme="alien"] body {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 2px,
+      rgba(0, 0, 0, 0.15) 3px,
+      rgba(0, 0, 0, 0.15) 3px
+    ),
+    #04110a;
+  position: relative;
+}
+
+/* Subtle phosphor bloom on every text-bearing surface. 1px not 4px —
+   real P1 phosphor halates close, not nuclear. currentColor means greens
+   bloom green, hazards bloom yellow, claxons bloom red. Semantic glow. */
+:root[data-theme="alien"] body,
+:root[data-theme="alien"] button,
+:root[data-theme="alien"] input,
+:root[data-theme="alien"] select,
+:root[data-theme="alien"] textarea,
+:root[data-theme="alien"] a,
+:root[data-theme="alien"] .header,
+:root[data-theme="alien"] .session-card,
+:root[data-theme="alien"] .modal {
+  text-shadow: 0 0 1px currentColor;
+}
+
+/* Header — CRT brightness blowout on heading rows (period-correct artifact
+   of unregulated tube brightness controls). Mother-green tinted halation. */
+:root[data-theme="alien"] .header h1,
+:root[data-theme="alien"] .header .title,
+:root[data-theme="alien"] #appTitle {
+  text-shadow:
+    0 0 3px rgba(124, 252, 168, 0.70),
+    0 0 10px rgba(124, 252, 168, 0.30);
+  letter-spacing: 0.06em;
+}
+
+/* Inputs — Cobb industrial detailing. Green base, accent-bottom, hazard
+   yellow on focus = "operator attention" (Nostromo console grammar). */
+:root[data-theme="alien"] input,
+:root[data-theme="alien"] textarea,
+:root[data-theme="alien"] select {
+  border-color: #1a3a28;
+  border-bottom-color: #7cfca8;
+  box-shadow: 0 1px 4px -2px rgba(124, 252, 168, 0.55);
+}
+
+:root[data-theme="alien"] input:focus,
+:root[data-theme="alien"] textarea:focus,
+:root[data-theme="alien"] select:focus {
+  border-color: #ffd700;
+  outline: none;
+  box-shadow: 0 0 8px rgba(255, 215, 0, 0.55);
+}
+
+/* Cards / modals / launchpad — slight scrim so scanlines don't bleed
+   through and shred the readable surfaces. Same play matrix runs. */
+:root[data-theme="alien"] .session-card,
+:root[data-theme="alien"] .modal,
+:root[data-theme="alien"] #launchpad {
+  background-color: rgba(4, 17, 10, 0.85);
+  backdrop-filter: blur(2px);
+}
+
+/* Reduced-motion: drop the scanlines entirely (some users get headaches
+   from interlace patterns even when static). Keep phosphor wash. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="alien"] body {
+    background:
+      radial-gradient(ellipse at 50% 30%, rgba(124, 252, 168, 0.05), transparent 70%),
+      #04110a;
+  }
+}
+
+/* ==========================================================================
+   Terminal scope — when a session is themed Alien, paint inside the xterm
+   too. Scanlines + bloom on the terminal itself for full diegetic immersion.
+   ========================================================================== */
+
+#terminal-screen[data-session-theme="alien"] {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 2px,
+      rgba(0, 0, 0, 0.15) 3px,
+      rgba(0, 0, 0, 0.15) 3px
+    ),
+    #04110a;
+  color: #7cfca8;
+  text-shadow: 0 0 1px currentColor;
+}
+
+#terminal-screen[data-session-theme="alien"] .terminal-header {
+  background: #020806;
+  border-bottom: 1px solid #1a3a28;
+  text-shadow: 0 0 3px rgba(124, 252, 168, 0.65);
+}
+
+/* xterm.js own container — let scanlines from the parent show through
+   instead of opaquing them out. xterm paints its own background unless we
+   force transparency on its viewport. */
+#terminal-screen[data-session-theme="alien"] .xterm,
+#terminal-screen[data-session-theme="alien"] .xterm-viewport {
+  background-color: transparent !important;
+}

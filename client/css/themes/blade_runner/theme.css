@@ -1,0 +1,90 @@
+/* Blade Runner theme — smog-orange neon over rain-slick cobalt night.
+   The <canvas id="blade-runner-rain"> is mounted by effects.js at z-index: -1 behind everything.
+   Cronenweth (1982) tungsten + Deakins (2049) cobalt-shadow palette. Readability comes first. */
+
+:root[data-theme="blade_runner"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="blade_runner"] body {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255, 122, 0, 0.05), transparent 60%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 60, 120, 0.18), transparent 65%),
+    radial-gradient(ellipse at 20% 90%, rgba(0, 30, 60, 0.22), transparent 70%),
+    #0a0e1a;
+  position: relative;
+}
+
+/* Tungsten phosphor on important text — keep tiny so it's a tint, not a halo. */
+:root[data-theme="blade_runner"] .header h1,
+:root[data-theme="blade_runner"] .header .title {
+  text-shadow:
+    0 0 4px rgba(255, 122, 0, 0.40),
+    0 0 14px rgba(255, 122, 0, 0.18);
+  letter-spacing: 0.06em;
+}
+
+/* Subtle neon edge on accent buttons and links. */
+:root[data-theme="blade_runner"] a,
+:root[data-theme="blade_runner"] button.primary,
+:root[data-theme="blade_runner"] .accent {
+  text-shadow: 0 0 4px rgba(255, 122, 0, 0.35);
+}
+
+/* Glowing bottom border on inputs — neon-strip-on-wet-asphalt look. */
+:root[data-theme="blade_runner"] input,
+:root[data-theme="blade_runner"] textarea,
+:root[data-theme="blade_runner"] select {
+  border-color: #2a3450;
+  border-bottom-color: #ff7a00;
+  box-shadow: 0 1px 4px -2px rgba(255, 122, 0, 0.50);
+}
+
+:root[data-theme="blade_runner"] input:focus,
+:root[data-theme="blade_runner"] textarea:focus,
+:root[data-theme="blade_runner"] select:focus {
+  border-color: #ff7a00;
+  outline: none;
+  box-shadow: 0 0 8px rgba(255, 122, 0, 0.50);
+}
+
+/* Make sure chrome sits above the rain canvas. */
+:root[data-theme="blade_runner"] .header,
+:root[data-theme="blade_runner"] main,
+:root[data-theme="blade_runner"] .modal,
+:root[data-theme="blade_runner"] #launchpad,
+:root[data-theme="blade_runner"] #terminal-screen {
+  position: relative;
+  z-index: 1;
+}
+
+/* Scrim on cards/modals so rain doesn't bleed through and hurt readability. */
+:root[data-theme="blade_runner"] .session-card,
+:root[data-theme="blade_runner"] .modal,
+:root[data-theme="blade_runner"] #launchpad {
+  background-color: rgba(10, 14, 26, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+/* prefers-reduced-motion fallback — effects.js refuses to mount,
+   keep the static cobalt-to-black wash so the bg still feels rain-slick. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="blade_runner"] body {
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(255, 122, 0, 0.06), transparent 55%),
+      radial-gradient(ellipse at 50% 100%, rgba(0, 60, 120, 0.22), transparent 70%),
+      #0a0e1a;
+  }
+}
+
+/* Terminal scope. */
+#terminal-screen[data-session-theme="blade_runner"] {
+  background: #0a0e1a;
+  color: #e8d4a8;
+}
+
+#terminal-screen[data-session-theme="blade_runner"] .terminal-header {
+  background: #070a12;
+  border-bottom: 1px solid #2a3450;
+  text-shadow: 0 0 3px rgba(255, 122, 0, 0.45);
+}

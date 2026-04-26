@@ -279,6 +279,48 @@ class API {
     }
 
     /**
+     * Projects: Rename / update description (display name only — never
+     * touches the folder on disk). Pass only the fields you want to change.
+     *
+     * @param {string} currentName - Current display name (URL identifier).
+     * @param {object} fields - {newName?: string, description?: string}.
+     *   ``description: ""`` is honored as an intentional clear.
+     * @returns {Promise<object>} - Updated project (canonical form).
+     */
+    async updateProject(currentName, { newName, description } = {}) {
+        const body = {};
+        if (newName !== undefined) body.new_name = newName;
+        if (description !== undefined) body.description = description;
+        return await this.call(`/projects/${encodeURIComponent(currentName)}`, {
+            method: 'PATCH',
+            body
+        });
+    }
+
+    /**
+     * Projects: Clone a GitHub repo (server runs `gh repo clone`) and
+     * register the result as a project.
+     *
+     * @param {object} params
+     * @param {string} params.repoUrl - GitHub URL or owner/repo shorthand.
+     * @param {string} [params.parentDir] - Directory in which the cloned
+     *   folder is created (server default: ~/projects).
+     * @param {string} [params.projectName] - Override auto-detected name.
+     * @param {string} [params.description] - Optional project description.
+     * @returns {Promise<{name: string, path: string, description: ?string}>}
+     */
+    async cloneProjectFromGithub({ repoUrl, parentDir, projectName, description } = {}) {
+        const body = { repo_url: repoUrl };
+        if (parentDir !== undefined && parentDir !== '') body.parent_dir = parentDir;
+        if (projectName !== undefined && projectName !== '') body.project_name = projectName;
+        if (description !== undefined) body.description = description;
+        return await this.call('/projects/clone', {
+            method: 'POST',
+            body
+        });
+    }
+
+    /**
      * Filesystem: Browse a directory on the server
      * @param {string|null} path - Directory path to list, or null to start at the default location
      * @returns {Promise<{path: string, parent: string|null, entries: Array<{name: string, path: string}>}>}
@@ -341,6 +383,28 @@ class API {
         return await this.call('/sessions', {
             method: 'DELETE'
         });
+    }
+
+    /**
+     * Sessions: Destroy an external (non-active) tmux session by name.
+     *
+     * Direct kill via the server's `DELETE /sessions/external/{name}`
+     * endpoint. Used by the launchpad "X" button when the target row
+     * is NOT the currently-active backend — bypasses the old
+     * adopt-then-destroy flow which 500'd on dead panes (foreground
+     * process exited, e.g. user Ctrl-D'd `claude`).
+     *
+     * Idempotent: if the session is already gone server-side, the
+     * server returns 200 with an "already gone" message.
+     *
+     * @param {string} sessionName - tmux session name (as seen in launchpad)
+     * @returns {Promise<{success: boolean, message: string}>}
+     */
+    async destroyExternalSession(sessionName) {
+        return await this.call(
+            `/sessions/external/${encodeURIComponent(sessionName)}`,
+            { method: 'DELETE' }
+        );
     }
 
     /**

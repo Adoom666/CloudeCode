@@ -1,0 +1,10 @@
+/* ============================================================
+   Black Market — VIP basement door
+   Faint amethyst shimmer on focus. No infinite animation.
+   ============================================================ */
+
+:root[data-theme="black_market"] *:focus-visible {
+  outline: 1px solid var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(157, 78, 221, 0.25);
+  transition: box-shadow 250ms ease-out;
+}

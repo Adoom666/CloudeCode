@@ -402,6 +402,107 @@ function syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged }) {
 }
 
 // ---------------------------------------------------------------------------
+// User themes dir provisioning (Phase 9 — pluggability surface)
+//
+// Creates ~/Library/Application Support/cloude-code-menubar/themes/ if it
+// doesn't exist, then drops a README.md ONCE so the user has a starting
+// schema reference. The README is written ONLY when absent — preserving
+// any user edits across upgrades.
+//
+// This dir lives OUTSIDE the resync allowlist (RESYNC_ALLOWLIST in
+// syncBundledAssets) so DMG upgrades will never blow away user themes.
+//
+// Idempotent and safe to call on every launch. Failures are logged but
+// non-fatal: a missing themes dir simply means the FastAPI /themes mount
+// is skipped (server logs "user_themes_mount_skipped") and the discovery
+// endpoint returns bundled-only.
+// ---------------------------------------------------------------------------
+
+const USER_THEMES_README = `# Cloude Code — User Themes
+
+Drop your custom themes in this directory as subfolders, one per theme.
+Each theme is a folder named after the theme \`id\`, containing a
+\`theme.json\` manifest and (optionally) an \`effects.js\` for runtime FX.
+
+## Discovery
+
+The server scans this dir on every \`GET /api/v1/themes\` call. No restart
+needed — just refresh the browser after dropping a new theme in.
+
+If a user theme has the same \`id\` as a bundled theme, the bundled one
+wins and the user theme is skipped with a server-log warning.
+
+## Schema
+
+A minimal \`theme.json\`:
+
+\`\`\`json
+{
+  "id": "neon",
+  "name": "Neon",
+  "description": "Pink-on-black retro arcade vibe.",
+  "author": "you",
+  "version": "1.0.0",
+  "cssVars": {
+    "--color-bg": "#0a0014",
+    "--color-fg": "#ff00ff",
+    "--color-accent": "#00ffff",
+    "--color-border": "#330033"
+  },
+  "xterm": {
+    "background": "#0a0014",
+    "foreground": "#ff00ff",
+    "cursor": "#00ffff"
+  },
+  "effects": "effects.js"
+}
+\`\`\`
+
+## Fields
+
+- \`id\` — must match the folder name. Mismatched manifests are skipped.
+- \`name\`, \`description\` — shown in the theme selector.
+- \`cssVars\` — map of CSS custom-property name to value, applied to \`:root\`.
+- \`xterm\` — xterm.js theme object (background/foreground/ANSI palette).
+- \`effects\` — optional filename of a JS module relative to the theme dir.
+  First time a theme with effects is applied, the UI prompts for consent
+  (Allow once / Always / Never). Choices persist in localStorage.
+
+## Security
+
+Theme assets are served unauth at \`http://<server>/themes/<id>/<file>\`.
+Do NOT put secrets in \`theme.json\` or \`effects.js\`. Same threat model
+as any static resource on the LAN-only deployment.
+`;
+
+function provisionUserThemesDir() {
+  const dir = path.join(
+    os.homedir(),
+    'Library',
+    'Application Support',
+    'cloude-code-menubar',
+    'themes'
+  );
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`[bootstrap] created user themes dir: ${dir}`);
+    }
+    const readmePath = path.join(dir, 'README.md');
+    if (!fs.existsSync(readmePath)) {
+      fs.writeFileSync(readmePath, USER_THEMES_README, 'utf8');
+      console.log(`[bootstrap] dropped user themes README: ${readmePath}`);
+    }
+    return { ok: true, dir };
+  } catch (e) {
+    // Non-fatal: server will simply skip the /themes mount and serve
+    // bundled-only. Surface the warning so it's visible in Electron logs.
+    console.warn(`[bootstrap] could not provision user themes dir: ${e.message}`);
+    return { ok: false, dir, error: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main bootstrap orchestrator
 // ---------------------------------------------------------------------------
 
@@ -445,6 +546,15 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, on
     };
   }
   console.log(`[bootstrap] Python found: ${python.path} (${python.version})`);
+
+  // -------------------------------------------------------------------------
+  // 1a. User themes dir (Phase 9)
+  //
+  // Idempotent: creates the dir + drops README only when missing. Runs on
+  // every launch so a user who wipes the dir manually gets a fresh README
+  // next boot. Failures here are non-fatal — server tolerates absence.
+  // -------------------------------------------------------------------------
+  provisionUserThemesDir();
 
   // -------------------------------------------------------------------------
   // 1b. Bundle → userData resync (EVERY launch in packaged mode)
@@ -675,5 +785,6 @@ module.exports = {
   findSuitablePython,
   sha256File,
   syncBundledAssets,
+  provisionUserThemesDir,
   RESYNC_ALLOWLIST,
 };

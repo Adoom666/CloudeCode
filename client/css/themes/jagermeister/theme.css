@@ -1,0 +1,40 @@
+/* ============================================================
+ * Jägermeister theme — subtle ornate-Germanic gravitas
+ * ------------------------------------------------------------
+ * Restraint is the brand. One hairline of heritage orange at
+ * the architectural seam (header), tightened monospace rhythm,
+ * nothing else. No animation. Gravitas over flair.
+ * ============================================================ */
+
+/* Header: a single faint ornate seam — top border in heritage
+ * orange (very low alpha so it reads as a glow, not a stripe),
+ * bottom in deep forest. The double-edge is the "ornate" cue. */
+.header {
+  border-top: 1px solid var(--color-accent-border-soft);
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-shadow: inset 0 -1px 0 0 rgba(241, 138, 0, 0.06);
+}
+
+/* Monospace tightening — heritage typography breathes less than
+ * modern sans. Slight negative tracking + steady weight = the
+ * Albertus/Fraktur cadence translated to a fixed grid. */
+:root,
+body,
+pre,
+code,
+.terminal,
+.xterm,
+.xterm-rows {
+  font-feature-settings: "liga" 0, "calt" 0;
+  letter-spacing: -0.01em;
+}
+
+/* Accent-on-parchment: when the heritage orange touches text,
+ * give it the slightest weight bump so it reads as engraved
+ * rather than printed. Used sparingly by accent classes. */
+.accent,
+[class*="accent"] strong,
+.badge-accent {
+  font-weight: 600;
+  letter-spacing: 0;
+}

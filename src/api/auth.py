@@ -22,7 +22,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
-from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, SuccessResponse
+from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, UpdateProjectRequest, CloneProjectRequest, SuccessResponse
 
 
 def _totp_paired_sentinel_path() -> Path:
@@ -138,6 +138,45 @@ def _get_ttls() -> tuple[int, int, int]:
     refresh_ttl = int(getattr(auth_config, "refresh_token_ttl_seconds", 604800))
     grace = int(getattr(auth_config, "refresh_grace_seconds", 10))
     return access_ttl, refresh_ttl, grace
+
+
+def _extract_repo_name(url: str) -> Optional[str]:
+    """Extract the repo basename from a GitHub URL.
+
+    Accepts the canonical GitHub URL shapes used by ``gh repo clone``:
+      * ``https://github.com/owner/repo``
+      * ``https://github.com/owner/repo.git``
+      * ``git@github.com:owner/repo.git``
+      * ``github.com/owner/repo``
+      * ``owner/repo`` (gh CLI shorthand)
+
+    Returns the final path segment (the repo name) or ``None`` if the URL
+    can't be parsed into at least ``owner/repo`` shape. The returned name
+    is what gh will use as the cloned-folder basename when no explicit
+    target directory is supplied — we match that behavior here.
+    """
+    if not url:
+        return None
+    url = url.strip().rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+    # ssh form: git@github.com:owner/repo
+    if "@" in url and ":" in url and "://" not in url:
+        url = url.split(":", 1)[1]
+    # https / scheme-prefixed form
+    if "://" in url:
+        url = url.split("://", 1)[1]
+    # strip github.com/ prefix (case-insensitive)
+    if url.lower().startswith("github.com/"):
+        url = url[len("github.com/"):]
+    parts = [p for p in url.split("/") if p]
+    if len(parts) < 2:
+        return None
+    name = parts[-1]
+    # Defensive: reject anything with path-traversal or whitespace chars.
+    if not name or any(ch in name for ch in ("..", "/", "\\", "\x00")) or name.strip() != name:
+        return None
+    return name
 
 
 def create_access_token(user: str = "claudetunnel_user") -> tuple[str, int]:
@@ -777,6 +816,256 @@ async def delete_project(project_name: str):
             status_code=500,
             detail=f"Failed to delete project: {str(e)}"
         )
+
+
+@router.patch(
+    "/projects/{project_name}",
+    response_model=ProjectResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def update_project(project_name: str, body: UpdateProjectRequest):
+    """
+    Update a project's display name and/or description.
+
+    Display name only — the folder on disk is never touched. After a rename,
+    subsequent calls must use the NEW name (the URL path identifier changes).
+
+    Args:
+        project_name: Current display name (URL path).
+        body: Fields to update. Both ``new_name`` and ``description`` are
+            optional; sending neither yields 400.
+
+    Returns:
+        The updated project (canonical form, post-mutation).
+
+    Raises:
+        HTTPException 400: if no fields are supplied.
+        HTTPException 404: if no project named ``project_name`` exists.
+        HTTPException 409: if ``new_name`` collides with another project.
+    """
+    if body.new_name is None and body.description is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    try:
+        updated = settings.update_project(project_name, body.new_name, body.description)
+
+        logger.info(
+            "project_updated",
+            old_name=project_name,
+            new_name=updated.name,
+            description_changed=body.description is not None,
+        )
+
+        return ProjectResponse(
+            name=updated.name,
+            path=updated.path,
+            description=updated.description,
+        )
+
+    except KeyError:
+        logger.warning("project_update_not_found", name=project_name)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found",
+        )
+    except ValueError as e:
+        if "name conflict" in str(e):
+            logger.warning(
+                "project_update_name_conflict",
+                old_name=project_name,
+                new_name=body.new_name,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=f"A project named '{body.new_name}' already exists",
+            )
+        logger.warning("project_update_failed_validation", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first.",
+        )
+    except Exception as e:
+        logger.error("project_update_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update project: {str(e)}",
+        )
+
+
+@router.post(
+    "/projects/clone",
+    response_model=ProjectResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def clone_project_from_github(body: CloneProjectRequest):
+    """Clone a GitHub repo via ``gh repo clone`` and register it as a project.
+
+    Steps:
+      1. Verify the ``gh`` CLI is on PATH (else 503).
+      2. Parse the repo basename from ``body.repo_url`` (else 400).
+      3. Resolve target = ``<parent_dir>/<repo_name>``; refuse if it exists (409).
+      4. Refuse if a project with the same display name already exists (409).
+      5. Run ``gh repo clone <url> <target>`` with a 5-minute bounded timeout.
+         No shell — args are passed as a vector to ``create_subprocess_exec``.
+      6. Translate gh's exit/stderr into typed HTTP errors:
+            auth/network → 401, not-found → 404, other → 500.
+      7. Persist the new project (display name = body.project_name or repo basename).
+    """
+    # 1. Verify gh CLI is available.
+    try:
+        gh_check = await asyncio.create_subprocess_exec(
+            "gh", "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await gh_check.communicate()
+        if gh_check.returncode != 0:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "gh CLI not available on server. Install with "
+                    "`brew install gh` and run `gh auth login`."
+                ),
+            )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "gh CLI not found on server. Install with `brew install gh` "
+                "and run `gh auth login`."
+            ),
+        )
+
+    # 2. Parse repo name from URL.
+    repo_name = _extract_repo_name(body.repo_url)
+    if not repo_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not extract repository name from URL: {body.repo_url}",
+        )
+    project_name = body.project_name or repo_name
+
+    # 3. Resolve target path. expanduser handles ~; resolve normalizes.
+    try:
+        parent = Path(body.parent_dir).expanduser().resolve()
+    except (OSError, RuntimeError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid parent_dir: {body.parent_dir} ({e})",
+        )
+    target = parent / repo_name
+
+    # 4. Refuse if target dir already exists.
+    if target.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Target directory already exists: {target}",
+        )
+
+    # 5. Refuse if a project with the same display name already exists.
+    if settings.get_project(project_name) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A project named '{project_name}' already exists",
+        )
+
+    # 6. Ensure parent dir exists.
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create parent directory {parent}: {e}",
+        )
+
+    # 7. Run gh clone — bounded timeout, no shell interpolation.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gh", "repo", "clone", body.repo_url, str(target),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="gh CLI not found")
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        logger.warning("gh_clone_timeout", repo_url=body.repo_url)
+        raise HTTPException(status_code=504, detail="git clone timed out after 5 minutes")
+
+    if proc.returncode != 0:
+        err = (stderr or b"").decode("utf-8", errors="replace").strip()
+        lower = err.lower()
+        logger.warning(
+            "gh_clone_failed",
+            repo_url=body.repo_url,
+            returncode=proc.returncode,
+            stderr=err[:500],
+        )
+        # Auth / network classes — gh exits non-zero with these messages.
+        if (
+            "authentication" in lower
+            or "permission denied" in lower
+            or "could not resolve host" in lower
+            or "denied" in lower
+            or "ssh: " in lower
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail=f"gh clone failed (auth/network): {err[:500]}",
+            )
+        if "not found" in lower or "could not find" in lower or "repository not found" in lower:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Repository not found: {body.repo_url}",
+            )
+        raise HTTPException(
+            status_code=500,
+            detail=f"gh clone failed: {err[:500]}",
+        )
+
+    # 8. Register as a project. The cloned dir stays on disk even if the
+    # config write fails — user can retry via "open project from folder".
+    project_cfg = ProjectConfig(
+        name=project_name,
+        path=str(target),
+        description=body.description,
+    )
+    try:
+        settings.save_project(project_cfg)
+    except ValueError as e:
+        # Defensive — step 5 already checked, but a race could squeeze in.
+        logger.warning("project_save_collision_after_clone", name=project_name, error=str(e))
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first.",
+        )
+
+    logger.info(
+        "project_cloned_from_github",
+        name=project_cfg.name,
+        path=project_cfg.path,
+        repo_url=body.repo_url,
+    )
+
+    return ProjectResponse(
+        name=project_cfg.name,
+        path=project_cfg.path,
+        description=project_cfg.description,
+    )
 
 
 @router.get("/auth/status", response_model=SuccessResponse, dependencies=[Depends(require_auth)])

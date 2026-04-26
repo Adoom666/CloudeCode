@@ -1,0 +1,98 @@
+/* Matrix theme — phosphor glow on every text surface.
+   The <canvas id="matrix-rain"> is mounted by effects.js at z-index: -1 behind everything. */
+
+:root[data-theme="matrix"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="matrix"] body {
+  background: #000000;
+  position: relative;
+}
+
+/* Phosphor glow on all text — keep tiny so it's a tint, not a halo. */
+:root[data-theme="matrix"] body,
+:root[data-theme="matrix"] button,
+:root[data-theme="matrix"] input,
+:root[data-theme="matrix"] select,
+:root[data-theme="matrix"] textarea,
+:root[data-theme="matrix"] a,
+:root[data-theme="matrix"] .header,
+:root[data-theme="matrix"] .session-card,
+:root[data-theme="matrix"] .modal {
+  text-shadow: 0 0 2px currentColor;
+}
+
+/* Stronger phosphor on the header title — CRT signature. */
+:root[data-theme="matrix"] .header h1,
+:root[data-theme="matrix"] .header .title {
+  text-shadow:
+    0 0 4px rgba(0, 255, 65, 0.65),
+    0 0 12px rgba(0, 255, 65, 0.30);
+  letter-spacing: 0.05em;
+}
+
+/* Glowing bottom border on inputs — signature CRT input look. */
+:root[data-theme="matrix"] input,
+:root[data-theme="matrix"] textarea,
+:root[data-theme="matrix"] select {
+  border-color: #003d10;
+  border-bottom-color: #00ff41;
+  box-shadow: 0 1px 4px -2px rgba(0, 255, 65, 0.55);
+}
+
+:root[data-theme="matrix"] input:focus,
+:root[data-theme="matrix"] textarea:focus,
+:root[data-theme="matrix"] select:focus {
+  border-color: #00ff41;
+  outline: none;
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.55);
+}
+
+/* Make sure chrome sits above the canvas (canvas is at z-index: -1). */
+:root[data-theme="matrix"] .header,
+:root[data-theme="matrix"] main,
+:root[data-theme="matrix"] .modal,
+:root[data-theme="matrix"] #launchpad-screen,
+:root[data-theme="matrix"] #terminal-screen {
+  position: relative;
+  z-index: 1;
+}
+
+/* Slight scrim on cards/modals so the falling code doesn't bleed through and ruin readability. */
+:root[data-theme="matrix"] .session-card,
+:root[data-theme="matrix"] .modal,
+:root[data-theme="matrix"] #launchpad-screen,
+:root[data-theme="matrix"] .running-session-row {
+  background-color: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+}
+
+/* Keep the scrim on hover too — the global rule swaps to a translucent
+   accent tint which would let the rain bleed through again. */
+:root[data-theme="matrix"] .running-session-row:hover {
+  background-color: rgba(0, 0, 0, 0.78);
+}
+
+/* prefers-reduced-motion fallback — effects.js refuses to mount,
+   add a faint static green wash here so the bg isn't pure black. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="matrix"] body {
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(0, 255, 65, 0.04), transparent 70%),
+      #000000;
+  }
+}
+
+/* Terminal scope. */
+#terminal-screen[data-session-theme="matrix"] {
+  background: #000000;
+  color: #00ff41;
+  text-shadow: 0 0 2px currentColor;
+}
+
+#terminal-screen[data-session-theme="matrix"] .terminal-header {
+  background: #000000;
+  border-bottom: 1px solid #003d10;
+  text-shadow: 0 0 3px rgba(0, 255, 65, 0.55);
+}

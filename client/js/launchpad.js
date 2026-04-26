@@ -23,8 +23,140 @@ class Launchpad {
     init() {
         this.launchpadScreen = document.getElementById('launchpad-screen');
         this.renderLaunchpadUI();
+        // Wire the inline "+ new" speed-dial FAB. Markup was just injected
+        // by renderLaunchpadUI() into the right side of the "recent
+        // projects" section heading row; the 3 sub-actions route back
+        // into the same handlers the old inline "new project" section used.
+        this.setupNewFab();
         // Note: loadProjects() will be called by App.showLaunchpad()
         this._startRunningSessionsPoller();
+    }
+
+    /**
+     * Wire the inline "+ new" speed-dial FAB.
+     *
+     * Markup is injected by renderLaunchpadUI() into the right side of
+     * the "recent projects" section heading row (#new-fab). Three
+     * sub-actions route into the same handlers the old inline "new
+     * project" section used — no logic duplicated. Idempotent: safe to
+     * call multiple times (guarded by a flag).
+     *
+     * Because the FAB lives inside #launchpad-screen, it shows/hides
+     * naturally with the screen — no separate visibility plumbing
+     * required from app.js.
+     *
+     * Behaviors:
+     *   • Trigger click toggles .new-fab--open + aria-expanded
+     *   • Backdrop click and ESC close the menu
+     *   • Item click invokes the routed handler then closes
+     */
+    setupNewFab() {
+        if (this._newFabWired) return;
+        const fab = document.getElementById('new-fab');
+        const trigger = document.getElementById('new-fab-trigger');
+        const backdrop = document.getElementById('new-fab-backdrop');
+        if (!fab || !trigger || !backdrop) {
+            console.warn('Launchpad: new-fab markup missing — skipping wire');
+            return;
+        }
+
+        // Map the FAB's data-action attrs onto our existing handlers.
+        // Wrapped so `this` resolves correctly inside the dispatch table.
+        const actions = {
+            'new-project':  () => this.createNewSession(),
+            'open-folder':  () => this.openProjectFromFolder(),
+            'clone-github': () => this.showCloneFromGithubModal(),
+        };
+
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleNewFab();
+        });
+
+        // Item dispatch via delegation — survives any future re-render
+        fab.querySelectorAll('.new-fab__item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = item.getAttribute('data-action');
+                const fn = actions[action];
+                if (typeof fn === 'function') {
+                    this.closeNewFab();
+                    // Defer the handler so the close animation gets a frame
+                    // to start before any modal opens on top of it.
+                    setTimeout(fn, 0);
+                } else {
+                    console.warn('Launchpad: unknown FAB action', action);
+                    this.closeNewFab();
+                }
+            });
+        });
+
+        backdrop.addEventListener('click', () => this.closeNewFab());
+
+        // ESC closes when open
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && fab.classList.contains('new-fab--open')) {
+                this.closeNewFab();
+            }
+        });
+
+        // Click-outside closes (ignore clicks inside the FAB itself)
+        document.addEventListener('click', (e) => {
+            if (!fab.classList.contains('new-fab--open')) return;
+            if (fab.contains(e.target)) return;
+            this.closeNewFab();
+        });
+
+        this._newFabWired = true;
+        console.log('Launchpad: new-fab wired');
+    }
+
+    /**
+     * Toggle the FAB open/closed (helper used by trigger click).
+     */
+    toggleNewFab() {
+        const fab = document.getElementById('new-fab');
+        if (!fab) return;
+        if (fab.classList.contains('new-fab--open')) {
+            this.closeNewFab();
+        } else {
+            this.openNewFab();
+        }
+    }
+
+    /**
+     * Open the FAB menu (idempotent).
+     */
+    openNewFab() {
+        const fab = document.getElementById('new-fab');
+        const trigger = document.getElementById('new-fab-trigger');
+        const backdrop = document.getElementById('new-fab-backdrop');
+        if (!fab || !trigger || !backdrop) return;
+        fab.classList.add('new-fab--open');
+        trigger.setAttribute('aria-expanded', 'true');
+        backdrop.hidden = false;
+        backdrop.setAttribute('data-open', '1');
+        // Make menu items focusable when open
+        fab.querySelectorAll('.new-fab__item').forEach(it => it.setAttribute('tabindex', '0'));
+    }
+
+    /**
+     * Close the FAB menu (idempotent — also called from app.js when
+     * the launchpad screen is being torn down).
+     */
+    closeNewFab() {
+        const fab = document.getElementById('new-fab');
+        const trigger = document.getElementById('new-fab-trigger');
+        const backdrop = document.getElementById('new-fab-backdrop');
+        if (!fab) return;
+        fab.classList.remove('new-fab--open');
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+        if (backdrop) {
+            backdrop.removeAttribute('data-open');
+            // Hide after the fade-out so it doesn't intercept clicks
+            setTimeout(() => { backdrop.hidden = true; }, 200);
+        }
+        fab.querySelectorAll('.new-fab__item').forEach(it => it.setAttribute('tabindex', '-1'));
     }
 
     /**
@@ -394,14 +526,19 @@ class Launchpad {
     /**
      * Kill flow for a running tmux session.
      *
-     * Two paths, both end at destroySession():
-     *   1. Target IS the currently-active backend → destroy directly.
-     *   2. Target is a different session → adopt-then-destroy. destroy
-     *      only works on the currently-attached backend, so we pivot the
-     *      active session to the target first, then tear it down.
-     *
-     * confirmDetach=true on the adopt call avoids a 409 when there was a
-     * prior active session.
+     * Two paths:
+     *   1. Target IS the currently-active backend → DELETE /sessions
+     *      (full destroy: tears down backend, idle watcher, tunnels,
+     *      metadata; then kills tmux).
+     *   2. Target is a different session → DELETE /sessions/external/{name}
+     *      (direct `tmux kill-session`, no adoption). This used to be
+     *      adopt-then-destroy, but adoption refuses dead panes (raised
+     *      `RuntimeError("pane already dead")` in tmux_backend.attach_existing,
+     *      surfacing as HTTP 500 from POST /sessions/adopt) — leaving any
+     *      session whose foreground process exited permanently un-killable
+     *      from the UI. The dedicated external-destroy endpoint sidesteps
+     *      adoption entirely and is also idempotent if the session is
+     *      already gone server-side.
      */
     async _handleKillRunningSession(tmuxName) {
         const display = this._deriveRunningSessionDisplayName(tmuxName);
@@ -418,8 +555,7 @@ class Launchpad {
             if (current && current.tmux_session === tmuxName) {
                 await window.API.destroySession();
             } else {
-                await window.API.adoptSession(tmuxName, true);
-                await window.API.destroySession();
+                await window.API.destroyExternalSession(tmuxName);
             }
         } catch (err) {
             this.showError(`destroy failed: ${err.message || err}`);
@@ -430,27 +566,14 @@ class Launchpad {
     /**
      * Attach/swap flow for a running tmux session (non-active row click).
      *
-     * If a different session is currently active, prompt for detach
-     * confirmation — swap, not kill, so the prior session stays alive in
-     * tmux. On adopt success, dispatch `session-created` with the full
-     * adopt-specific detail payload (initialScrollbackB64, fifoStartOffset,
-     * adopted:true) so App.showTerminal() can plumb scrollback into the
-     * terminal controller.
+     * Swap immediately — the prior session is detached (not killed) so it
+     * stays alive in tmux and reappears in the running-sessions list. On
+     * adopt success, dispatch `session-created` with the full adopt-specific
+     * detail payload (initialScrollbackB64, fifoStartOffset, adopted:true)
+     * so App.showTerminal() can plumb scrollback into the terminal
+     * controller.
      */
     async _handleAttachRunningSession(tmuxName) {
-        const display = this._deriveRunningSessionDisplayName(tmuxName);
-        const current = await window.API.getCurrentSession().catch(() => null);
-        if (current && current.tmux_session && current.tmux_session !== tmuxName) {
-            const currentDisplay = this._deriveRunningSessionDisplayName(current.tmux_session);
-            const ok = await this.showConfirmModal(
-                'switch session?',
-                `attaching to "${this._escapeHtml(display)}" will detach from your current session "${this._escapeHtml(currentDisplay)}".`,
-                'the tmux session will keep running — you can rejoin it later from the running-sessions list. cancel to stay on the launchpad.',
-                `attach to ${display}`,
-                'cancel'
-            );
-            if (!ok) return;
-        }
         try {
             const response = await window.API.adoptSession(tmuxName, true);
             const session = response.session || response;
@@ -494,20 +617,52 @@ class Launchpad {
                     <div id="running-sessions-list"></div>
                 </div>
 
-                <div class="launchpad-section">
-                    <div class="launchpad-section-title">► new project</div>
-                    <button class="new-session-btn" id="new-session-btn">
-                        <span>⚡</span>
-                        <span>create new project</span>
-                    </button>
-                    <button class="new-session-btn" id="open-folder-btn">
-                        <span>📁</span>
-                        <span>open project from folder</span>
-                    </button>
-                </div>
+                <!-- "new project" actions live in the inline speed-dial FAB
+                     to the right of the "recent projects" heading. The FAB
+                     trigger sits as a sibling of the heading text inside a
+                     flex row (justify-content: space-between). The fan-out
+                     menu anchors absolutely off the .new-fab wrapper.
+                     Wired in setupNewFab(). -->
 
                 <div class="launchpad-section" id="projects-section">
-                    <div class="launchpad-section-title">► existing projects</div>
+                    <div class="launchpad-section-title launchpad-section-title--row">
+                        <span class="launchpad-section-title__text">► recent projects</span>
+                        <div class="new-fab" id="new-fab">
+                            <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" aria-haspopup="menu" aria-expanded="false">
+                                <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                            </button>
+                            <div class="new-fab__menu" role="menu" aria-label="New session actions">
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-project" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M13 2L3 12l9 9 10-10V2z"/>
+                                            <circle cx="8.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">create new project</span>
+                                </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="open-folder" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">open from folder</span>
+                                </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="clone-github" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.04 1.53 1.04.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">clone from github</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
@@ -517,8 +672,8 @@ class Launchpad {
                     <div class="launchpad-section-title">► server management</div>
                     <button class="reset-server-btn" id="reset-server-btn">
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
-                            <path d="M12 2.5V5.5H9" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M13 8C13 10.7614 10.7614 13 8 13C5.23858 13 3 10.7614 3 8C3 5.23858 5.23858 3 8 3C9.87677 3 11.5 4.01207 12.3284 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            <path d="M12 2.5V5.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                         <span>reset server</span>
                     </button>
@@ -527,7 +682,7 @@ class Launchpad {
                 <div class="launchpad-footer">
                     <a href="https://nyedis.ai" target="_blank" rel="noopener noreferrer">
                         <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
-                            <path d="M 409.0 883.5 L 408.5 882.0 L 458.5 804.0 L 489.5 748.0 L 488.0 747.5 L 453.0 783.5 L 437.0 797.5 L 403.0 823.5 L 377.0 839.5 L 376.5 838.0 L 398.5 816.0 L 438.5 771.0 L 469.5 732.0 L 478.5 718.0 L 474.0 719.5 L 436.0 750.5 L 388.0 785.5 L 394.5 766.0 L 409.5 739.0 L 408.0 738.5 L 386.0 753.5 L 377.0 758.5 L 375.5 758.0 L 382.5 743.0 L 394.5 725.0 L 410.5 705.0 L 410.5 703.0 L 374.0 704.5 L 361.0 702.5 L 360.5 701.0 L 409.0 681.5 L 481.0 647.5 L 520.0 625.5 L 546.0 607.5 L 565.5 589.0 L 570.5 580.0 L 570.5 576.0 L 561.0 575.5 L 542.0 580.5 L 545.5 574.0 L 560.5 556.0 L 594.0 522.5 L 632.5 489.0 L 630.0 487.5 L 588.0 488.5 L 551.0 493.5 L 516.0 500.5 L 529.5 487.0 L 532.5 480.0 L 532.0 473.5 L 515.0 472.5 L 491.0 468.5 L 451.0 455.5 L 435.5 448.0 L 452.0 439.5 L 456.5 435.0 L 456.0 433.5 L 420.0 426.5 L 402.0 420.5 L 394.5 416.0 L 427.0 414.5 L 442.0 411.5 L 445.0 410.5 L 445.0 408.5 L 399.0 408.5 L 375.0 406.5 L 333.0 400.5 L 305.5 393.0 L 306.0 391.5 L 309.0 391.5 L 344.0 394.5 L 429.0 395.5 L 461.0 394.5 L 461.0 392.5 L 426.0 390.5 L 378.0 384.5 L 302.0 370.5 L 249.0 358.5 L 180.0 339.5 L 138.0 331.5 L 75.0 314.5 L 34.0 299.5 L 19.0 291.5 L 15.5 287.0 L 18.0 285.5 L 173.5 287.0 L 173.0 285.5 L 125.0 275.5 L 91.0 264.5 L 68.0 252.5 L 59.5 244.0 L 59.0 238.5 L 134.0 251.5 L 227.5 271.0 L 225.5 266.0 L 218.0 259.5 L 181.5 238.0 L 185.0 237.5 L 297.0 264.5 L 434.0 294.5 L 546.0 316.5 L 613.0 326.5 L 613.5 325.0 L 607.0 320.5 L 591.0 312.5 L 561.0 301.5 L 509.0 287.5 L 450.0 276.5 L 449.5 275.0 L 483.0 262.5 L 505.0 257.5 L 534.0 253.5 L 600.0 252.5 L 625.0 255.5 L 632.5 255.0 L 622.0 245.5 L 609.0 239.5 L 588.0 233.5 L 551.5 228.0 L 568.0 220.5 L 585.0 217.5 L 612.0 217.5 L 644.0 221.5 L 692.0 232.5 L 737.0 247.5 L 741.0 247.5 L 747.0 241.5 L 754.0 237.5 L 771.0 233.5 L 797.0 235.5 L 814.0 240.5 L 827.0 246.5 L 841.5 259.0 L 844.5 265.0 L 845.5 281.0 L 843.5 288.0 L 836.5 301.0 L 824.5 316.0 L 805.0 334.5 L 782.0 351.5 L 769.5 365.0 L 761.5 379.0 L 761.5 390.0 L 765.0 393.5 L 767.0 393.5 L 778.0 388.5 L 795.0 383.5 L 807.0 381.5 L 827.0 381.5 L 852.0 387.5 L 865.0 393.5 L 879.0 402.5 L 904.5 426.0 L 925.5 454.0 L 946.5 492.0 L 957.5 518.0 L 961.5 532.0 L 944.0 513.5 L 932.0 503.5 L 923.0 497.5 L 903.0 488.5 L 889.0 485.5 L 873.0 485.5 L 853.0 490.5 L 839.0 497.5 L 829.0 504.5 L 814.5 519.0 L 783.5 561.0 L 754.5 604.0 L 737.5 635.0 L 737.5 659.0 L 740.0 661.5 L 765.0 671.5 L 816.0 696.5 L 826.0 699.5 L 843.0 709.5 L 857.0 720.5 L 879.5 743.0 L 894.5 762.0 L 895.5 768.0 L 881.0 780.5 L 879.5 771.0 L 875.5 764.0 L 870.0 758.5 L 856.5 750.0 L 847.5 731.0 L 834.0 716.5 L 821.0 708.5 L 808.0 704.5 L 799.0 704.5 L 800.0 700.5 L 780.0 689.5 L 722.0 666.5 L 716.5 662.0 L 715.5 650.0 L 710.0 643.5 L 705.0 641.5 L 688.0 641.5 L 683.5 644.0 L 682.5 651.0 L 689.0 666.5 L 752.0 692.5 L 793.0 711.5 L 808.0 722.5 L 824.5 738.0 L 834.5 751.0 L 840.5 762.0 L 838.5 766.0 L 828.0 772.5 L 816.0 774.5 L 815.5 762.0 L 811.5 753.0 L 805.5 744.0 L 794.0 732.5 L 786.0 729.5 L 777.0 728.5 L 765.0 729.5 L 764.5 728.0 L 768.0 724.5 L 774.0 722.5 L 774.5 721.0 L 767.0 719.5 L 734.0 699.5 L 701.0 684.5 L 681.0 679.5 L 670.0 679.5 L 668.5 671.0 L 664.0 665.5 L 657.0 663.5 L 651.0 664.5 L 646.5 669.0 L 643.5 677.0 L 645.5 705.0 L 644.5 753.0 L 643.5 756.0 L 641.0 756.5 L 637.5 748.0 L 633.0 742.5 L 627.0 739.5 L 620.5 740.0 L 623.5 754.0 L 623.5 772.0 L 620.5 790.0 L 616.0 803.5 L 614.5 795.0 L 611.0 789.5 L 603.0 783.5 L 595.0 782.5 L 593.5 798.0 L 589.5 812.0 L 581.5 826.0 L 567.0 840.5 L 564.5 841.0 L 566.5 830.0 L 566.5 816.0 L 565.5 807.0 L 564.0 806.5 L 549.5 828.0 L 532.0 845.5 L 514.0 858.5 L 512.5 858.0 L 519.5 849.0 L 523.5 840.0 L 526.5 828.0 L 526.0 823.5 L 503.0 844.5 L 479.0 860.5 L 487.5 844.0 L 495.5 819.0 L 501.5 788.0 L 500.0 786.5 L 461.5 835.0 L 427.0 869.5 L 409.0 883.5 Z" fill="#d77757"/>
+                            <path d="M 409.0 883.5 L 408.5 882.0 L 458.5 804.0 L 489.5 748.0 L 488.0 747.5 L 453.0 783.5 L 437.0 797.5 L 403.0 823.5 L 377.0 839.5 L 376.5 838.0 L 398.5 816.0 L 438.5 771.0 L 469.5 732.0 L 478.5 718.0 L 474.0 719.5 L 436.0 750.5 L 388.0 785.5 L 394.5 766.0 L 409.5 739.0 L 408.0 738.5 L 386.0 753.5 L 377.0 758.5 L 375.5 758.0 L 382.5 743.0 L 394.5 725.0 L 410.5 705.0 L 410.5 703.0 L 374.0 704.5 L 361.0 702.5 L 360.5 701.0 L 409.0 681.5 L 481.0 647.5 L 520.0 625.5 L 546.0 607.5 L 565.5 589.0 L 570.5 580.0 L 570.5 576.0 L 561.0 575.5 L 542.0 580.5 L 545.5 574.0 L 560.5 556.0 L 594.0 522.5 L 632.5 489.0 L 630.0 487.5 L 588.0 488.5 L 551.0 493.5 L 516.0 500.5 L 529.5 487.0 L 532.5 480.0 L 532.0 473.5 L 515.0 472.5 L 491.0 468.5 L 451.0 455.5 L 435.5 448.0 L 452.0 439.5 L 456.5 435.0 L 456.0 433.5 L 420.0 426.5 L 402.0 420.5 L 394.5 416.0 L 427.0 414.5 L 442.0 411.5 L 445.0 410.5 L 445.0 408.5 L 399.0 408.5 L 375.0 406.5 L 333.0 400.5 L 305.5 393.0 L 306.0 391.5 L 309.0 391.5 L 344.0 394.5 L 429.0 395.5 L 461.0 394.5 L 461.0 392.5 L 426.0 390.5 L 378.0 384.5 L 302.0 370.5 L 249.0 358.5 L 180.0 339.5 L 138.0 331.5 L 75.0 314.5 L 34.0 299.5 L 19.0 291.5 L 15.5 287.0 L 18.0 285.5 L 173.5 287.0 L 173.0 285.5 L 125.0 275.5 L 91.0 264.5 L 68.0 252.5 L 59.5 244.0 L 59.0 238.5 L 134.0 251.5 L 227.5 271.0 L 225.5 266.0 L 218.0 259.5 L 181.5 238.0 L 185.0 237.5 L 297.0 264.5 L 434.0 294.5 L 546.0 316.5 L 613.0 326.5 L 613.5 325.0 L 607.0 320.5 L 591.0 312.5 L 561.0 301.5 L 509.0 287.5 L 450.0 276.5 L 449.5 275.0 L 483.0 262.5 L 505.0 257.5 L 534.0 253.5 L 600.0 252.5 L 625.0 255.5 L 632.5 255.0 L 622.0 245.5 L 609.0 239.5 L 588.0 233.5 L 551.5 228.0 L 568.0 220.5 L 585.0 217.5 L 612.0 217.5 L 644.0 221.5 L 692.0 232.5 L 737.0 247.5 L 741.0 247.5 L 747.0 241.5 L 754.0 237.5 L 771.0 233.5 L 797.0 235.5 L 814.0 240.5 L 827.0 246.5 L 841.5 259.0 L 844.5 265.0 L 845.5 281.0 L 843.5 288.0 L 836.5 301.0 L 824.5 316.0 L 805.0 334.5 L 782.0 351.5 L 769.5 365.0 L 761.5 379.0 L 761.5 390.0 L 765.0 393.5 L 767.0 393.5 L 778.0 388.5 L 795.0 383.5 L 807.0 381.5 L 827.0 381.5 L 852.0 387.5 L 865.0 393.5 L 879.0 402.5 L 904.5 426.0 L 925.5 454.0 L 946.5 492.0 L 957.5 518.0 L 961.5 532.0 L 944.0 513.5 L 932.0 503.5 L 923.0 497.5 L 903.0 488.5 L 889.0 485.5 L 873.0 485.5 L 853.0 490.5 L 839.0 497.5 L 829.0 504.5 L 814.5 519.0 L 783.5 561.0 L 754.5 604.0 L 737.5 635.0 L 737.5 659.0 L 740.0 661.5 L 765.0 671.5 L 816.0 696.5 L 826.0 699.5 L 843.0 709.5 L 857.0 720.5 L 879.5 743.0 L 894.5 762.0 L 895.5 768.0 L 881.0 780.5 L 879.5 771.0 L 875.5 764.0 L 870.0 758.5 L 856.5 750.0 L 847.5 731.0 L 834.0 716.5 L 821.0 708.5 L 808.0 704.5 L 799.0 704.5 L 800.0 700.5 L 780.0 689.5 L 722.0 666.5 L 716.5 662.0 L 715.5 650.0 L 710.0 643.5 L 705.0 641.5 L 688.0 641.5 L 683.5 644.0 L 682.5 651.0 L 689.0 666.5 L 752.0 692.5 L 793.0 711.5 L 808.0 722.5 L 824.5 738.0 L 834.5 751.0 L 840.5 762.0 L 838.5 766.0 L 828.0 772.5 L 816.0 774.5 L 815.5 762.0 L 811.5 753.0 L 805.5 744.0 L 794.0 732.5 L 786.0 729.5 L 777.0 728.5 L 765.0 729.5 L 764.5 728.0 L 768.0 724.5 L 774.0 722.5 L 774.5 721.0 L 767.0 719.5 L 734.0 699.5 L 701.0 684.5 L 681.0 679.5 L 670.0 679.5 L 668.5 671.0 L 664.0 665.5 L 657.0 663.5 L 651.0 664.5 L 646.5 669.0 L 643.5 677.0 L 645.5 705.0 L 644.5 753.0 L 643.5 756.0 L 641.0 756.5 L 637.5 748.0 L 633.0 742.5 L 627.0 739.5 L 620.5 740.0 L 623.5 754.0 L 623.5 772.0 L 620.5 790.0 L 616.0 803.5 L 614.5 795.0 L 611.0 789.5 L 603.0 783.5 L 595.0 782.5 L 593.5 798.0 L 589.5 812.0 L 581.5 826.0 L 567.0 840.5 L 564.5 841.0 L 566.5 830.0 L 566.5 816.0 L 565.5 807.0 L 564.0 806.5 L 549.5 828.0 L 532.0 845.5 L 514.0 858.5 L 512.5 858.0 L 519.5 849.0 L 523.5 840.0 L 526.5 828.0 L 526.0 823.5 L 503.0 844.5 L 479.0 860.5 L 487.5 844.0 L 495.5 819.0 L 501.5 788.0 L 500.0 786.5 L 461.5 835.0 L 427.0 869.5 L 409.0 883.5 Z" fill="currentColor"/>
                         </svg>
                     </a>
                 </div>
@@ -535,13 +690,9 @@ class Launchpad {
         `;
 
         // Event listeners
-        document.getElementById('new-session-btn').addEventListener('click', () => {
-            this.createNewSession();
-        });
-
-        document.getElementById('open-folder-btn').addEventListener('click', () => {
-            this.openProjectFromFolder();
-        });
+        // Note: the 3 "new project" actions (create / open-folder / clone-github)
+        // are wired in setupNewFab() — the inline speed-dial sits to the right
+        // of the "recent projects" section heading on the launchpad screen.
 
         document.getElementById('reset-server-btn').addEventListener('click', () => {
             this.resetServer();
@@ -573,6 +724,7 @@ class Launchpad {
             const description = project.description || 'no description';
             return `
                 <div class="project-item" data-index="${index}" data-name="${project.name}">
+                    <button class="project-edit-btn" data-name="${project.name}" title="Edit project">✎</button>
                     <button class="project-delete-btn" data-name="${project.name}" title="Delete project">×</button>
                     <div class="project-name">» ${project.name}</div>
                     <div class="project-path">${project.path}</div>
@@ -585,8 +737,9 @@ class Launchpad {
         const projectItems = projectListEl.querySelectorAll('.project-item');
         projectItems.forEach(item => {
             item.addEventListener('click', (e) => {
-                // Don't open project if clicking delete button
-                if (e.target.classList.contains('project-delete-btn')) {
+                // Don't open project if clicking an inline action button
+                if (e.target.classList.contains('project-delete-btn') ||
+                    e.target.classList.contains('project-edit-btn')) {
                     return;
                 }
                 const index = parseInt(item.dataset.index);
@@ -601,6 +754,19 @@ class Launchpad {
                 e.stopPropagation(); // Prevent project selection
                 const projectName = btn.dataset.name;
                 await this.deleteProject(projectName);
+            });
+        });
+
+        // Add click handlers for edit buttons
+        const editButtons = projectListEl.querySelectorAll('.project-edit-btn');
+        editButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent project selection
+                const projectName = btn.dataset.name;
+                const project = this.projects.find(p => p.name === projectName);
+                if (project) {
+                    this.editProject(project);
+                }
             });
         });
     }
@@ -638,6 +804,171 @@ class Launchpad {
             console.error('Launchpad: Failed to delete project:', error);
             this.showError('failed to delete project: ' + error.message);
         }
+    }
+
+    /**
+     * Open the edit-project modal for ``project`` and persist any changes.
+     *
+     * Display name only — the folder on disk is never touched.
+     */
+    async editProject(project) {
+        try {
+            const result = await this.showEditProjectModal(project);
+            if (!result) {
+                return; // user cancelled
+            }
+
+            const { name: newName, description: newDescription } = result;
+            const nameChanged = newName !== project.name;
+            const descChanged = (newDescription || '') !== (project.description || '');
+
+            if (!nameChanged && !descChanged) {
+                return; // nothing to do
+            }
+
+            this.updateStatus(`updating ${project.name}...`);
+
+            const fields = {};
+            if (nameChanged) fields.newName = newName;
+            if (descChanged) fields.description = newDescription;
+
+            await window.API.updateProject(project.name, fields);
+
+            console.log('Launchpad: Project updated:', project.name, '→', newName);
+
+            // Refresh the list so the row reflects the new label
+            await this.loadProjects();
+
+            this.updateStatus('project updated');
+        } catch (error) {
+            console.error('Launchpad: Failed to update project:', error);
+            this.showError('failed to update project: ' + error.message);
+        }
+    }
+
+    /**
+     * Show the edit-project modal pre-filled with the current name and
+     * description. Resolves with ``{name, description}`` on save, or
+     * ``null`` on cancel/escape/click-outside.
+     *
+     * Inline 409 conflicts are reported via ``API.updateProject`` rejecting
+     * with an error whose ``message`` contains "already exists" — handled
+     * by ``editProject`` via ``showError``.
+     */
+    showEditProjectModal(project) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const escapeHtml = (s) => String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            overlay.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">» edit project</div>
+                    <div class="modal-body">
+                        <div class="modal-input-group">
+                            <div class="modal-label">folder</div>
+                            <div class="folder-picker-path">${escapeHtml(project.path)}</div>
+                            <div class="modal-description">
+                                the folder on disk is never renamed — only the launcher label changes.
+                            </div>
+                        </div>
+                        <div class="modal-input-group">
+                            <label class="modal-label">project name</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="edit-project-name"
+                                value="${escapeHtml(project.name)}"
+                                autocomplete="off"
+                            />
+                        </div>
+                        <div class="modal-input-group">
+                            <label class="modal-label">description (optional)</label>
+                            <input
+                                type="text"
+                                class="modal-input"
+                                id="edit-project-description"
+                                placeholder="e.g., Building an AI-powered chatbot"
+                                value="${escapeHtml(project.description || '')}"
+                                autocomplete="off"
+                            />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="modal-btn modal-btn-secondary" id="edit-modal-cancel">cancel</button>
+                        <button class="modal-btn modal-btn-primary" id="edit-modal-save">save</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            const nameInput = overlay.querySelector('#edit-project-name');
+            const descInput = overlay.querySelector('#edit-project-description');
+            const saveBtn = overlay.querySelector('#edit-modal-save');
+            const cancelBtn = overlay.querySelector('#edit-modal-cancel');
+
+            // Focus name input and select existing content
+            setTimeout(() => {
+                nameInput.focus();
+                nameInput.select();
+            }, 100);
+
+            const submit = () => {
+                const name = nameInput.value.trim();
+                if (!name) {
+                    nameInput.focus();
+                    return;
+                }
+                const description = descInput.value.trim();
+                document.body.removeChild(overlay);
+                resolve({ name, description });
+            };
+
+            const cancel = () => {
+                document.body.removeChild(overlay);
+                resolve(null);
+            };
+
+            // Enter on name → move to description; Enter on description → submit
+            nameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (nameInput.value.trim()) {
+                        descInput.focus();
+                    }
+                }
+            });
+            descInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submit();
+                }
+            });
+
+            // Escape cancels
+            overlay.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    cancel();
+                }
+            });
+
+            saveBtn.addEventListener('click', submit);
+            cancelBtn.addEventListener('click', cancel);
+
+            // Click outside cancels
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    cancel();
+                }
+            });
+        });
     }
 
     /**
@@ -802,22 +1133,11 @@ class Launchpad {
             console.error('Launchpad: Failed to create session:', error);
 
             // If a session already exists, the user's stated intent was
-            // "create a new project". Primary = carry out that intent
-            // (detach + create). Cancel = safe no-op. Rejoin the running
-            // session via the banner's "return to terminal" button.
+            // "create a new project" — carry it out immediately. The prior
+            // tmux session is detached (not killed) and stays available in
+            // the running-sessions list / banner for rejoin.
             if (error.message.includes('already running')) {
-                const currentName = this._getCurrentSessionLabel() || 'running session';
-                const confirmed = await this.showConfirmModal(
-                    'switch session?',
-                    `creating a new project will detach from your current session "${this._escapeHtml(currentName)}".`,
-                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
-                    'create new session',
-                    'cancel'
-                );
-                if (confirmed) {
-                    this.detachAndCreateNew();
-                }
-                // Cancelled → deliberate no-op.
+                this.detachAndCreateNew();
             } else {
                 this.showError('failed to create session: ' + error.message);
             }
@@ -975,6 +1295,215 @@ class Launchpad {
     }
 
     /**
+     * Show the "clone from github" modal — collects URL + parent dir +
+     * description, calls the backend ``POST /projects/clone`` endpoint
+     * (which runs ``gh repo clone``), then refreshes the project list and
+     * lands the user in a session pointed at the freshly cloned folder.
+     *
+     * Errors are surfaced inline (no alert()) and mapped from HTTP status:
+     *   401 → gh auth failed
+     *   404 → repo not found / no access
+     *   409 → folder or project name collision
+     *   503 → gh CLI missing on server
+     *   504 → clone took >5 min
+     *   other → server-provided detail text.
+     */
+    async showCloneFromGithubModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+
+        const escapeHtml = (s) => String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        overlay.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">» clone from github</div>
+                <div class="modal-body">
+                    <div class="modal-input-group">
+                        <label class="modal-label">github repo url</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-url"
+                            placeholder="https://github.com/owner/repo or owner/repo"
+                            autocomplete="off"
+                            spellcheck="false"
+                        />
+                        <div class="modal-description">
+                            paste the full url or use gh shorthand (owner/repo). server runs <code>gh repo clone</code> — gh must be authenticated.
+                        </div>
+                    </div>
+                    <div class="modal-input-group">
+                        <label class="modal-label">parent directory</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-parent"
+                            placeholder="~/projects"
+                            value="~/projects"
+                            autocomplete="off"
+                            spellcheck="false"
+                        />
+                        <div class="modal-description">
+                            the cloned folder will be created inside this directory.
+                        </div>
+                    </div>
+                    <div class="modal-input-group">
+                        <label class="modal-label">description (optional)</label>
+                        <input
+                            type="text"
+                            class="modal-input"
+                            id="modal-clone-description"
+                            placeholder="e.g., upstream library i'm patching"
+                            autocomplete="off"
+                        />
+                    </div>
+                    <div class="modal-description" id="modal-clone-status" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn modal-btn-secondary" id="modal-clone-cancel">cancel</button>
+                    <button class="modal-btn modal-btn-primary" id="modal-clone-confirm">clone &amp; open</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const urlInput = overlay.querySelector('#modal-clone-url');
+        const parentInput = overlay.querySelector('#modal-clone-parent');
+        const descInput = overlay.querySelector('#modal-clone-description');
+        const confirmBtn = overlay.querySelector('#modal-clone-confirm');
+        const cancelBtn = overlay.querySelector('#modal-clone-cancel');
+        const statusEl = overlay.querySelector('#modal-clone-status');
+
+        let busy = false;
+
+        const closeModal = () => {
+            if (overlay.parentNode) {
+                document.body.removeChild(overlay);
+            }
+        };
+
+        const setStatus = (msg, isError = false) => {
+            statusEl.style.display = msg ? 'block' : 'none';
+            statusEl.textContent = msg;
+            statusEl.style.color = isError ? '#d77757' : '';
+        };
+
+        const mapErrorToMessage = (error) => {
+            // api.js throws Error(errorData.detail || `HTTP <code>`). Match
+            // on signature substrings the backend embeds in its detail text.
+            const msg = String(error && error.message || error || '');
+            const lower = msg.toLowerCase();
+            if (lower.includes('not authenticated') || lower.includes('auth/network') || lower.includes('gh auth login')) {
+                return 'gh CLI not authenticated. run `gh auth login` in a terminal on the server.';
+            }
+            if (lower.includes('repository not found') || lower.includes('repo not found') || lower.startsWith('not found')) {
+                return 'repo not found or no access. check the url and your gh auth scopes.';
+            }
+            if (lower.includes('already exists')) {
+                return 'folder or project name already exists.';
+            }
+            if (lower.includes('gh cli not') || lower.includes('install with `brew install gh`')) {
+                return 'gh CLI not installed on server. install with `brew install gh`.';
+            }
+            if (lower.includes('timed out') || lower.includes('timeout')) {
+                return 'clone timed out after 5 minutes.';
+            }
+            // Strip a bare "HTTP NNN" prefix if api.js fell back to it.
+            const cleaned = msg.replace(/^HTTP\s+\d{3}:?\s*/i, '').trim();
+            return cleaned || 'clone failed.';
+        };
+
+        const submit = async () => {
+            if (busy) return;
+            const repoUrl = urlInput.value.trim();
+            if (!repoUrl) {
+                setStatus('paste a github url first.', true);
+                urlInput.focus();
+                return;
+            }
+            const parentDir = parentInput.value.trim() || '~/projects';
+            const description = descInput.value.trim();
+
+            busy = true;
+            confirmBtn.disabled = true;
+            cancelBtn.disabled = true;
+            urlInput.disabled = true;
+            parentInput.disabled = true;
+            descInput.disabled = true;
+            setStatus('cloning... (may take a minute)');
+
+            try {
+                const project = await window.API.cloneProjectFromGithub({
+                    repoUrl,
+                    parentDir,
+                    description: description || undefined,
+                });
+                // Success — refresh project list, close modal, open session
+                // in the cloned dir. selectProject does the heavy lifting.
+                await this.loadProjects();
+                closeModal();
+                await this.selectProject({
+                    name: project.name,
+                    path: project.path,
+                    description: project.description || null,
+                });
+            } catch (error) {
+                console.error('Launchpad: clone-from-github failed:', error);
+                setStatus(mapErrorToMessage(error), true);
+                busy = false;
+                confirmBtn.disabled = false;
+                cancelBtn.disabled = false;
+                urlInput.disabled = false;
+                parentInput.disabled = false;
+                descInput.disabled = false;
+            }
+        };
+
+        // Focus url input.
+        setTimeout(() => urlInput.focus(), 100);
+
+        // Enter on url → focus parent. Enter on parent → focus desc.
+        // Enter on desc → submit. Escape anywhere → cancel.
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (urlInput.value.trim()) parentInput.focus();
+            }
+        });
+        parentInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                descInput.focus();
+            }
+        });
+        descInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+            }
+        });
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !busy) {
+                closeModal();
+            }
+        });
+
+        confirmBtn.addEventListener('click', submit);
+        cancelBtn.addEventListener('click', () => {
+            if (!busy) closeModal();
+        });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay && !busy) closeModal();
+        });
+    }
+
+    /**
      * Connect to existing session
      */
     async connectToExistingSession() {
@@ -1118,7 +1647,11 @@ class Launchpad {
         let attempt = name;
         for (let i = 0; i < 20; i++) {
             try {
-                await window.API.createProject({ name: attempt, path, description });
+                await window.API.createProject({
+                    name: attempt,
+                    path,
+                    description,
+                });
                 return attempt;
             } catch (error) {
                 if (!error.message || !error.message.includes('already exists')) {
@@ -1283,50 +1816,16 @@ class Launchpad {
         } catch (error) {
             console.error('Launchpad: Failed to open project:', error);
 
-            // If a session already exists, offer to SWAP to the project the
-            // user just clicked. Primary button = user's stated intent
-            // (open the new project, which DETACHES — not destroys — the
-            // old tmux session so it keeps running on the server). Cancel
-            // = strict no-op: stays on the launchpad, the banner still
-            // shows the running session, user can rejoin it via the
-            // banner's "Return to terminal" button if they want.
+            // If a session already exists, SWAP to the project the user just
+            // clicked. The old tmux session is DETACHED (not destroyed) so
+            // it keeps running on the server and reappears in the
+            // running-sessions list / banner for rejoin.
             if (error.message.includes('already running')) {
-                const currentName = this._getCurrentSessionLabel() || 'running session';
-                const confirmed = await this.showConfirmModal(
-                    'switch session?',
-                    `opening "${this._escapeHtml(project.name)}" will detach from your current session "${this._escapeHtml(currentName)}".`,
-                    'the tmux session will keep running — you can rejoin it later from the Adopt list or banner. cancel to stay on the launchpad with the banner intact.',
-                    `open ${project.name}`,
-                    'cancel'
-                );
-                if (confirmed) {
-                    this.detachAndOpenProject(project);
-                }
-                // Cancelled → deliberate no-op. Do NOT detach, do NOT
-                // reconnect. User stays on launchpad with banner intact.
+                this.detachAndOpenProject(project);
             } else {
                 this.showError(`failed to open ${project.name}: ${error.message}`);
             }
         }
-    }
-
-    /**
-     * Best-effort label for the running server-side session, used by the
-     * session-collision modal copy. Prefers the runningSessions row flagged
-     * ``is_active`` (freshest, includes tmux_session name), falls back to
-     * the terminal controller's local cache. Returns null if nothing is
-     * known.
-     */
-    _getCurrentSessionLabel() {
-        try {
-            const active = (this.runningSessions || []).find(s => s.is_active);
-            if (active && active.name) {
-                return this._deriveRunningSessionDisplayName(active.name);
-            }
-            const name = this._getActiveSessionName();
-            if (name) return this._deriveRunningSessionDisplayName(name);
-        } catch (_) { /* non-fatal */ }
-        return null;
     }
 
     /**

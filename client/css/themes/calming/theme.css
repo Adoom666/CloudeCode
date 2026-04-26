@@ -1,0 +1,44 @@
+/* Calming theme — sage / oat / mist. Calm-tech for long sessions.
+   Slow 30s body-bg "breath" honoring prefers-reduced-motion. */
+
+@keyframes calmingBreath {
+  0%, 100% { background-color: var(--color-bg); }
+  50%      { background-color: #F0EBDF; }
+}
+
+:root[data-theme="calming"] body {
+  background-color: var(--color-bg);
+  animation: calmingBreath 30s ease-in-out infinite;
+}
+
+:root[data-theme="calming"] .header {
+  background: var(--color-header-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Soften shadows on light surfaces — heavy dark-mode shadows look harsh on cream. */
+:root[data-theme="calming"] .session-card,
+:root[data-theme="calming"] .modal {
+  box-shadow:
+    0 1px 2px rgba(58, 58, 54, 0.04),
+    0 4px 8px rgba(58, 58, 54, 0.04),
+    0 16px 32px rgba(123, 163, 116, 0.06);
+}
+
+/* Terminal scope — when this is the active session theme, the terminal
+   chrome (the area around xterm) gets the same calm treatment. */
+#terminal-screen[data-session-theme="calming"] {
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+#terminal-screen[data-session-theme="calming"] .terminal-header {
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="calming"] body {
+    animation: none;
+  }
+}

@@ -10,6 +10,10 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/styles.css" />
+
+    <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
+         Phase 3 will populate this when the user picks a non-Claude theme. -->
+    <link rel="stylesheet" id="theme-css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -17,23 +21,32 @@
     <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
 
     <div class="header">
-        <h1 id="appTitle">☁️ Cloude Code <span class="version">v0.5</span></h1>
+        <h1 id="appTitle">
+            <span id="header-icon" class="header-icon" aria-hidden="true">☁️</span>
+            <span id="header-title-text">Cloude Code</span>
+            <span class="version">v0.5</span>
+        </h1>
         <div class="controls">
             <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M8 3L12 9H4L8 3Z" stroke="#d77757" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M4 11H12" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M8 3L12 9H4L8 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M4 11H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
             <button onclick="App.logout()" id="logoutBtn" class="hidden" data-tooltip="Logout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="#d77757" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
             <span class="status" id="statusText" data-status="Ready"></span>
         </div>
     </div>
+    <!-- New-action speed-dial FAB markup is now injected inline into the
+         launchpad's "recent projects" section heading by launchpad.js
+         (renderLaunchpadUI). The full-screen click-outside backdrop stays
+         here at top-level so it can blanket the viewport when open. -->
+    <div class="new-fab__backdrop" id="new-fab-backdrop" hidden></div>
 
     <!-- Auth Screen -->
     <div id="auth-screen" class="screen"></div>
@@ -73,6 +86,11 @@
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>
+
+    <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
+         App.init() can call Themes.init() / ThemeSelector.mount(). -->
+    <script src="/static/js/themes/registry.js"></script>
+    <script src="/static/js/themes/themeSelector.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

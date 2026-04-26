@@ -1,7 +1,7 @@
 """Data models for Claude Code Controller."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -39,7 +39,17 @@ class Tunnel(BaseModel):
 
 
 class Session(BaseModel):
-    """Session model for Claude Code instance."""
+    """Session model for Claude Code instance.
+
+    Phase 6 — ``agent_type`` labels which agent CLI was launched in this
+    session ("claude" / "codex" / "hermes" / "openclaw"). Optional + None
+    default so legacy ``session_metadata.json`` files (written before the
+    field existed) deserialize cleanly. The lifespan startup backfill in
+    ``SessionManager.lifespan_startup`` populates None-valued agent_type
+    on owned sessions to ``"claude"`` (the only agent type pre-Phase-6
+    sessions could have been). Adopted sessions stay None until Phase 7
+    fingerprint detection back-fills them.
+    """
     id: str = Field(..., description="Unique session identifier")
     pty_pid: Optional[int] = Field(None, description="PTY process PID")
     working_dir: str = Field(..., description="Working directory path")
@@ -47,6 +57,18 @@ class Session(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_activity: datetime = Field(default_factory=datetime.utcnow)
     tunnels: List[Tunnel] = Field(default_factory=list)
+    agent_type: Optional[str] = Field(
+        None,
+        description="Agent CLI type: 'claude' | 'codex' | 'hermes' | 'openclaw' (None = unknown / pre-Phase-6 / not yet fingerprinted)",
+    )
+    # SESSION-IDENTITY-V2 — per-session pinned theme. None = no pin (the
+    # global localStorage theme rules). Optional + None default so legacy
+    # ``session_metadata.json`` files (written before the field existed)
+    # deserialize cleanly. Set by PATCH /sessions/{name}/pinned-theme.
+    pinned_theme: Optional[str] = Field(
+        None,
+        description="Theme id pinned to this session; None = follow global theme",
+    )
 
     class Config:
         json_encoders = {
@@ -94,6 +116,21 @@ class SessionInfo(BaseModel):
         default=None,
         description="tmux session name (tmux backend only; None otherwise)",
     )
+    # Phase 6 — surface the active session's agent_type to the client so the
+    # launchpad / banner can show the right label and theme. Mirrors the
+    # ``Session.agent_type`` value; redundant on the wire but keeps the UI
+    # one .session_backend-style top-level field away.
+    agent_type: Optional[str] = Field(
+        default=None,
+        description="Agent CLI type label (mirrors Session.agent_type)",
+    )
+    # SESSION-IDENTITY-V2 — surface the pinned theme at the top level so
+    # the UI can paint identity (header icon + title swap) without diving
+    # into ``.session``. Mirrors Session.pinned_theme.
+    pinned_theme: Optional[str] = Field(
+        default=None,
+        description="Theme id pinned to this session (mirrors Session.pinned_theme)",
+    )
 
 
 # API Request Models
@@ -129,6 +166,14 @@ class CreateSessionRequest(BaseModel):
         None,
         description="Client-measured terminal rows (xterm cell grid height)"
     )
+    # Phase 6 — explicit per-request agent override. When omitted, the
+    # session inherits the project's configured ``agent_type`` (from
+    # ProjectConfig); when supplied, it wins outright. None / missing
+    # is the common case for pre-Phase-6 clients.
+    agent_type: Optional[str] = Field(
+        None,
+        description="Agent CLI to launch ('claude' | 'codex' | 'hermes' | 'openclaw'); overrides project default",
+    )
 
 
 class CommandRequest(BaseModel):
@@ -146,6 +191,19 @@ class VerifyTOTPRequest(BaseModel):
     code: str = Field(..., description="6-digit TOTP code", min_length=6, max_length=6)
 
 
+class UpdatePinnedThemeRequest(BaseModel):
+    """Request body for ``PATCH /sessions/{session_name}/pinned-theme``.
+
+    SESSION-IDENTITY-V2: pin a theme id to a specific tmux session, or
+    clear the pin by sending ``null``. The pinned theme overrides the
+    user's global localStorage theme whenever the session is active.
+    """
+    pinned_theme: Optional[str] = Field(
+        None,
+        description="Theme id to pin to this session (None/null clears the pin)",
+    )
+
+
 class CreateProjectRequest(BaseModel):
     """Request model for creating a new project."""
     name: str = Field(..., description="Project display name")
@@ -158,6 +216,44 @@ class ProjectResponse(BaseModel):
     name: str = Field(..., description="Project display name")
     path: str = Field(..., description="Project directory path")
     description: Optional[str] = Field(None, description="Project description")
+
+
+class UpdateProjectRequest(BaseModel):
+    """Request model for updating a project's display name and/or description.
+
+    Both fields are optional — clients send only what they want to change.
+    Display name only — the folder on disk is never touched.
+    """
+    new_name: Optional[str] = Field(None, description="New display name (omit to keep current)")
+    description: Optional[str] = Field(None, description="New description (omit to keep current; empty string clears)")
+
+
+class CloneProjectRequest(BaseModel):
+    """Request model for cloning a GitHub repo into a new project.
+
+    The server runs ``gh repo clone <repo_url> <parent_dir>/<repo_name>``,
+    then registers the result as a project (display name = ``project_name``
+    if supplied, else the repo basename). The parent directory is created
+    if it doesn't exist; the target ``<parent_dir>/<repo_name>`` must NOT
+    exist (server returns 409 otherwise).
+    """
+    repo_url: str = Field(
+        ...,
+        description=(
+            "GitHub repo URL — accepts https://github.com/owner/repo, "
+            "https://github.com/owner/repo.git, git@github.com:owner/repo.git, "
+            "github.com/owner/repo, or owner/repo (gh CLI shorthand)."
+        ),
+    )
+    parent_dir: str = Field(
+        default="~/projects",
+        description="Directory on the server in which the cloned folder will be created.",
+    )
+    description: Optional[str] = Field(None, description="Project description")
+    project_name: Optional[str] = Field(
+        None,
+        description="Override auto-detected repo name as the project display name.",
+    )
 
 
 class DirectoryEntry(BaseModel):
@@ -194,6 +290,20 @@ class AttachableSession(BaseModel):
         ..., description="tmux session creation time (Unix epoch seconds)"
     )
     window_count: int = Field(..., description="Number of windows in the session")
+    # Phase 6 — agent label for adopt-list rows. None until Phase 7 wires
+    # the fingerprint detector. The launchpad treats None as "unknown"
+    # and shows a neutral chip.
+    agent_type: Optional[str] = Field(
+        default=None,
+        description="Detected agent CLI type for this tmux session (None = not yet fingerprinted)",
+    )
+    # SESSION-IDENTITY-V2 — pinned theme for this attachable session. None
+    # = no pin. Discovery code populates from the active SessionManager
+    # state when the row matches the active backend; otherwise None.
+    pinned_theme: Optional[str] = Field(
+        default=None,
+        description="Theme id pinned to this session (None = no pin)",
+    )
 
 
 class AdoptSessionRequest(BaseModel):
@@ -384,3 +494,41 @@ class WSPTYResizeMessage(BaseModel):
     type: WSMessageType = WSMessageType.PTY_RESIZE
     cols: int
     rows: int
+
+
+# Theme system models (Phase 2 — see plan section "Architecture B" / "F").
+#
+# A ThemeManifest is the JSON shape of `theme.json` — one per bundled theme
+# directory under `client/css/themes/<id>/` and one per user theme directory
+# under `<user_themes_dir>/<id>/`. The /api/v1/themes endpoint validates each
+# manifest with this model: malformed manifests are SKIPPED (logged warning,
+# not 500'd, not silently substituted with claude defaults). The endpoint
+# stamps `source` server-side so the client can distinguish bundled vs user.
+class ThemeManifest(BaseModel):
+    """Theme manifest descriptor.
+
+    `id` MUST match the directory name on disk — the discovery code uses the
+    dir name as the canonical id and rejects manifests whose `id` field
+    disagrees, since otherwise two themes could collide on the same id while
+    living in different folders.
+    """
+    id: str = Field(..., description="Theme id; MUST match the on-disk directory name")
+    name: str = Field(..., description="Human-readable display name shown in the selector")
+    description: str = Field(..., description="One-line description")
+    author: Optional[str] = Field(None, description="Theme author")
+    version: Optional[str] = Field(None, description="Theme version (semver-ish)")
+    cssVars: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of CSS custom-property name -> value, applied on :root",
+    )
+    xterm: Dict[str, str] = Field(
+        default_factory=dict,
+        description="xterm.js theme object (background/foreground/ANSI palette)",
+    )
+    effects: Optional[str] = Field(
+        None,
+        description="Optional filename of an effects.js module relative to the theme dir",
+    )
+    source: Literal["builtin", "user"] = Field(
+        ..., description="Where the manifest was discovered — server-stamped"
+    )

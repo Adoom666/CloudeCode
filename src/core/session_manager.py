@@ -31,6 +31,45 @@ _TMUX_FORBIDDEN_CHARS = re.compile(r"[.:]")
 _WHITESPACE_RUN = re.compile(r"\s+")
 
 
+def backfill_agent_type(
+    session: Optional[Session],
+    owned_tmux_sessions: Optional[set] = None,
+) -> int:
+    """Phase 6 one-shot ``agent_type`` backfill (pure, testable).
+
+    Pre-Phase-6 ``session_metadata.json`` files have no ``agent_type``
+    field, so ``Session(**raw)`` deserializes it as ``None``. Owned
+    sessions could only have been claude (the only agent we supported
+    pre-Phase-6), so backfill those to ``"claude"``. Adopted sessions
+    (id prefixed ``adopted:`` or absent from ``owned_tmux_sessions``)
+    stay ``None`` — the Phase 7 fingerprint detector populates them
+    on adopt.
+
+    Args:
+        session: The active Session to backfill (mutated in place).
+            ``None`` is a no-op.
+        owned_tmux_sessions: Set of tmux session names this server
+            created. When supplied AND non-empty, used as the source
+            of truth for "ours vs adopted". When ``None`` or empty,
+            falls back to the ``adopted:`` id-prefix heuristic for
+            backward compatibility with legacy callers.
+
+    Returns:
+        Number of sessions backfilled (0 or 1 in single-active mode).
+        Idempotent: a session whose ``agent_type`` is already set
+        returns 0.
+    """
+    if session is None or session.agent_type is not None:
+        return 0
+
+    is_adopted = session.id.startswith("adopted:")
+    if is_adopted:
+        return 0
+
+    session.agent_type = "claude"
+    return 1
+
+
 def _sanitize_tmux_name(name: str) -> str:
     """Transform a project name into a tmux-safe session name (verbatim where possible).
 
@@ -154,6 +193,18 @@ class SessionManager:
         - Log other discovered sessions and leave them alone (orphan
           cleanup is out of scope — a v2 ``cloude-cleanup`` script).
         """
+        # Phase 6 — one-shot agent_type backfill. Logic extracted to the
+        # top-level ``backfill_agent_type`` helper for direct unit testing
+        # without spinning up the full lifespan path. Idempotent + safe to
+        # re-run; only persists + logs when something actually changed.
+        backfilled = backfill_agent_type(self.session, self.owned_tmux_sessions)
+        if backfilled:
+            self._save_session_metadata()
+            logger.info(
+                "session_metadata_agent_type_backfilled",
+                count=backfilled,
+            )
+
         # Probe tmux state once, upfront. We use this for both the
         # reconciler and the rehydrate path.
         probe = build_backend(
@@ -447,6 +498,7 @@ class SessionManager:
         initial_cols: Optional[int] = None,
         initial_rows: Optional[int] = None,
         project_name: Optional[str] = None,
+        agent_type: Optional[str] = None,
     ) -> Session:
         """Create a new Claude Code session.
 
@@ -476,6 +528,25 @@ class SessionManager:
         if self.session and not self.has_active_session():
             logger.info("cleaning_up_zombie_session", session_id=self.session.id)
             self._clear_stale_metadata()
+
+        # Phase 6 — resolve effective agent_type. Precedence:
+        #   1. explicit ``agent_type`` kwarg (request-level override)
+        #   2. project-level default (ProjectConfig.agent_type) when
+        #      ``project_name`` matches a configured project
+        #   3. ``"claude"`` as the final safe default
+        # Resolved value is persisted on the Session and drives
+        # ``settings.get_agent_command(...)`` for the launch string.
+        resolved_agent_type: Optional[str] = agent_type
+        if not resolved_agent_type and project_name:
+            try:
+                proj = settings.get_project(project_name)
+                if proj is not None:
+                    resolved_agent_type = proj.agent_type
+            except Exception:
+                # Don't fail session create if config lookup misbehaves.
+                resolved_agent_type = None
+        if not resolved_agent_type:
+            resolved_agent_type = "claude"
 
         # Determine working directory
         if working_dir:
@@ -560,8 +631,11 @@ class SessionManager:
             )
 
             if auto_start_claude:
-                claude_cli = settings.get_claude_cli_path()
-                command = f"{claude_cli} --dangerously-skip-permissions"
+                # Phase 6 — resolve via the agents map. For claude with
+                # default config this yields the same string the old
+                # ``f"{claude_cli} --dangerously-skip-permissions"`` did
+                # (CLAUDE_CLI_PATH env-fallback preserved inside the helper).
+                command = settings.get_agent_command(resolved_agent_type)
                 await self.backend.start(
                     command=command,
                     initial_cols=initial_cols,
@@ -583,7 +657,8 @@ class SessionManager:
                 working_dir=str(work_path),
                 status=SessionStatus.RUNNING,
                 created_at=datetime.utcnow(),
-                last_activity=datetime.utcnow()
+                last_activity=datetime.utcnow(),
+                agent_type=resolved_agent_type,
             )
 
             # Track 1: record tmux-backend ownership BEFORE returning, so
@@ -970,6 +1045,13 @@ class SessionManager:
             stats=stats,
             session_backend=self.backend_name,
             tmux_session=tmux_session_name,
+            # Phase 6 — surface the active session's agent_type at the
+            # top level so the launchpad doesn't have to reach into
+            # ``.session`` to render the chip / pick the theme.
+            agent_type=self.session.agent_type,
+            # SESSION-IDENTITY-V2 — mirror the pinned theme so the client
+            # can paint it on screen-transition without nested lookups.
+            pinned_theme=self.session.pinned_theme,
         )
 
     def has_active_session(self) -> bool:
@@ -1120,6 +1202,21 @@ class SessionManager:
             if scrollback else ""
         )
 
+        # Phase 7 — fingerprint the captured bytes to identify which AI
+        # CLI is running inside the adopted tmux session. ``None`` is a
+        # valid outcome and renders as "Unknown" in the UI (Phase 8).
+        from src.core.agent_fingerprint import detect_agent_type
+        try:
+            scrollback_text = scrollback.decode("utf-8", errors="replace")
+        except Exception:
+            scrollback_text = ""
+        detected_agent_type = detect_agent_type(scrollback_text)
+        logger.info(
+            "agent_fingerprint_detected",
+            session=name,
+            agent_type=detected_agent_type,
+        )
+
         # Step 6 — register.
         self.backend = backend
         self.session = Session(
@@ -1129,6 +1226,7 @@ class SessionManager:
             status=SessionStatus.RUNNING,
             created_at=datetime.utcnow(),
             last_activity=datetime.utcnow(),
+            agent_type=detected_agent_type,
         )
         # External sessions are intentionally NOT added to
         # ``owned_tmux_sessions`` — we don't own them; we adopted them.
@@ -1171,6 +1269,114 @@ class SessionManager:
             "initial_scrollback_b64": sb_b64,
             "fifo_start_offset": fifo_start_offset,
         }
+
+    async def destroy_external_session(self, name: str) -> dict:
+        """Destroy an external (or otherwise non-active) tmux session by name.
+
+        Counterpart to ``destroy_session`` for the launchpad's "X" button on
+        a row that is NOT the currently-active backend. The previous flow was
+        adopt-then-destroy, which fails with ``RuntimeError("pane already
+        dead")`` for sessions where the foreground process exited (e.g. user
+        Ctrl-D'd ``claude``) — leaving the session permanently un-killable
+        from the UI. This path skips adoption entirely and just runs
+        ``tmux -L <socket> kill-session -t <name>`` directly.
+
+        Refuses to destroy the currently-active backend's session — the
+        caller should use ``DELETE /sessions`` for that path so the in-memory
+        backend, idle watcher, tunnels, and metadata get torn down cleanly.
+
+        ``kill-session`` is treated as idempotent: a missing session is
+        success (returns ``already_gone=True``) so the UI converges even
+        when tmux state drifts under us.
+
+        Args:
+            name: literal tmux session name as shown in the running list.
+
+        Returns:
+            ``{"name": <name>, "killed": bool, "already_gone": bool}``
+
+        Raises:
+            ValueError: name contains tmux target separators, or name
+                matches the currently-active backend's session.
+        """
+        from src.core.tmux_backend import _safe_target, DEFAULT_SOCKET_NAME
+
+        # Guard: the active backend's session must be torn down via the
+        # full destroy path (DELETE /sessions) so reader task + idle
+        # watcher + metadata get cleaned up. Calling kill-session out
+        # from under an active backend would orphan all of that.
+        if self.backend is not None:
+            active_name = getattr(self.backend, "tmux_session", None)
+            if active_name and active_name == name:
+                raise ValueError(
+                    f"{name!r} is the currently-active session; "
+                    "use DELETE /sessions to destroy it"
+                )
+
+        # Validate the name as a tmux target — same rule as adoption,
+        # so we don't accidentally interpret ':' or '.' as separators.
+        try:
+            target = _safe_target(name)
+        except ValueError:
+            raise
+
+        try:
+            socket_name = settings.load_auth_config().session.tmux_socket_name
+        except Exception:
+            socket_name = DEFAULT_SOCKET_NAME
+
+        logger.info("destroying_external_session", name=name, socket=socket_name)
+
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket_name, "kill-session", "-t", target,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        rc = proc.returncode or 0
+
+        # Drop ownership tracking regardless — if it WAS owned and we
+        # just killed it, the entry is now stale; if it wasn't owned,
+        # the discard is a no-op. Persist so a server restart doesn't
+        # resurrect the pruned entry.
+        if name in self.owned_tmux_sessions:
+            self.owned_tmux_sessions.discard(name)
+            try:
+                self._save_session_metadata()
+            except Exception as exc:
+                logger.warning(
+                    "owned_tmux_sessions_save_after_external_destroy_failed",
+                    name=name,
+                    error=str(exc),
+                )
+
+        if rc == 0:
+            logger.info("external_session_destroyed", name=name)
+            return {"name": name, "killed": True, "already_gone": False}
+
+        # tmux returns non-zero for "session not found" too — treat that
+        # as success so the UI converges. We match against the canonical
+        # phrasing tmux emits: "can't find session: <name>".
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if "can't find session" in stderr_text.lower() or "session not found" in stderr_text.lower():
+            logger.info(
+                "external_session_already_gone", name=name, stderr=stderr_text
+            )
+            return {"name": name, "killed": False, "already_gone": True}
+
+        # Genuine failure — surface as RuntimeError so the route layer
+        # turns it into a 500 with the tmux stderr in the detail. This
+        # is the only path that should ever 500.
+        logger.error(
+            "external_session_destroy_failed",
+            name=name,
+            returncode=rc,
+            stderr=stderr_text,
+        )
+        raise RuntimeError(
+            f"tmux kill-session for {name!r} failed (rc={rc}): {stderr_text}"
+        )
 
     async def _resolve_external_cwd(self, name: str) -> Path:
         """Best-effort cwd probe for an adopted tmux pane.

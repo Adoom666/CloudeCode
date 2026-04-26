@@ -1,0 +1,226 @@
+/* ============================================================
+   Terminal Theme — Pure UNIX / xterm canonical
+   Black canvas, light-gray text, ANSI 16-color VT100 palette.
+   Zero decoration: no border-radius, no shadows, no gradients.
+   Scoped to :root[data-theme="terminal"].
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   GLOBAL DECORATION NUKE
+   Sharp corners + zero shadows on EVERY element + pseudo-element.
+   The wildcard + !important is intentional — terminals do not
+   have rounded corners. They never have. They never will.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] *,
+:root[data-theme="terminal"] *::before,
+:root[data-theme="terminal"] *::after {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ------------------------------------------------------------
+   ROOT CANVAS
+   Pure black background. Light-gray (#C7C7C7 = xterm fg) text.
+   Monospace forced everywhere — no proportional fonts in the grid.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] {
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+}
+
+:root[data-theme="terminal"] body,
+:root[data-theme="terminal"] html {
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+
+/* ------------------------------------------------------------
+   TYPOGRAPHY
+   Force monospace on all text-bearing elements within scope.
+   Kill font-smoothing softness — terminals render crisp pixels.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] body,
+:root[data-theme="terminal"] input,
+:root[data-theme="terminal"] textarea,
+:root[data-theme="terminal"] select,
+:root[data-theme="terminal"] button,
+:root[data-theme="terminal"] code,
+:root[data-theme="terminal"] pre,
+:root[data-theme="terminal"] kbd,
+:root[data-theme="terminal"] samp {
+  font-family: var(--font-mono);
+}
+
+/* ------------------------------------------------------------
+   BORDERS
+   Single-pixel hairlines. No double-borders, no inset, no groove.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] *,
+:root[data-theme="terminal"] *::before,
+:root[data-theme="terminal"] *::after {
+  border-style: solid;
+}
+
+/* ------------------------------------------------------------
+   FORM CONTROLS
+   Flat. No native chrome. Caret in accent green.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] input,
+:root[data-theme="terminal"] textarea,
+:root[data-theme="terminal"] select {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg);
+  border-color: var(--color-border);
+  caret-color: var(--color-accent);
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+:root[data-theme="terminal"] input:focus,
+:root[data-theme="terminal"] textarea:focus,
+:root[data-theme="terminal"] select:focus {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 0;
+  border-color: var(--color-accent);
+}
+
+/* ------------------------------------------------------------
+   BUTTONS
+   Solid backgrounds, sharp edges, hover via bg shift only.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] button {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color 0.05s linear, border-color 0.05s linear;
+}
+
+:root[data-theme="terminal"] button:hover {
+  background-color: var(--color-bg-hover);
+  border-color: var(--color-accent-border);
+}
+
+:root[data-theme="terminal"] button:active {
+  background-color: var(--color-accent-bg-active);
+  border-color: var(--color-accent);
+}
+
+:root[data-theme="terminal"] button:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+/* ------------------------------------------------------------
+   LINKS
+   ANSI-blue underlined. Bright-blue on hover.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] a {
+  color: var(--color-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+:root[data-theme="terminal"] a:hover {
+  color: var(--color-accent-strong);
+}
+
+/* ------------------------------------------------------------
+   SELECTION
+   Inverse video — classic terminal selection.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] ::selection {
+  background-color: var(--color-fg);
+  color: var(--color-bg);
+}
+
+/* ------------------------------------------------------------
+   SCROLLBAR
+   Minimal. Gray track, lighter thumb. No rounded corners.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background-color: var(--color-bg);
+}
+
+:root[data-theme="terminal"] ::-webkit-scrollbar-track {
+  background-color: var(--color-bg-elevated);
+}
+
+:root[data-theme="terminal"] ::-webkit-scrollbar-thumb {
+  background-color: var(--color-fg-subtle);
+  border: 1px solid var(--color-bg);
+}
+
+:root[data-theme="terminal"] ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-fg-muted);
+}
+
+:root[data-theme="terminal"] ::-webkit-scrollbar-corner {
+  background-color: var(--color-bg);
+}
+
+/* Firefox */
+:root[data-theme="terminal"] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-fg-subtle) var(--color-bg-elevated);
+}
+
+/* ------------------------------------------------------------
+   CODE BLOCKS
+   Slightly elevated bg. No syntax-highlighting backgrounds bleed.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] pre,
+:root[data-theme="terminal"] code {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* ------------------------------------------------------------
+   TABLES
+   Hairline borders only. No zebra striping (UNIX `column`/`ls`
+   doesn't stripe — neither do we).
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] table {
+  border-collapse: collapse;
+  border: 1px solid var(--color-border);
+}
+
+:root[data-theme="terminal"] th,
+:root[data-theme="terminal"] td {
+  border: 1px solid var(--color-border-subtle);
+  padding: 4px 8px;
+}
+
+:root[data-theme="terminal"] th {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg);
+  font-weight: bold;
+  text-align: left;
+}
+
+/* ------------------------------------------------------------
+   HR
+   Single pixel, accent-tinted.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 8px 0;
+}
+
+/* ------------------------------------------------------------
+   FOCUS RING
+   Accent green outline. No glow. Sharp.
+   ------------------------------------------------------------ */
+:root[data-theme="terminal"] :focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 0;
+}

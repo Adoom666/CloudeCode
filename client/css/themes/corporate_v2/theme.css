@@ -1,0 +1,75 @@
+/* ============================================================
+   Corporate Modern v2.0
+   Linear / Vercel / Stripe 2026 — indigo on cool near-black
+   ============================================================ */
+
+/* Subtle indigo accent gradient on header chrome */
+:root[data-theme="corporate_v2"] .header,
+:root[data-theme="corporate_v2"] header {
+  background-image: linear-gradient(
+    180deg,
+    rgba(99, 102, 241, 0.06) 0%,
+    rgba(99, 102, 241, 0.02) 60%,
+    transparent 100%
+  );
+  background-color: var(--color-header-bg);
+}
+
+/* Button micro-interactions: 150ms ease-out on bg + border only */
+:root[data-theme="corporate_v2"] button {
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+:root[data-theme="corporate_v2"] button:hover {
+  background-color: var(--color-bg-elevated);
+  border-color: var(--color-border);
+}
+
+:root[data-theme="corporate_v2"] button:active {
+  background-color: var(--color-bg-overlay);
+}
+
+/* Focus ring — accessible 1px indigo + 2px halo */
+:root[data-theme="corporate_v2"] button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--color-bg),
+    0 0 0 3px rgba(99, 102, 241, 0.50);
+}
+
+/* Inputs — 1px indigo focus ring, subtle by default */
+:root[data-theme="corporate_v2"] input,
+:root[data-theme="corporate_v2"] textarea,
+:root[data-theme="corporate_v2"] select {
+  transition:
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out,
+    background-color 150ms ease-out;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg);
+}
+
+:root[data-theme="corporate_v2"] input:hover,
+:root[data-theme="corporate_v2"] textarea:hover,
+:root[data-theme="corporate_v2"] select:hover {
+  border-color: var(--color-fg-subtle);
+}
+
+:root[data-theme="corporate_v2"] input:focus,
+:root[data-theme="corporate_v2"] input:focus-visible,
+:root[data-theme="corporate_v2"] textarea:focus,
+:root[data-theme="corporate_v2"] textarea:focus-visible,
+:root[data-theme="corporate_v2"] select:focus,
+:root[data-theme="corporate_v2"] select:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+::placeholder {
+  color: var(--color-fg-subtle);
+}

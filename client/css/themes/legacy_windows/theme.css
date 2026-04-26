@@ -1,0 +1,148 @@
+/* ============================================================
+ * Legacy Windows theme — Win 95 / 98 chrome, faithfully ported
+ * ------------------------------------------------------------
+ * BTNFACE gray (#C0C0C0) page, ACTIVECAPTION navy (#000080)
+ * title bar, BTNHIGHLIGHT (#FFFFFF) + BTNSHADOW (#808080)
+ * 1px stacked bevels for the 3D raised-button look. Sharp 0px
+ * radius everywhere. No transitions, no shadows, no gradients.
+ * Scoped strictly under :root[data-theme="legacy_windows"].
+ * ============================================================ */
+
+/* -- Sharp corners everywhere in scope ------------------------ */
+:root[data-theme="legacy_windows"] *,
+:root[data-theme="legacy_windows"] *::before,
+:root[data-theme="legacy_windows"] *::after {
+  border-radius: 0 !important;
+}
+
+/* -- Page chrome --------------------------------------------- */
+:root[data-theme="legacy_windows"] body {
+  background: #C0C0C0;
+  color: #000000;
+}
+
+/* -- Title bar (.header) — ACTIVECAPTION navy w/ white text --- */
+:root[data-theme="legacy_windows"] .header {
+  color: #FFFFFF;
+  background: #000080;
+  border-top: 1px solid #FFFFFF;
+  border-left: 1px solid #FFFFFF;
+  border-right: 1px solid #404040;
+  border-bottom: 1px solid #404040;
+}
+:root[data-theme="legacy_windows"] .header a,
+:root[data-theme="legacy_windows"] .header h1,
+:root[data-theme="legacy_windows"] .header h2,
+:root[data-theme="legacy_windows"] .header h3,
+:root[data-theme="legacy_windows"] .header span {
+  color: #FFFFFF;
+}
+
+/* -- 3D RAISED bevel: white top+left, dark bottom+right ------- */
+/* Buttons — the canonical Win9x raised look. */
+:root[data-theme="legacy_windows"] button {
+  background: #C0C0C0;
+  color: #000000;
+  border-top: 1px solid #FFFFFF;
+  border-left: 1px solid #FFFFFF;
+  border-right: 1px solid #808080;
+  border-bottom: 1px solid #808080;
+  border-radius: 0;
+  padding: 4px 12px;
+  font-family: "Tahoma", "MS Sans Serif", sans-serif;
+}
+
+/* Pressed/active state — bevel inverts (sunken). */
+:root[data-theme="legacy_windows"] button:active,
+:root[data-theme="legacy_windows"] button.active,
+:root[data-theme="legacy_windows"] button[aria-pressed="true"] {
+  border-top: 1px solid #808080;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #FFFFFF;
+  border-bottom: 1px solid #FFFFFF;
+}
+
+/* Disabled — etched gray text, classic Win9x dotted feel. */
+:root[data-theme="legacy_windows"] button:disabled {
+  color: #808080;
+  text-shadow: 1px 1px 0 #FFFFFF;
+}
+
+/* -- Cards / panels — same raised bevel, slightly lighter face */
+:root[data-theme="legacy_windows"] .card,
+:root[data-theme="legacy_windows"] .panel,
+:root[data-theme="legacy_windows"] .modal-content,
+:root[data-theme="legacy_windows"] .dialog,
+:root[data-theme="legacy_windows"] [class*="card"]:not(.header) {
+  background: #C0C0C0;
+  color: #000000;
+  border-top: 1px solid #FFFFFF;
+  border-left: 1px solid #FFFFFF;
+  border-right: 1px solid #808080;
+  border-bottom: 1px solid #808080;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* -- Inputs / textareas — SUNKEN bevel (the Win9x edit-control) */
+:root[data-theme="legacy_windows"] input[type="text"],
+:root[data-theme="legacy_windows"] input[type="password"],
+:root[data-theme="legacy_windows"] input[type="email"],
+:root[data-theme="legacy_windows"] input[type="number"],
+:root[data-theme="legacy_windows"] input[type="search"],
+:root[data-theme="legacy_windows"] input:not([type]),
+:root[data-theme="legacy_windows"] textarea,
+:root[data-theme="legacy_windows"] select {
+  background: #FFFFFF;
+  color: #000000;
+  border-top: 1px solid #808080;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #FFFFFF;
+  border-bottom: 1px solid #FFFFFF;
+  border-radius: 0;
+  padding: 2px 4px;
+  outline: none;
+  font-family: "Tahoma", "MS Sans Serif", sans-serif;
+}
+
+:root[data-theme="legacy_windows"] input:focus,
+:root[data-theme="legacy_windows"] textarea:focus,
+:root[data-theme="legacy_windows"] select:focus {
+  outline: 1px dotted #000000;
+  outline-offset: -3px;
+}
+
+/* -- Modal overlay — flat navy wash, no blur ------------------ */
+:root[data-theme="legacy_windows"] .modal-overlay {
+  background: rgba(0, 0, 128, 0.25);
+  backdrop-filter: none;
+}
+
+:root[data-theme="legacy_windows"] .modal-header {
+  background: #000080;
+  color: #FFFFFF;
+  padding: 3px 6px;
+  font-weight: bold;
+}
+
+/* -- Links — classic underlined navy --------------------------- */
+:root[data-theme="legacy_windows"] a {
+  color: #000080;
+  text-decoration: underline;
+}
+:root[data-theme="legacy_windows"] a:visited {
+  color: #800080;
+}
+
+/* -- Selection — ACTIVECAPTION wash --------------------------- */
+:root[data-theme="legacy_windows"] ::selection {
+  background: #000080;
+  color: #FFFFFF;
+}
+
+/* -- Kill modern niceties that fight the era ------------------ */
+:root[data-theme="legacy_windows"] *,
+:root[data-theme="legacy_windows"] *::before,
+:root[data-theme="legacy_windows"] *::after {
+  transition: none !important;
+}

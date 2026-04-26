@@ -1,5 +1,6 @@
 """Main FastAPI application for Cloude Code Controller."""
 
+import os
 import structlog
 import asyncio
 import httpx
@@ -316,7 +317,7 @@ client_dir = Path(__file__).parent.parent / "client"
 
 
 class NoCacheStaticFiles(StaticFiles):
-    """StaticFiles subclass that forces revalidation on .html and .js assets.
+    """StaticFiles subclass that forces revalidation on .html, .js and .json assets.
 
     Why: mobile browsers (iOS Safari in particular) aggressively heuristic-
     cache JS served over LAN HTTP with no ``Cache-Control`` header. That
@@ -324,12 +325,19 @@ class NoCacheStaticFiles(StaticFiles):
     ``launchpad.js`` bundle that predates the running-sessions feature,
     so the section silently stayed hidden.
 
-    Fix: stamp ``Cache-Control: no-cache, must-revalidate`` on HTML and JS
-    responses. ``no-cache`` still allows caching but forces a conditional
-    GET (If-None-Match / If-Modified-Since) on every load, so the browser
-    gets an instant 304 when the file is unchanged and the new bytes when
-    it isn't. CSS / images / fonts keep the default (browser heuristic)
-    since they version far less often and a stale stylesheet is cosmetic.
+    Fix: stamp ``Cache-Control: no-cache, must-revalidate`` on HTML, JS and
+    JSON responses. ``no-cache`` still allows caching but forces a
+    conditional GET (If-None-Match / If-Modified-Since) on every load, so
+    the browser gets an instant 304 when the file is unchanged and the new
+    bytes when it isn't. CSS / images / fonts keep the default (browser
+    heuristic) since they version far less often and a stale stylesheet is
+    cosmetic.
+
+    ``.json`` is on the list as of Phase 9 (theme system): ``theme.json``
+    files served from ``/static/css/themes/<id>/`` and ``/themes/<id>/``
+    are user-edited at runtime, and iOS Safari was caching them across
+    sessions — flipping a manifest's CSS vars and requiring a hard reload
+    to see the change. Same revalidation strategy as JS/HTML.
 
     Applied via subclass rather than ASGI middleware because (a) it only
     runs on static hits, (b) it can't accidentally leak Cache-Control
@@ -337,15 +345,59 @@ class NoCacheStaticFiles(StaticFiles):
     with the existing CSP middleware.
     """
 
+    _NO_CACHE_SUFFIXES = (".js", ".html", ".json")
+
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
-        lower = path.lower()
-        if lower.endswith(".js") or lower.endswith(".html"):
+        if path.lower().endswith(self._NO_CACHE_SUFFIXES):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
 
 app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static")
+
+
+# ---------------------------------------------------------------------------
+# User themes mount (Phase 9 — pluggability surface)
+# ---------------------------------------------------------------------------
+# Serves user-authored theme assets from
+# ``~/Library/Application Support/cloude-code-menubar/themes/`` (or env
+# override CLOUDE_USER_THEMES_DIR) at the URL prefix ``/themes/<id>/<file>``.
+# This parallels the bundled-theme URL ``/static/css/themes/<id>/<file>``
+# and is consumed by client/js/themes/registry.js when applying a manifest
+# whose ``source`` field is ``"user"``.
+#
+# UNAUTH on purpose — per spec section "Architecture F" (Pluggability
+# Surface) and the T3 critique decision, theme assets contain no secrets
+# and mirror the unauth ``/static/*`` mount. Theme authors MUST NOT put
+# secrets in theme.json or effects.js — same threat model as any static
+# resource served on the LAN-only deployment.
+#
+# Mount only when the dir exists on disk so a missing user dir isn't a
+# 500 source — the discovery endpoint also gracefully handles absence.
+def _resolve_user_themes_dir() -> Path:
+    """Resolve user themes dir. Honors env override, defaults to OS-portable
+    Application Support path on macOS / config dir on linux/docker.
+    """
+    env_dir = os.environ.get("CLOUDE_USER_THEMES_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    # macOS canonical path; on linux/docker the home-relative Library dir
+    # is benign (just nonexistent), so the if-exists gate below skips the
+    # mount cleanly. Operators on those platforms can set the env var.
+    return Path.home() / "Library" / "Application Support" / "cloude-code-menubar" / "themes"
+
+
+user_themes_dir = _resolve_user_themes_dir()
+if user_themes_dir.exists():
+    app.mount(
+        "/themes",
+        NoCacheStaticFiles(directory=str(user_themes_dir), html=False),
+        name="user-themes",
+    )
+    logger.info("user_themes_mount", path=str(user_themes_dir))
+else:
+    logger.info("user_themes_mount_skipped", path=str(user_themes_dir), reason="dir not present")
 
 
 @app.get("/")

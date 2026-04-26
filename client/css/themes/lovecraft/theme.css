@@ -1,0 +1,18 @@
+/* HP Lovecraft theme — cursor-only ambient pulse.
+ * Sub-1Hz (1.5s cycle ~ 0.67Hz), eased, gated by prefers-reduced-motion.
+ * No glow, no shadow shifts, no DOM thrash — opacity only. */
+
+@keyframes lovecraftCursorPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+:root[data-theme="lovecraft"] .xterm-cursor-block {
+  animation: lovecraftCursorPulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="lovecraft"] .xterm-cursor-block {
+    animation: none;
+  }
+}

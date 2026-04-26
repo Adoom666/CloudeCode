@@ -1,0 +1,51 @@
+/* Hermes theme — amber CRT glow.
+   Scoped under :root[data-theme="hermes"] (global) and
+   #terminal-screen[data-session-theme="hermes"] (terminal). */
+
+:root[data-theme="hermes"] body {
+  background: #000000;
+}
+
+:root[data-theme="hermes"] .header h1,
+:root[data-theme="hermes"] .header .title {
+  text-shadow: 0 0 4px rgba(255, 204, 0, 0.45), 0 0 1px rgba(255, 204, 0, 0.85);
+  letter-spacing: 0.04em;
+}
+
+/* Subtle phosphor glow on accent buttons — read like amber CRT phosphors. */
+:root[data-theme="hermes"] button.primary,
+:root[data-theme="hermes"] .btn-primary {
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 204, 0, 0.7),
+    0 0 12px rgba(255, 204, 0, 0.25);
+}
+
+/* Faint horizontal scanline overlay — kept very low opacity so it never harms readability. */
+:root[data-theme="hermes"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 170, 0, 0.025) 0px,
+    rgba(255, 170, 0, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: screen;
+}
+
+/* Terminal scope mirrors the global look. */
+#terminal-screen[data-session-theme="hermes"] {
+  background: #000000;
+  color: #ffaa00;
+}
+
+#terminal-screen[data-session-theme="hermes"] .terminal-header {
+  background: #000000;
+  border-bottom: 1px solid #553a00;
+  text-shadow: 0 0 3px rgba(255, 204, 0, 0.40);
+}

@@ -1,3 +1,116 @@
+/* =====================================================================
+ * Design tokens (Phase 1 — CSS variables)
+ * ---------------------------------------------------------------------
+ * All color / shadow / radius / font values used throughout this file
+ * are sourced from semantic tokens defined here. A downstream theme
+ * system can override any of these via `[data-theme="X"] { ... }`
+ * selectors WITHOUT touching component rules below.
+ *
+ * Naming rule: tokens describe ROLE, not literal value. Defaults below
+ * preserve the original Claude-coral dark palette — pixel-identical to
+ * pre-refactor when no `data-theme` attribute is set on <html>.
+ * ===================================================================== */
+:root {
+    /* ---- Fonts -------------------------------------------------- */
+    --font-mono: 'SF Mono', monospace;
+
+    /* ---- Backgrounds -------------------------------------------- */
+    --color-bg:               #1e1e1e;            /* body / terminal / modal */
+    --color-bg-page:          #0a0a0a;            /* header / tooltip surface */
+    --color-bg-elevated:      #2d2d30;            /* panels / inputs / cards */
+    --color-bg-card:          #252526;            /* tunnels card */
+    --color-bg-hover:         #323235;            /* row hover state */
+    --color-bg-overlay:       rgba(0, 0, 0, 0.85); /* modal scrim */
+    --color-header-bg: var(--color-bg);
+    --color-bg-overlay-soft:  rgba(0, 0, 0, 0.5);  /* float-button shadow */
+    --color-bg-overlay-faint: rgba(0, 0, 0, 0.3);  /* inline <code> bg */
+
+    /* ---- Foregrounds -------------------------------------------- */
+    --color-fg:        #d4d4d4;   /* primary text */
+    --color-fg-muted:  #858585;   /* secondary / descriptive text */
+    --color-fg-subtle: #666;      /* placeholder / disabled */
+    --color-fg-faint:  #888;      /* version label / age text */
+
+    /* ---- Borders ------------------------------------------------ */
+    --color-border:        #3e3e42;
+    --color-border-subtle: #2d2d30;   /* row separators inside lists */
+
+    /* ---- Accent (Claude coral — primary brand) ------------------ */
+    --color-accent:                #d77757;
+    --color-accent-strong:         #e88768;                 /* hover variant */
+    --color-accent-bg-soft:        rgba(215, 119, 87, 0.08);
+    --color-accent-bg-faint:       rgba(215, 119, 87, 0.10);
+    --color-accent-bg:             rgba(215, 119, 87, 0.15);
+    --color-accent-bg-hover:       rgba(215, 119, 87, 0.25);
+    --color-accent-bg-active:      rgba(215, 119, 87, 0.35);
+    --color-accent-border-soft:    rgba(215, 119, 87, 0.20);
+    --color-accent-border:         rgba(215, 119, 87, 0.30);
+    --color-accent-border-strong:  rgba(215, 119, 87, 0.60);
+    --color-accent-border-mid:     rgba(215, 119, 87, 0.50);
+    --color-accent-glow:           rgba(215, 119, 87, 0.40);
+    --color-accent-glow-strong:    rgba(215, 119, 87, 0.50);
+    --color-accent-shadow-soft:    rgba(215, 119, 87, 0.30);
+    --color-on-accent:             #1e1e1e;                 /* text on accent fill */
+
+    /* ---- Status: success / warning / danger / info -------------- */
+    --color-success:        #4ade80;
+    --color-warning:        #fbbf24;
+    --color-danger:         #ff4444;
+    --color-info:           #4fc1ff;
+
+    --color-danger-bg:       rgba(255, 68, 68, 0.10);
+    --color-danger-bg-hover: rgba(255, 68, 68, 0.20);
+    --color-danger-border:   rgba(255, 68, 68, 0.30);
+    --color-danger-glow:     rgba(255, 68, 68, 0.40);
+
+    --color-info-bg:     rgba(79, 193, 255, 0.10);
+    --color-info-border: rgba(79, 193, 255, 0.30);
+
+    --color-warning-bg:     rgba(251, 191, 36, 0.18);
+    --color-warning-border: rgba(251, 191, 36, 0.35);
+
+    /* Soft / strong danger variants used by the kill control */
+    --color-danger-soft:        #e88;
+    --color-danger-strong:      #ff6b6b;
+    --color-danger-strong-bg:   rgba(255, 107, 107, 0.12);
+
+    /* ---- Connection status indicator dot ------------------------ */
+    --color-status-connected: #00ff00;
+    --color-status-error:     #ff0000;
+    --color-status-pending:   #ffa500;
+    --color-status-connected-glow: rgba(0, 255, 0, 0.8);
+    --color-status-error-glow:     rgba(255, 0, 0, 0.8);
+    --color-status-pending-glow:   rgba(255, 165, 0, 0.6);
+
+    /* ---- Session badges (running list) -------------------------- */
+    --color-badge-owned-bg:    #2a3a2a;
+    --color-badge-owned-fg:    #4ade80;
+    --color-badge-tmux-bg:     #2a2a3a;
+    --color-badge-tmux-fg:     #8899ff;
+    --color-badge-external-bg: #4a3a2a;
+    --color-badge-external-fg: #fbbf24;
+
+    /* ---- Agent badges (Phase 8 will consume these) -------------- */
+    --badge-color-claude:    #d77757;
+    --badge-color-codex:     #4ade80;
+    --badge-color-hermes:    #8899ff;
+    --badge-color-openclaw:  #fbbf24;
+
+    /* ---- Syntax-ish accents (tunnels link / heading) ------------ */
+    --color-syntax-cyan: #4ec9b0;
+    --color-syntax-blue: #569cd6;
+
+    /* ---- Shadows ------------------------------------------------ */
+    --shadow-modal: 0 4px 12px rgba(0, 0, 0, 0.5);
+
+    /* ---- Radii -------------------------------------------------- */
+    --radius-sm:   3px;
+    --radius-md:   4px;
+    --radius-lg:   8px;
+    --radius-pill: 50px;
+    --radius-full: 50%;
+}
+
 /* Base styles */
 * {
     margin: 0;
@@ -6,9 +119,9 @@
 }
 
 body {
-    font-family: 'SF Mono', monospace;
-    background: #1e1e1e;
-    color: #d4d4d4;
+    font-family: var(--font-mono);
+    background: var(--color-bg);
+    color: var(--color-fg);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
@@ -20,9 +133,9 @@ body {
     position: sticky;
     top: 0;
     z-index: 1000;
-    background: #0a0a0a;
+    background: var(--color-bg-page);
     padding: 12px 20px;
-    border-bottom: 2px solid #d77757;
+    border-bottom: 2px solid var(--color-accent);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -32,7 +145,7 @@ body {
 h1 {
     font-size: 1.3rem;
     margin: 0;
-    color: #d77757;
+    color: var(--color-accent);
     white-space: nowrap;
     cursor: pointer;
     transition: opacity 0.2s ease;
@@ -44,8 +157,28 @@ h1:hover {
 
 .version {
     font-size: 0.7rem;
-    color: #888;
+    color: var(--color-fg-faint);
     font-weight: normal;
+}
+
+/* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
+ * (launchpad/auth) or the brand SVG (terminal). Sizing is consistent
+ * across both modes so the title baseline doesn't jump on screen swap. */
+.header-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.2em;
+    height: 1.2em;
+    vertical-align: -0.18em;
+    margin-right: 0.15em;
+}
+
+.header-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
 }
 
 .controls {
@@ -54,15 +187,23 @@ h1:hover {
     align-items: center;
 }
 
+/* Header control icons. Inline SVG paths use stroke="currentColor" so a
+ * theme override of --color-accent re-skins them automatically. We pin
+ * `color` on the <svg> itself (not the <button>) so danger-styled
+ * buttons still render the icon in accent — preserves pre-token visual. */
+.header .controls button > svg {
+    color: var(--color-accent);
+}
+
 /* Buttons */
 button {
-    background: rgba(215, 119, 87, 0.15);
-    color: #d77757;
-    border: 1px solid rgba(215, 119, 87, 0.3);
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
     padding: 0;
     width: 36px;
     height: 36px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     cursor: pointer;
     font-size: 16px;
     transition: all 0.3s ease;
@@ -73,30 +214,30 @@ button {
 }
 
 button:hover:not(:disabled) {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: #d77757;
-    box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-glow);
     transform: scale(1.05);
 }
 
 button:disabled {
-    background: rgba(62, 62, 66, 0.1);
-    border-color: rgba(62, 62, 66, 0.3);
-    color: #666;
+    background: rgba(62, 62, 66, 0.1);  /* TODO: theme-token candidate (disabled-bg) */
+    border-color: rgba(62, 62, 66, 0.3); /* TODO: theme-token candidate (disabled-border) */
+    color: var(--color-fg-subtle);
     cursor: not-allowed;
     opacity: 0.4;
 }
 
 button.danger {
-    color: #ff4444;
-    border-color: rgba(255, 68, 68, 0.3);
-    background: rgba(255, 68, 68, 0.1);
+    color: var(--color-danger);
+    border-color: var(--color-danger-border);
+    background: var(--color-danger-bg);
 }
 
 button.danger:hover:not(:disabled) {
-    background: rgba(255, 68, 68, 0.2);
-    border-color: #ff4444;
-    box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
+    background: var(--color-danger-bg-hover);
+    border-color: var(--color-danger);
+    box-shadow: 0 0 12px var(--color-danger-glow);
 }
 
 /* Tooltip on hover (only for buttons with data-tooltip) */
@@ -106,16 +247,16 @@ button[data-tooltip]::after {
     bottom: -30px;
     left: 50%;
     transform: translateX(-50%);
-    background: #0a0a0a;
-    color: #d4d4d4;
+    background: var(--color-bg-page);
+    color: var(--color-fg);
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     font-size: 11px;
     white-space: nowrap;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s;
-    border: 1px solid #d77757;
+    border: 1px solid var(--color-accent);
 }
 
 button[data-tooltip]:hover::after {
@@ -126,23 +267,23 @@ button[data-tooltip]:hover::after {
 .status {
     width: 12px;
     height: 12px;
-    border-radius: 50%;
-    background: #ffa500;
+    border-radius: var(--radius-full);
+    background: var(--color-status-pending);
     display: inline-block;
-    box-shadow: 0 0 8px rgba(255, 165, 0, 0.6);
+    box-shadow: 0 0 8px var(--color-status-pending-glow);
     transition: all 0.3s ease;
     position: relative;
 }
 
 .status.connected {
-    background: #00ff00;
-    box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
+    background: var(--color-status-connected);
+    box-shadow: 0 0 12px var(--color-status-connected-glow);
     animation: pulse 2s infinite;
 }
 
 .status.error {
-    background: #ff0000;
-    box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
+    background: var(--color-status-error);
+    box-shadow: 0 0 12px var(--color-status-error-glow);
 }
 
 @keyframes pulse {
@@ -157,16 +298,16 @@ button[data-tooltip]:hover::after {
     bottom: -30px;
     left: 50%;
     transform: translateX(-50%);
-    background: #0a0a0a;
-    color: #d4d4d4;
+    background: var(--color-bg-page);
+    color: var(--color-fg);
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     font-size: 11px;
     white-space: nowrap;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s;
-    border: 1px solid #d77757;
+    border: 1px solid var(--color-accent);
 }
 
 .status:hover::after {
@@ -185,7 +326,7 @@ button[data-tooltip]:hover::after {
 
 #terminal {
     flex: 1;
-    background: #1e1e1e;
+    background: var(--color-bg);
     min-height: 0;
 }
 
@@ -211,36 +352,36 @@ button[data-tooltip]:hover::after {
 
 /* Info footer */
 .info {
-    background: #2d2d30;
+    background: var(--color-bg-elevated);
     padding: 10px 20px;
-    border-top: 1px solid #3e3e42;
+    border-top: 1px solid var(--color-border);
     font-size: 12px;
-    color: #858585;
+    color: var(--color-fg-muted);
 }
 
 /* Tunnels section */
 .tunnels {
-    background: #252526;
+    background: var(--color-bg-card);
     padding: 15px 20px;
-    border-top: 1px solid #3e3e42;
+    border-top: 1px solid var(--color-border);
 }
 
 .tunnels h3 {
     margin-bottom: 10px;
-    color: #4ec9b0;
+    color: var(--color-syntax-cyan);
     font-size: 1.1rem;
 }
 
 .tunnel-item {
-    background: #2d2d30;
+    background: var(--color-bg-elevated);
     padding: 10px;
     margin-bottom: 8px;
-    border-radius: 4px;
-    border-left: 3px solid #4ec9b0;
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--color-syntax-cyan);
 }
 
 .tunnel-item a {
-    color: #569cd6;
+    color: var(--color-syntax-blue);
     text-decoration: none;
 }
 
@@ -272,14 +413,14 @@ button[data-tooltip]:hover::after {
 }
 
 .auth-prompt {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1.2rem;
     margin-bottom: 20px;
     font-weight: bold;
 }
 
 .auth-description {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.95rem;
     margin-bottom: 30px;
     line-height: 1.6;
@@ -290,7 +431,7 @@ button[data-tooltip]:hover::after {
 }
 
 .auth-input-label {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 0.9rem;
     margin-bottom: 8px;
     display: block;
@@ -299,12 +440,12 @@ button[data-tooltip]:hover::after {
 .auth-input {
     width: 100%;
     padding: 12px 16px;
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
-    color: #d4d4d4;
-    font-family: 'SF Mono', monospace;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
     font-size: 1.1rem;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     transition: all 0.3s ease;
     letter-spacing: 0.3em;
     text-align: center;
@@ -312,8 +453,8 @@ button[data-tooltip]:hover::after {
 
 .auth-input:focus {
     outline: none;
-    border-color: #d77757;
-    box-shadow: 0 0 8px rgba(215, 119, 87, 0.3);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-shadow-soft);
 }
 
 .auth-input::placeholder {
@@ -323,20 +464,20 @@ button[data-tooltip]:hover::after {
 .auth-button {
     width: 100%;
     padding: 12px 20px;
-    background: rgba(215, 119, 87, 0.15);
-    color: #d77757;
-    border: 1px solid rgba(215, 119, 87, 0.3);
-    border-radius: 50px;
-    font-family: 'SF Mono', monospace;
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-pill);
+    font-family: var(--font-mono);
     font-size: 1rem;
     cursor: pointer;
     transition: all 0.3s ease;
 }
 
 .auth-button:hover:not(:disabled) {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: #d77757;
-    box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-glow);
 }
 
 .auth-button:disabled {
@@ -345,31 +486,31 @@ button[data-tooltip]:hover::after {
 }
 
 .auth-error {
-    background: rgba(255, 68, 68, 0.1);
-    border: 1px solid rgba(255, 68, 68, 0.3);
-    color: #ff4444;
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger-border);
+    color: var(--color-danger);
     padding: 12px 16px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     margin-top: 20px;
     font-size: 0.9rem;
 }
 
 .auth-info {
-    background: rgba(79, 193, 255, 0.1);
-    border: 1px solid rgba(79, 193, 255, 0.3);
-    color: #4fc1ff;
+    background: var(--color-info-bg);
+    border: 1px solid var(--color-info-border);
+    color: var(--color-info);
     padding: 12px 16px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     margin-top: 20px;
     font-size: 0.9rem;
     line-height: 1.6;
 }
 
 .auth-info code {
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--color-bg-overlay-faint);
     padding: 2px 6px;
-    border-radius: 3px;
-    color: #d77757;
+    border-radius: var(--radius-sm);
+    color: var(--color-accent);
 }
 
 /* Launchpad screen styles */
@@ -385,14 +526,14 @@ button[data-tooltip]:hover::after {
 }
 
 .launchpad-header {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1.3rem;
     margin-bottom: 10px;
     font-weight: bold;
 }
 
 .launchpad-prompt {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.95rem;
     margin-bottom: 30px;
 }
@@ -402,20 +543,40 @@ button[data-tooltip]:hover::after {
 }
 
 .launchpad-section-title {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1rem;
     margin-bottom: 15px;
     font-weight: bold;
 }
 
+/* Heading row variant: text hugs left, inline action button hugs right.
+ * Used by the "recent projects" section so the + speed-dial sits beside
+ * the heading instead of floating in the chrome. */
+.launchpad-section-title--row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.launchpad-section-title__text {
+    /* Allow the text to truncate cleanly if a future heading runs long,
+     * without ever squeezing the action button. */
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .new-session-btn {
     width: 100%;
     padding: 16px 20px;
-    background: rgba(215, 119, 87, 0.15);
-    color: #d77757;
-    border: 1px solid rgba(215, 119, 87, 0.3);
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
     border-radius: 6px;
-    font-family: 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 1rem;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -426,9 +587,9 @@ button[data-tooltip]:hover::after {
 }
 
 .new-session-btn:hover {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: #d77757;
-    box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-glow);
 }
 
 .new-session-btn + .new-session-btn {
@@ -438,11 +599,11 @@ button[data-tooltip]:hover::after {
 .reset-server-btn {
     width: 100%;
     padding: 16px 20px;
-    background: rgba(215, 119, 87, 0.15);
-    color: #d77757;
-    border: 1px solid rgba(215, 119, 87, 0.3);
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
     border-radius: 6px;
-    font-family: 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 1rem;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -453,9 +614,9 @@ button[data-tooltip]:hover::after {
 }
 
 .reset-server-btn:hover {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: #d77757;
-    box-shadow: 0 0 12px rgba(215, 119, 87, 0.4);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-glow);
 }
 
 .project-list {
@@ -465,11 +626,11 @@ button[data-tooltip]:hover::after {
 }
 
 .project-item {
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
-    border-left: 3px solid #d77757;
+    background: var(--color-accent-bg-soft);
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-accent);
     padding: 14px 40px 14px 16px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.3s ease;
     position: relative;
@@ -477,20 +638,20 @@ button[data-tooltip]:hover::after {
 }
 
 .project-item:hover {
-    background: #323235;
-    border-color: #d77757;
-    box-shadow: 0 0 8px rgba(215, 119, 87, 0.2);
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
 }
 
 .project-name {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1rem;
     font-weight: bold;
     margin-bottom: 4px;
 }
 
 .project-path {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.85rem;
     margin-bottom: 6px;
     word-wrap: break-word;
@@ -499,7 +660,7 @@ button[data-tooltip]:hover::after {
 }
 
 .project-description {
-    color: #d4d4d4;
+    color: var(--color-fg);
     font-size: 0.9rem;
     line-height: 1.4;
 }
@@ -510,9 +671,9 @@ button[data-tooltip]:hover::after {
     right: 8px;
     width: 28px;
     height: 28px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: #858585;
+    color: var(--color-fg-muted);
     border: 1px solid transparent;
     font-size: 24px;
     line-height: 1;
@@ -525,15 +686,46 @@ button[data-tooltip]:hover::after {
 }
 
 .project-delete-btn:hover {
-    background: rgba(255, 68, 68, 0.2);
-    color: #ff4444;
-    border-color: #ff4444;
-    box-shadow: 0 0 8px rgba(255, 68, 68, 0.4);
+    background: var(--color-danger-bg-hover);
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+    box-shadow: 0 0 8px var(--color-danger-glow);
+    transform: scale(1.1);
+}
+
+/* Edit (pencil) button — sits immediately left of the delete ×. Calm
+ * neutral default, amber on hover so it never competes with the
+ * destructive red of delete. */
+.project-edit-btn {
+    position: absolute;
+    top: 8px;
+    right: 40px;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-fg-muted);
+    border: 1px solid transparent;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.project-edit-btn:hover {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border-color: var(--color-warning);
+    box-shadow: 0 0 8px var(--color-warning-border);
     transform: scale(1.1);
 }
 
 .launchpad-empty {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.9rem;
     font-style: italic;
     padding: 20px;
@@ -544,12 +736,12 @@ button[data-tooltip]:hover::after {
  * only restyle the summary marker so it's visible on the dark theme
  * and reads as an inline help affordance next to the section title. */
 .adopt-disclosure { display: inline-block; margin-left: 8px; font-size: 0.85rem; font-weight: normal; }
-.adopt-disclosure > summary { cursor: help; color: #d77757; list-style: none; display: inline; padding: 0 6px; border: 1px solid rgba(215,119,87,0.4); border-radius: 50%; }
+.adopt-disclosure > summary { cursor: help; color: var(--color-accent); list-style: none; display: inline; padding: 0 6px; border: 1px solid var(--color-accent-glow); border-radius: var(--radius-full); }
 .adopt-disclosure > summary::-webkit-details-marker { display: none; }
-.adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: #2d2d30; border: 1px solid #3e3e42; border-left: 3px solid #d77757; border-radius: 4px; color: #d4d4d4; font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
+.adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-left: 3px solid var(--color-accent); border-radius: var(--radius-md); color: var(--color-fg); font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
 .adopt-disclosure-body p + p { margin-top: 10px; }
-.adopt-disclosure-body code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 3px; color: #d77757; }
-.adopt-disclosure-code { background: rgba(215, 119, 87, 0.08); border: 1px solid rgba(215, 119, 87, 0.25); padding: 0.5rem; margin: 0.4rem 0; overflow-x: auto; font-size: 0.85em; white-space: pre-wrap; word-break: break-all; }
+.adopt-disclosure-body code { background: var(--color-bg-overlay-faint); padding: 2px 6px; border-radius: var(--radius-sm); color: var(--color-accent); }
+.adopt-disclosure-code { background: var(--color-accent-bg-soft); border: 1px solid var(--color-accent-bg-hover); padding: 0.5rem; margin: 0.4rem 0; overflow-x: auto; font-size: 0.85em; white-space: pre-wrap; word-break: break-all; }
 
 /* Adopt row: reuses .project-item base; overlays an attach button
  * in the upper-right slot the delete button normally occupies. */
@@ -560,26 +752,28 @@ button[data-tooltip]:hover::after {
     margin-top: 40px;
     padding: 20px 0;
     text-align: center;
-    border-top: 1px solid rgba(215, 119, 87, 0.2);
+    border-top: 1px solid var(--color-accent-border-soft);
 }
 
 .launchpad-footer a {
     display: inline-block;
     transition: all 0.3s ease;
     opacity: 0.7;
+    color: var(--color-fg-muted);
 }
 
 .launchpad-footer a:hover {
     opacity: 1;
     transform: scale(1.1);
+    color: var(--color-accent);
 }
 
 .launchpad-footer svg {
-    filter: drop-shadow(0 0 8px rgba(215, 119, 87, 0.3));
+    filter: drop-shadow(0 0 8px var(--color-accent-shadow-soft));
 }
 
 .launchpad-footer a:hover svg {
-    filter: drop-shadow(0 0 16px rgba(215, 119, 87, 0.6));
+    filter: drop-shadow(0 0 16px var(--color-accent-border-strong));
 }
 
 /* Terminal screen */
@@ -667,23 +861,23 @@ button[data-tooltip]:hover::after {
     right: 20px;
     width: 45px;
     height: 45px;
-    border-radius: 50%;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
+    border-radius: var(--radius-full);
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
     justify-content: center;
     align-items: center;
     cursor: pointer;
     z-index: 9998;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-modal);
 }
 
 .dpad-float-button:hover,
 .dpad-float-button:active {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: rgba(215, 119, 87, 0.5);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent-border-mid);
     transform: scale(1.05);
-    box-shadow: 0 0 16px rgba(215, 119, 87, 0.4);
+    box-shadow: 0 0 16px var(--color-accent-glow);
 }
 
 .dpad-overlay {
@@ -726,9 +920,9 @@ button[data-tooltip]:hover::after {
     left: -20px;
     width: 50px;
     height: 50px;
-    border-radius: 50%;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
+    border-radius: var(--radius-full);
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -737,8 +931,8 @@ button[data-tooltip]:hover::after {
 }
 
 .dpad-esc:active {
-    background: rgba(215, 119, 87, 0.35);
-    border-color: rgba(215, 119, 87, 0.6);
+    background: var(--color-accent-bg-active);
+    border-color: var(--color-accent-border-strong);
     transform: scale(0.95);
 }
 
@@ -748,9 +942,9 @@ button[data-tooltip]:hover::after {
     left: -20px;
     width: 50px;
     height: 50px;
-    border-radius: 50%;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
+    border-radius: var(--radius-full);
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -759,8 +953,8 @@ button[data-tooltip]:hover::after {
 }
 
 .dpad-shift-tab:active {
-    background: rgba(215, 119, 87, 0.35);
-    border-color: rgba(215, 119, 87, 0.6);
+    background: var(--color-accent-bg-active);
+    border-color: var(--color-accent-border-strong);
     transform: scale(0.95);
 }
 
@@ -770,9 +964,9 @@ button[data-tooltip]:hover::after {
     right: -20px;
     width: 50px;
     height: 50px;
-    border-radius: 50%;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
+    border-radius: var(--radius-full);
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -781,8 +975,8 @@ button[data-tooltip]:hover::after {
 }
 
 .dpad-tab:active {
-    background: rgba(215, 119, 87, 0.35);
-    border-color: rgba(215, 119, 87, 0.6);
+    background: var(--color-accent-bg-active);
+    border-color: var(--color-accent-border-strong);
     transform: scale(0.95);
 }
 
@@ -808,8 +1002,8 @@ button[data-tooltip]:hover::after {
     width: 75px;
     height: 75px;
     border-radius: 12px;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -822,14 +1016,14 @@ button[data-tooltip]:hover::after {
 
 .dpad-key:active,
 .dpad-key.active {
-    background: rgba(215, 119, 87, 0.35);
-    border-color: rgba(215, 119, 87, 0.6);
+    background: var(--color-accent-bg-active);
+    border-color: var(--color-accent-border-strong);
     transform: scale(0.92);
-    box-shadow: 0 0 20px rgba(215, 119, 87, 0.5);
+    box-shadow: 0 0 20px var(--color-accent-glow-strong);
 }
 
 .dpad-enter {
-    border-radius: 50%;
+    border-radius: var(--radius-full);
 }
 
 /* Mobile only display */
@@ -851,7 +1045,7 @@ button[data-tooltip]:hover::after {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
+    background: var(--color-bg-overlay);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -865,9 +1059,9 @@ button[data-tooltip]:hover::after {
 }
 
 .modal-content {
-    background: #1e1e1e;
-    border: 2px solid #d77757;
-    border-radius: 8px;
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
     padding: 30px;
     max-width: 500px;
     width: 90%;
@@ -886,7 +1080,7 @@ button[data-tooltip]:hover::after {
 }
 
 .modal-header {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1.3rem;
     margin-bottom: 20px;
     font-weight: bold;
@@ -901,7 +1095,7 @@ button[data-tooltip]:hover::after {
 }
 
 .modal-label {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 0.9rem;
     margin-bottom: 8px;
     display: block;
@@ -910,33 +1104,33 @@ button[data-tooltip]:hover::after {
 .modal-input {
     width: 100%;
     padding: 12px 16px;
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
-    color: #d4d4d4;
-    font-family: 'SF Mono', monospace;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
     font-size: 1rem;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     transition: all 0.3s ease;
 }
 
 .modal-input:focus {
     outline: none;
-    border-color: #d77757;
-    box-shadow: 0 0 8px rgba(215, 119, 87, 0.4);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-glow);
 }
 
 .modal-input::placeholder {
-    color: #666;
+    color: var(--color-fg-subtle);
 }
 
 .modal-description {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.85rem;
     margin-top: 6px;
 }
 
 .modal-message {
-    color: #d4d4d4;
+    color: var(--color-fg);
     font-size: 1rem;
     line-height: 1.5;
     margin-bottom: 10px;
@@ -950,8 +1144,8 @@ button[data-tooltip]:hover::after {
 
 .modal-btn {
     padding: 10px 24px;
-    border-radius: 4px;
-    font-family: 'SF Mono', monospace;
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
     font-size: 0.95rem;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -961,26 +1155,26 @@ button[data-tooltip]:hover::after {
 }
 
 .modal-btn-primary {
-    background: #d77757;
-    color: #1e1e1e;
-    border-color: #d77757;
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    border-color: var(--color-accent);
 }
 
 .modal-btn-primary:hover {
-    background: #e88768;
-    box-shadow: 0 0 12px rgba(215, 119, 87, 0.5);
+    background: var(--color-accent-strong);
+    box-shadow: 0 0 12px var(--color-accent-glow-strong);
     transform: translateY(-1px);
 }
 
 .modal-btn-secondary {
     background: transparent;
-    color: #d4d4d4;
-    border-color: #3e3e42;
+    color: var(--color-fg);
+    border-color: var(--color-border);
 }
 
 .modal-btn-secondary:hover {
-    background: #2d2d30;
-    border-color: #d77757;
+    background: var(--color-bg-elevated);
+    border-color: var(--color-accent);
 }
 
 /* Slash Commands Button */
@@ -990,24 +1184,24 @@ button[data-tooltip]:hover::after {
     left: 20px;
     width: 45px;
     height: 45px;
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
-    border-radius: 50%;
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
+    border-radius: var(--radius-full);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     z-index: 9998;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-modal);
 }
 
 .slash-commands-btn:hover,
 .slash-commands-btn:active {
-    background: rgba(215, 119, 87, 0.25);
-    border-color: rgba(215, 119, 87, 0.5);
+    background: var(--color-accent-bg-hover);
+    border-color: var(--color-accent-border-mid);
     transform: scale(1.05);
-    box-shadow: 0 0 16px rgba(215, 119, 87, 0.4);
+    box-shadow: 0 0 16px var(--color-accent-glow);
 }
 
 /* Slash Commands Modal */
@@ -1025,7 +1219,7 @@ button[data-tooltip]:hover::after {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
+    background: var(--color-bg-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1034,9 +1228,9 @@ button[data-tooltip]:hover::after {
 }
 
 .slash-commands-modal-content {
-    background: #1e1e1e;
-    border: 2px solid #d77757;
-    border-radius: 8px;
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
     width: 90%;
     max-width: 700px;
     max-height: 85vh;
@@ -1051,11 +1245,11 @@ button[data-tooltip]:hover::after {
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    border-bottom: 1px solid #3e3e42;
+    border-bottom: 1px solid var(--color-border);
 }
 
 .slash-commands-modal-content .modal-header h2 {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1.3rem;
     margin: 0;
     font-weight: bold;
@@ -1064,7 +1258,7 @@ button[data-tooltip]:hover::after {
 .modal-close {
     background: transparent;
     border: none;
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 2rem;
     line-height: 1;
     cursor: pointer;
@@ -1079,7 +1273,7 @@ button[data-tooltip]:hover::after {
 
 .modal-close:hover {
     transform: scale(1.1);
-    color: #e88768;
+    color: var(--color-accent-strong);
 }
 
 .slash-commands-modal-content .modal-body {
@@ -1093,7 +1287,7 @@ button[data-tooltip]:hover::after {
 }
 
 .common-commands-section h3 {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1rem;
     margin: 0 0 12px 0;
     font-weight: normal;
@@ -1108,13 +1302,13 @@ button[data-tooltip]:hover::after {
 }
 
 .command-button {
-    background: rgba(215, 119, 87, 0.15);
-    border: 2px solid rgba(215, 119, 87, 0.3);
-    color: #d4d4d4;
+    background: var(--color-accent-bg);
+    border: 2px solid var(--color-accent-border);
+    color: var(--color-fg);
     padding: 12px 10px;
     border-radius: 12px;
     cursor: pointer;
-    font-family: 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     transition: all 0.2s ease;
     text-align: center;
@@ -1129,20 +1323,20 @@ button[data-tooltip]:hover::after {
 
 .command-button:hover,
 .command-button:active {
-    background: rgba(215, 119, 87, 0.35);
-    border-color: rgba(215, 119, 87, 0.6);
-    color: #d77757;
+    background: var(--color-accent-bg-active);
+    border-color: var(--color-accent-border-strong);
+    color: var(--color-accent);
     transform: scale(0.95);
-    box-shadow: 0 0 20px rgba(215, 119, 87, 0.5);
+    box-shadow: 0 0 20px var(--color-accent-glow-strong);
 }
 
 .all-commands-section {
-    border-top: 1px solid #3e3e42;
+    border-top: 1px solid var(--color-border);
     padding-top: 20px;
 }
 
 .all-commands-section h3 {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 1rem;
     margin: 0 0 16px 0;
     font-weight: normal;
@@ -1156,7 +1350,7 @@ button[data-tooltip]:hover::after {
 }
 
 .command-category h4 {
-    color: #d77757;
+    color: var(--color-accent);
     font-size: 0.9rem;
     margin: 0 0 8px 0;
     font-weight: normal;
@@ -1164,10 +1358,10 @@ button[data-tooltip]:hover::after {
 }
 
 .command-item {
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
     padding: 12px 16px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
@@ -1176,20 +1370,20 @@ button[data-tooltip]:hover::after {
 }
 
 .command-item:hover {
-    background: #3e3e42;
-    border-color: #d77757;
+    background: var(--color-border);
+    border-color: var(--color-accent);
     transform: translateX(4px);
 }
 
 .command-name {
-    color: #d77757;
-    font-family: 'SF Mono', monospace;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
     font-size: 0.95rem;
     font-weight: bold;
 }
 
 .command-description {
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.85rem;
     line-height: 1.4;
 }
@@ -1200,11 +1394,11 @@ button[data-tooltip]:hover::after {
 }
 
 .folder-picker-path {
-    background: #2d2d30;
-    border: 1px solid #3e3e42;
-    border-radius: 4px;
-    color: #d4d4d4;
-    font-family: 'SF Mono', monospace;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     padding: 10px 12px;
     margin-bottom: 12px;
@@ -1218,13 +1412,13 @@ button[data-tooltip]:hover::after {
 }
 
 .folder-picker-toolbar-btn {
-    background: rgba(215, 119, 87, 0.1);
-    border: 1px solid rgba(215, 119, 87, 0.3);
-    color: #d77757;
-    font-family: 'SF Mono', monospace;
+    background: var(--color-accent-bg-faint);
+    border: 1px solid var(--color-accent-border);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     padding: 8px 14px;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.2s ease;
     width: auto;
@@ -1232,9 +1426,9 @@ button[data-tooltip]:hover::after {
 }
 
 .folder-picker-toolbar-btn:hover:not(:disabled) {
-    background: rgba(215, 119, 87, 0.2);
-    border-color: #d77757;
-    box-shadow: 0 0 8px rgba(215, 119, 87, 0.3);
+    background: var(--color-accent-border-soft);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-shadow-soft);
 }
 
 .folder-picker-toolbar-btn:disabled {
@@ -1243,9 +1437,9 @@ button[data-tooltip]:hover::after {
 }
 
 .folder-picker-list {
-    background: #1e1e1e;
-    border: 1px solid #3e3e42;
-    border-radius: 4px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
     max-height: 320px;
     overflow-y: auto;
     margin-bottom: 12px;
@@ -1256,11 +1450,11 @@ button[data-tooltip]:hover::after {
     align-items: center;
     gap: 10px;
     padding: 10px 14px;
-    color: #d4d4d4;
-    font-family: 'SF Mono', monospace;
+    color: var(--color-fg);
+    font-family: var(--font-mono);
     font-size: 0.9rem;
     cursor: pointer;
-    border-bottom: 1px solid #2d2d30;
+    border-bottom: 1px solid var(--color-border-subtle);
     transition: background 0.15s ease;
 }
 
@@ -1269,8 +1463,8 @@ button[data-tooltip]:hover::after {
 }
 
 .folder-picker-item:hover {
-    background: #2d2d30;
-    color: #d77757;
+    background: var(--color-bg-elevated);
+    color: var(--color-accent);
 }
 
 .folder-picker-icon {
@@ -1287,7 +1481,7 @@ button[data-tooltip]:hover::after {
 .folder-picker-empty {
     padding: 24px;
     text-align: center;
-    color: #858585;
+    color: var(--color-fg-muted);
     font-size: 0.9rem;
     font-style: italic;
 }
@@ -1338,22 +1532,22 @@ button[data-tooltip]:hover::after {
     flex-direction: column;
     padding: 10px 12px;
     margin-bottom: 6px;
-    background: rgba(215, 119, 87, 0.08);
-    border-radius: 4px;
+    background: var(--color-accent-bg-soft);
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease;
 }
 
 .running-session-row:hover {
-    background: rgba(215, 119, 87, 0.14);
+    background: rgba(215, 119, 87, 0.14); /* TODO: theme-token candidate (accent-bg-mid) */
 }
 
 .running-session-row.owned {
-    border-left: 3px solid #4ade80;
+    border-left: 3px solid var(--color-success);
 }
 
 .running-session-row.external {
-    border-left: 3px solid #fbbf24;
+    border-left: 3px solid var(--color-warning);
 }
 
 .running-session-top {
@@ -1366,25 +1560,25 @@ button[data-tooltip]:hover::after {
 .running-session-dot {
     width: 8px;
     height: 8px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     display: inline-block;
     animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
 .running-session-row.owned .running-session-dot {
-    background: #4ade80;
-    box-shadow: 0 0 8px #4ade80;
+    background: var(--color-success);
+    box-shadow: 0 0 8px var(--color-success);
 }
 
 .running-session-row.external .running-session-dot {
-    background: #fbbf24;
-    box-shadow: 0 0 8px #fbbf24;
+    background: var(--color-warning);
+    box-shadow: 0 0 8px var(--color-warning);
 }
 
 .running-session-name {
     flex: 1;
     font-weight: bold;
-    color: var(--accent, #d77757);
+    color: var(--color-accent);
 }
 
 .running-session-kill {
@@ -1394,16 +1588,16 @@ button[data-tooltip]:hover::after {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #e88;
-    border-radius: 4px;
+    color: var(--color-danger-soft);
+    border-radius: var(--radius-md);
     flex-shrink: 0;
     transition: color 120ms ease, transform 120ms ease, background 120ms ease;
 }
 
 .running-session-kill:hover {
-    color: #ff6b6b;
+    color: var(--color-danger-strong);
     transform: scale(1.15);
-    background: rgba(255, 107, 107, 0.12);
+    background: var(--color-danger-strong-bg);
 }
 
 .running-session-badges {
@@ -1417,16 +1611,16 @@ button[data-tooltip]:hover::after {
 .badge {
     font-size: 0.7em;
     padding: 2px 6px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     letter-spacing: 0.5px;
 }
 
-.badge-running { background: #2a3a2a; color: #4ade80; }
-.badge-tmux    { background: #2a2a3a; color: #8899ff; }
-.badge-external { background: #4a3a2a; color: #fbbf24; }
+.badge-running  { background: var(--color-badge-owned-bg);    color: var(--color-badge-owned-fg); }
+.badge-tmux     { background: var(--color-badge-tmux-bg);     color: var(--color-badge-tmux-fg); }
+.badge-external { background: var(--color-badge-external-bg); color: var(--color-badge-external-fg); }
 
 .running-session-age {
-    color: #888;
+    color: var(--color-fg-faint);
     font-size: 0.75em;
     align-self: center;
 }
@@ -1435,3 +1629,322 @@ button[data-tooltip]:hover::after {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.55; }
 }
+
+/* =====================================================================
+ * Phase 2 — Theme selector
+ * ---------------------------------------------------------------------
+ * Native <select> mounted into `.header .controls` by themeSelector.js.
+ * Sits to the LEFT of the destroy button. Theme-aware via CSS vars so
+ * each bundled theme re-skins it automatically with no per-theme rule.
+ * Native control = free keyboard nav + accessible by default. The
+ * dropdown is constrained to 60vh via `size` proxy on the popup
+ * (browser-specific; we set max-height as a hint where supported).
+ * ===================================================================== */
+.theme-selector {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 26px 6px 10px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    height: 30px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    /* Caret rendered as inline SVG in currentColor so it tracks the foreground
+     * across all themes — encoded background-image instead of an extra
+     * pseudo-element keeps this a pure single-selector rule. */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M3 5l3 3 3-3'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 10px 10px;
+    max-width: 160px;
+}
+
+.theme-selector:hover {
+    border-color: var(--color-accent);
+    background-color: var(--color-bg-hover);
+}
+
+.theme-selector:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-bg);
+}
+
+/* Native <select> popup max-height — supported in Chromium-based browsers
+ * via the `size` attribute; this rule is a hint that some UA stylesheets
+ * honor for the dropdown panel itself. */
+.theme-selector option {
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    max-height: 60vh;
+}
+
+/* =====================================================================
+ * New-action speed-dial FAB
+ * ---------------------------------------------------------------------
+ * Floating "+" anchored to the top-right of the viewport (visually
+ * sitting just under the header's right edge). Tap to fan out 3
+ * sub-action buttons in a vertical column. All colors flow through
+ * theme tokens so every theme retints automatically. All animations
+ * use transform + opacity ONLY (GPU compositor) — no layout thrash.
+ * Reduced-motion gated at the bottom of the block.
+ * ===================================================================== */
+/* ---- Inline FAB wrapper (lives inside the section heading row) ----- */
+/* The wrapper is the absolute-positioning context for the fan-out menu.
+ * It sits as a flex child of .launchpad-section-title--row, so .hidden
+ * isn't needed (it shows/hides naturally with the launchpad screen). */
+.new-fab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    pointer-events: auto;
+    /* Stay above sibling content but no longer needs to clear a fixed
+     * header. Menu/backdrop still get their own z layers below. */
+    z-index: 2;
+}
+
+.new-fab.hidden { display: none; }
+
+/* ---- Trigger ("+" / "×") — ghost style ----------------------------- */
+.new-fab__trigger {
+    /* Outline/ghost: transparent fill, visible border + readable glyph at rest.
+     * Border + glyph use --color-fg-muted (always contrasts against bg because
+     * regular text uses it), so the trigger reads on every theme without
+     * needing a solid accent fill. Accent retint kicks in on :hover /
+     * :focus-visible / open only. */
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--color-fg-muted);
+    border: 2px solid var(--color-fg-muted);
+    box-shadow: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.85;
+    transition: color 160ms ease,
+                border-color 160ms ease,
+                background 160ms ease,
+                opacity 160ms ease,
+                transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    will-change: transform;
+}
+
+.new-fab__trigger:hover:not(:disabled) {
+    opacity: 1;
+}
+
+.new-fab__trigger:hover:not(:disabled) {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg-soft, transparent);
+    transform: scale(1.04);
+}
+
+.new-fab__trigger:active:not(:disabled) {
+    transform: scale(0.94);
+    background: var(--color-accent-bg-soft, transparent);
+}
+
+.new-fab__trigger:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    /* Keep ghost discipline on focus — no solid fill */
+    background: transparent;
+}
+
+/* When OPEN: × glyph + border in accent color (still ghost — no fill) */
+.new-fab--open .new-fab__trigger {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg-soft, transparent);
+}
+
+.new-fab__plus {
+    transition: transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform-origin: 50% 50%;
+    will-change: transform;
+}
+
+/* When open: rotate the + into an × */
+.new-fab--open .new-fab__plus {
+    transform: rotate(45deg);
+}
+
+/* ---- Menu (vertical fan-out column) -------------------------------- */
+.new-fab__menu {
+    position: absolute;
+    top: 44px;              /* trigger height (36) + 8px gap */
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    padding-top: 4px;
+    pointer-events: none;   /* off until open */
+    /* Sit above adjacent project rows when fanned out */
+    z-index: 3;
+}
+
+.new-fab--open .new-fab__menu {
+    pointer-events: auto;
+}
+
+.new-fab__item {
+    /* Pill row: circular icon + slide-in label. Width grows from icon-only
+     * to full pill once open so the label slides into existing space. */
+    width: auto;
+    height: 40px;
+    padding: 0 14px 0 0;
+    border-radius: 20px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.02em;
+    /* Initial (closed) state: collapsed, hidden, slightly above */
+    opacity: 0;
+    transform: translateY(-14px) scale(0.5);
+    transform-origin: top right;
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 180ms ease-out,
+                background 160ms ease,
+                color 160ms ease,
+                border-color 160ms ease,
+                box-shadow 160ms ease;
+    will-change: transform, opacity;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.new-fab__item:hover:not(:disabled) {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    border-color: var(--color-accent-strong);
+    box-shadow: 0 4px 14px var(--color-accent-shadow-soft);
+}
+
+.new-fab__item:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.new-fab__icon {
+    width: 38px;
+    height: 38px;
+    margin-left: 1px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 160ms ease, color 160ms ease;
+}
+
+.new-fab__item:hover:not(:disabled) .new-fab__icon {
+    background: var(--color-accent-bg-hover);
+    color: var(--color-on-accent);
+}
+
+.new-fab__label {
+    white-space: nowrap;
+    /* Label slides in from the right when item appears */
+    opacity: 0;
+    transform: translateX(14px);
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 180ms ease-out;
+    will-change: transform, opacity;
+}
+
+/* ---- OPEN state: stagger items in (top → bottom) ------------------- */
+.new-fab--open .new-fab__item {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+.new-fab--open .new-fab__item:nth-child(1) { transition-delay: 0ms; }
+.new-fab--open .new-fab__item:nth-child(2) { transition-delay: 60ms; }
+.new-fab--open .new-fab__item:nth-child(3) { transition-delay: 120ms; }
+
+.new-fab--open .new-fab__label {
+    opacity: 1;
+    transform: translateX(0);
+}
+.new-fab--open .new-fab__item:nth-child(1) .new-fab__label { transition-delay: 80ms; }
+.new-fab--open .new-fab__item:nth-child(2) .new-fab__label { transition-delay: 140ms; }
+.new-fab--open .new-fab__item:nth-child(3) .new-fab__label { transition-delay: 200ms; }
+
+/* ---- CLOSE state: reverse-stagger out (bottom → top) --------------- */
+/* When .new-fab--open is removed, default rules apply (opacity 0,
+ * collapsed). Stagger the OUT animation so item 3 leaves first. */
+.new-fab:not(.new-fab--open) .new-fab__item {
+    transition: transform 150ms cubic-bezier(0.4, 0, 1, 1),
+                opacity 130ms ease-in,
+                background 160ms ease,
+                color 160ms ease,
+                border-color 160ms ease,
+                box-shadow 160ms ease;
+}
+.new-fab:not(.new-fab--open) .new-fab__item:nth-child(1) { transition-delay: 100ms; }
+.new-fab:not(.new-fab--open) .new-fab__item:nth-child(2) { transition-delay: 50ms; }
+.new-fab:not(.new-fab--open) .new-fab__item:nth-child(3) { transition-delay: 0ms; }
+.new-fab:not(.new-fab--open) .new-fab__label {
+    transition: transform 120ms ease-in, opacity 100ms ease-in;
+    transition-delay: 0ms;
+}
+
+/* ---- Backdrop: subtle dim + click-outside catcher ------------------ */
+.new-fab__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1050;          /* under the FAB (1100), over header (1000) */
+    background: rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease-out;
+    will-change: opacity;
+}
+
+.new-fab__backdrop[data-open="1"] {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ---- Mobile tweaks ------------------------------------------------- */
+@media (max-width: 600px) {
+    .new-fab__trigger { width: 34px; height: 34px; }
+    .new-fab__menu { top: 42px; gap: 8px; }
+    .new-fab__item { height: 38px; font-size: 0.74rem; }
+    .new-fab__icon { width: 36px; height: 36px; }
+}
+
+/* ---- Reduced motion: kill all transitions/animations --------------- */
+@media (prefers-reduced-motion: reduce) {
+    .new-fab__trigger,
+    .new-fab__plus,
+    .new-fab__item,
+    .new-fab__label,
+    .new-fab__backdrop {
+        transition: none !important;
+        animation: none !important;
+    }
+    .new-fab--open .new-fab__item,
+    .new-fab--open .new-fab__label {
+        transition-delay: 0ms !important;
+    }
+}
+

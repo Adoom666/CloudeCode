@@ -4,6 +4,40 @@
 
 console.log('[Terminal Module] Loading...');
 
+/**
+ * Default xterm palette — used if window.Themes hasn't initialized yet
+ * (e.g. /api/v1/themes failed AND no synchronous fallback ran). Phase 4-5:
+ * the actual theme assigned to xterm comes from
+ *   Themes.getActiveGlobal()?.xterm ?? DEFAULT_XTERM_THEME
+ * at construction time, then the registry's xtermThemeChange listener
+ * swaps it on subsequent applyGlobal()/applySession()/clearSession() calls.
+ *
+ * Keep these values in lock-step with the Claude fallback in registry.js
+ * and the :root block in client/css/styles.css. If one drifts the others
+ * should follow on the same commit.
+ */
+const DEFAULT_XTERM_THEME = {
+    background: '#1e1e1e',
+    foreground: '#d4d4d4',
+    cursor: '#d4d4d4',
+    black: '#000000',
+    red: '#cd3131',
+    green: '#0dbc79',
+    yellow: '#e5e510',
+    blue: '#2472c8',
+    magenta: '#bc3fbc',
+    cyan: '#11a8cd',
+    white: '#e5e5e5',
+    brightBlack: '#666666',
+    brightRed: '#f14c4c',
+    brightGreen: '#23d18b',
+    brightYellow: '#f5f543',
+    brightBlue: '#3b8eea',
+    brightMagenta: '#d670d6',
+    brightCyan: '#29b8db',
+    brightWhite: '#ffffff'
+};
+
 class Terminal {
     constructor() {
         this.ws = null;
@@ -114,6 +148,15 @@ class Terminal {
         // Use window.Terminal to get xterm.js Terminal, not our wrapper class
         const XTerminal = window.Terminal;
 
+        // Phase 4-5: theme drawn from registry. If Themes hasn't initialized
+        // yet (registry init is post-auth) we fall back to DEFAULT_XTERM_THEME.
+        // The `xtermThemeChange` subscription below picks up subsequent
+        // applyGlobal/applySession/clearSession calls and swaps the palette
+        // live without re-creating the Terminal.
+        const initialXtermTheme =
+            (window.Themes && window.Themes.getActiveGlobal && window.Themes.getActiveGlobal()?.xterm)
+            || DEFAULT_XTERM_THEME;
+
         this.term = new XTerminal({
             cursorBlink: true,
             fontSize: 14,
@@ -121,27 +164,7 @@ class Terminal {
             fontWeight: 'normal',
             fontWeightBold: 'bold',
             allowTransparency: false,
-            theme: {
-                background: '#1e1e1e',
-                foreground: '#d4d4d4',
-                cursor: '#d4d4d4',
-                black: '#000000',
-                red: '#cd3131',
-                green: '#0dbc79',
-                yellow: '#e5e510',
-                blue: '#2472c8',
-                magenta: '#bc3fbc',
-                cyan: '#11a8cd',
-                white: '#e5e5e5',
-                brightBlack: '#666666',
-                brightRed: '#f14c4c',
-                brightGreen: '#23d18b',
-                brightYellow: '#f5f543',
-                brightBlue: '#3b8eea',
-                brightMagenta: '#d670d6',
-                brightCyan: '#29b8db',
-                brightWhite: '#ffffff'
-            },
+            theme: initialXtermTheme,
             allowProposedApi: true,
             convertEol: false,
             scrollback: 10000,
@@ -162,12 +185,33 @@ class Terminal {
         this.fitAddon = new FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
 
-        // Load WebGL renderer
+        // Load WebGL renderer (hardened against context loss).
+        //
+        // iOS Safari (and any GPU under memory pressure) can drop the WebGL
+        // context at any time. Without an onContextLoss handler the xterm
+        // viewport silently goes black and stays that way for the rest of
+        // the session. The recovery path is documented by the xterm.js
+        // maintainers since 2021:
+        //   1. dispose() the addon — it cannot recover the lost context
+        //   2. xterm transparently falls back to its built-in DOM renderer
+        //      (the renderer in use when no canvas/webgl addon is loaded)
+        //
+        // We don't auto-reload a fresh WebglAddon here: a context-loss
+        // event implies system pressure, and re-creating the GL context
+        // is what got us into trouble in the first place. The DOM renderer
+        // is slower but stable, which is the right tradeoff under pressure.
+        // A page reload (user-initiated) is the clean path back to WebGL.
         try {
-            const webglAddon = new WebglAddon.WebglAddon();
-            this.term.loadAddon(webglAddon);
+            this._webglAddon = new WebglAddon.WebglAddon();
+            this.term.loadAddon(this._webglAddon);
+            this._webglAddon.onContextLoss(() => {
+                console.warn('Terminal: WebGL context lost — disposing addon, falling back to DOM renderer');
+                try { this._webglAddon.dispose(); } catch (_) { /* idempotent */ }
+                this._webglAddon = null;
+            });
         } catch (e) {
-            console.warn('WebGL addon not available, using canvas renderer', e);
+            console.warn('Terminal: WebGL addon unavailable — using DOM renderer', e);
+            this._webglAddon = null;
         }
 
         // Load Unicode 11 addon
@@ -180,6 +224,25 @@ class Terminal {
         }
 
         this.term.open(document.getElementById('terminal'));
+
+        // Phase 4-5: subscribe to theme palette changes from the registry.
+        // applyGlobal() / applySession() / clearSession() all funnel through
+        // here. xterm.js (with WebglAddon since 2021) listens to its own
+        // optionsChanged event and re-uploads the glyph atlas automatically
+        // — we do NOT need to call term.refresh() preemptively. If stale
+        // paint is observed empirically we add an explicit refresh here,
+        // but the spec calls out the YAGNI on this and current xterm
+        // versions handle it cleanly.
+        if (window.Themes && typeof window.Themes.onXtermThemeChange === 'function') {
+            this._unsubscribeXtermTheme = window.Themes.onXtermThemeChange((newXtermTheme) => {
+                if (!this.term || !newXtermTheme) return;
+                try {
+                    this.term.options.theme = newXtermTheme;
+                } catch (e) {
+                    console.warn('Terminal: failed to apply xterm theme', e);
+                }
+            });
+        }
 
         // Wire Shift+Enter interceptor. Handler body lives in
         // _applyKeyHandlers() so we can re-attach after term.reset()

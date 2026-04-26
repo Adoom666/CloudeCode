@@ -1,4 +1,36 @@
 // Main app bootstrap — extracted from index.html for CSP compliance (script-src 'self').
+
+// SESSION-IDENTITY-V2 — header identity asset. Single source of truth so the
+// path is editable from one spot (e.g. swap to .png on platforms without SVG).
+const HEADER_BRAND_ICON_URL = '/static/assets/cloude-icon.svg';
+const HEADER_BRAND_EMOJI = '☁️'; // ☁️ cloud emoji
+
+/**
+ * SESSION-IDENTITY-V2 — swap the header icon + title in one DOM operation.
+ *
+ * @param {{ icon: 'brand' | 'cloude', title: string }} opts
+ *   icon='brand' → cloud emoji (launchpad / auth)
+ *   icon='cloude' → CloudeCode brand SVG (terminal)
+ *   title → text content of the title span (alongside the .version chip)
+ */
+function setHeaderIdentity(opts) {
+    var iconEl = document.getElementById('header-icon');
+    var textEl = document.getElementById('header-title-text');
+    if (iconEl) {
+        if (opts.icon === 'cloude') {
+            // Use an <img> rather than inlining the SVG so the asset can be
+            // swapped without re-editing markup, and so the browser caches it.
+            iconEl.innerHTML = '<img src="' + HEADER_BRAND_ICON_URL + '" alt="" />';
+        } else {
+            iconEl.innerHTML = '';
+            iconEl.textContent = HEADER_BRAND_EMOJI;
+        }
+    }
+    if (textEl) {
+        textEl.textContent = opts.title || 'Cloude Code';
+    }
+}
+
 /**
  * App Controller - Manages application state and screen transitions
  */
@@ -24,6 +56,14 @@ class AppController {
         this.logoutBtn = document.getElementById('logoutBtn');
         this.destroyBtn = document.getElementById('destroySessionBtn');
 
+        // Phase 2: paint persisted theme id onto <html> SYNCHRONOUSLY before
+        // any async work — kills FOUC for repeat visitors. The full manifest
+        // (cssVars + xterm) loads post-auth via Themes.init() below; until
+        // then the :root defaults from styles.css already render claude.
+        if (window.Themes && typeof window.Themes.applyStoredThemeIdSync === 'function') {
+            try { window.Themes.applyStoredThemeIdSync(); } catch (_) { /* no-op */ }
+        }
+
         // Setup event listeners
         this.setupEventListeners();
 
@@ -40,6 +80,10 @@ class AppController {
             console.log('App: User has token, verifying...');
             const isValid = await window.Auth.verifyToken();
             if (isValid) {
+                // Phase 2: load full theme manifests + mount selector BEFORE
+                // launchpad render or any deep-link resolves. Failure here is
+                // non-fatal — registry has its own claude fallback.
+                await this._initThemes();
                 this.showLaunchpad();
             } else {
                 console.log('App: Token invalid, showing auth');
@@ -48,6 +92,28 @@ class AppController {
         } else {
             console.log('App: No token, showing auth');
             this.showAuth();
+        }
+    }
+
+    /**
+     * Phase 2: bring up the theme registry and mount the header selector.
+     * Called post-auth so the manifest fetch goes through with a valid
+     * Bearer token. Idempotent — safe to call again on re-auth.
+     */
+    async _initThemes() {
+        if (!window.Themes) return;
+        try {
+            await window.Themes.init();
+        } catch (e) {
+            console.warn('App: Themes.init failed — registry will use fallback', e);
+        }
+        try {
+            const controls = document.querySelector('.header .controls');
+            if (controls && window.ThemeSelector) {
+                window.ThemeSelector.mount(controls);
+            }
+        } catch (e) {
+            console.warn('App: ThemeSelector.mount failed', e);
         }
     }
 
@@ -99,7 +165,9 @@ class AppController {
         // Auth events
         window.addEventListener('authenticated', () => {
             console.log('App: User authenticated');
-            this.showLaunchpad();
+            // Bring up the theme registry post-auth (for the TOTP-flow path
+            // that doesn't go through init()'s `if (verifyToken())` branch).
+            this._initThemes().finally(() => this.showLaunchpad());
         });
 
         window.addEventListener('auth-required', () => {
@@ -150,6 +218,24 @@ class AppController {
         this.logoutBtn.classList.add('hidden');
         this.destroyBtn.classList.add('hidden');
         this.currentScreen = 'auth';
+        // Leaving the terminal: drop any session-scoped theme so xterm
+        // and the terminal screen revert to the global theme on next entry.
+        if (window.Themes && typeof window.Themes.clearSession === 'function') {
+            window.Themes.clearSession();
+        }
+        // SESSION-IDENTITY-V2 — clear active-session pin scope and restore
+        // the user's global localStorage theme + brand identity.
+        if (window.Themes) {
+            if (typeof window.Themes.setActiveSession === 'function') {
+                window.Themes.setActiveSession(null);
+            }
+            if (typeof window.Themes.applyTheme === 'function') {
+                var stored = null;
+                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
+                window.Themes.applyTheme(stored || 'claude', { persist: false });
+            }
+        }
+        setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
     }
 
     /**
@@ -162,6 +248,25 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.add('hidden');
         this.currentScreen = 'launchpad';
+        // Leaving the terminal: drop the session theme so the launchpad
+        // chrome renders under pure global-theme rules and so the next
+        // session entry re-applies cleanly from a known baseline.
+        if (window.Themes && typeof window.Themes.clearSession === 'function') {
+            window.Themes.clearSession();
+        }
+        // SESSION-IDENTITY-V2 — leave per-session pin scope and restore
+        // the global localStorage theme + brand identity on the launchpad.
+        if (window.Themes) {
+            if (typeof window.Themes.setActiveSession === 'function') {
+                window.Themes.setActiveSession(null);
+            }
+            if (typeof window.Themes.applyTheme === 'function') {
+                var stored = null;
+                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
+                window.Themes.applyTheme(stored || 'claude', { persist: false });
+            }
+        }
+        setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
 
         // Hide D-pad on launchpad
         if (window.DPad) {
@@ -199,6 +304,37 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+
+        // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
+        // ThemeSelector swaps will PATCH the server-side pin instead of
+        // writing localStorage. Prefer tmux_session (canonical client-side
+        // handle) and fall back to session.id for the create-path response
+        // shape that doesn't carry tmux_session.
+        var sessionName = (session && (session.tmux_session || session.name || session.id)) || null;
+        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
+            window.Themes.setActiveSession(sessionName);
+        }
+        // If a pinned theme came back on the session payload, paint it WITHOUT
+        // persisting (server is already authoritative on the pin).
+        if (session && session.pinned_theme && window.Themes
+            && typeof window.Themes.applyTheme === 'function') {
+            window.Themes.applyTheme(session.pinned_theme, { persist: false });
+        }
+        // Header identity: brand icon + session name as title.
+        setHeaderIdentity({
+            icon: 'cloude',
+            title: sessionName || 'session'
+        });
+
+        // Phase 4-5: scope the terminal screen + xterm palette to this
+        // session's agent theme. If session.agent_type is null/undefined
+        // (Phase 6 hasn't shipped yet, or the agent is unknown to the
+        // theme registry), applySession() falls through to clearSession()
+        // — meaning the global theme also rules the terminal. That's the
+        // desired fallback: no flicker, no broken-state.
+        if (window.Themes && typeof window.Themes.applySession === 'function') {
+            window.Themes.applySession(session && session.agent_type);
+        }
 
         // Initialize terminal if first time
         if (!window.TerminalController.term) {
@@ -257,6 +393,38 @@ class AppController {
         this.logoutBtn.classList.remove('hidden');
         this.destroyBtn.classList.remove('hidden');
         this.currentScreen = 'terminal';
+
+        // SESSION-IDENTITY-V2 — same wiring as showTerminal(). The session
+        // arg here is typically a SessionInfo (carries tmux_session +
+        // pinned_theme at the top level); fall back to nested .session for
+        // older callers that pass the inner Session row.
+        var inner = (session && session.session) ? session.session : session;
+        var sessionName = (session && (session.tmux_session || session.name))
+            || (inner && (inner.tmux_session || inner.name || inner.id))
+            || null;
+        var pinnedTheme = (session && session.pinned_theme)
+            || (inner && inner.pinned_theme)
+            || null;
+        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
+            window.Themes.setActiveSession(sessionName);
+        }
+        if (pinnedTheme && window.Themes && typeof window.Themes.applyTheme === 'function') {
+            window.Themes.applyTheme(pinnedTheme, { persist: false });
+        }
+        setHeaderIdentity({
+            icon: 'cloude',
+            title: sessionName || 'session'
+        });
+
+        // Phase 4-5: re-scope to the session's theme on re-entry. Same
+        // null-tolerant semantics as showTerminal() — agent_type may be
+        // missing in pre-Phase-6 builds; registry handles the fallback.
+        var agentType = (session && session.agent_type)
+            || (inner && inner.agent_type)
+            || null;
+        if (window.Themes && typeof window.Themes.applySession === 'function') {
+            window.Themes.applySession(agentType);
+        }
 
         // First-time init if the user never hit showTerminal() this page load
         // (e.g. refreshed directly onto launchpad while session was running).

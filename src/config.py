@@ -1,6 +1,6 @@
 """Configuration management using pydantic-settings."""
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
@@ -10,10 +10,40 @@ import socket
 
 
 class ProjectConfig(BaseModel):
-    """Configuration for a predefined project."""
+    """Configuration for a predefined project.
+
+    Phase 6 — agent-type labeling. ``agent_type`` is the default agent CLI
+    used when sessions for this project are created without an explicit
+    override. Defaults to ``"claude"`` so existing config.json files (which
+    have no agent_type field) continue to deserialize and behave exactly
+    as before. Per-project override; the explicit ``agent_type`` on the
+    create-session request still takes precedence.
+    """
     name: str
     path: str
     description: Optional[str] = None
+    agent_type: Literal["claude", "codex", "hermes", "openclaw"] = "claude"
+
+
+class AgentsConfig(BaseModel):
+    """Per-agent shell command strings used to launch each agent CLI.
+
+    Phase 6 — agent-type labeling. Each command is a single shell-string
+    that the tmux backend passes verbatim as ``new-session ... <command>``;
+    tmux itself parses the string as a shell command (no shlex.split on
+    our side — see ``TmuxBackend.start`` and the existing claude path
+    which builds the exact same shape: ``f"{claude_cli} --flag"``).
+
+    Defaults match the corrected CLI invocations:
+      - claude:   ``claude --dangerously-skip-permissions``
+      - codex:    ``codex``
+      - hermes:   ``hermes``        (NOT ``hermes-agent``)
+      - openclaw: ``openclaw tui``  (NOT bare ``openclaw``)
+    """
+    claude_command: str = "claude --dangerously-skip-permissions"
+    codex_command: str = "codex"
+    hermes_command: str = "hermes"
+    openclaw_command: str = "openclaw tui"
 
 
 class SessionConfig(BaseModel):
@@ -148,6 +178,7 @@ class AuthConfig(BaseModel):
     tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
 
 
 class Settings(BaseSettings):
@@ -329,6 +360,58 @@ class Settings(BaseSettings):
         # 4. Fallback to just "claude" and trust PATH
         return "claude"
 
+    def get_agent_command(self, agent_type: Optional[str]) -> str:
+        """Resolve the shell command string for a given agent_type.
+
+        Phase 6 — agent-type labeling. Returns the shell-string command
+        registered under ``AuthConfig.agents`` for the requested agent.
+        Unknown / None / empty agent_type falls back to claude. Falls
+        back to the AgentsConfig defaults if the auth config can't be
+        loaded (e.g. unit-test paths that bypass setup_auth.py).
+
+        For ``"claude"`` specifically, the env-var ``CLAUDE_CLI_PATH``
+        (a.k.a. ``settings.claude_cli_path``) still wins iff the user
+        hasn't customized ``agents.claude_command`` in config.json —
+        i.e. when the configured value still equals the model default.
+        This preserves the existing pre-Phase-6 env-override behavior
+        without forcing operators to migrate their .env to config.json.
+
+        Returned shape: a single shell string (e.g. ``"claude --foo"``),
+        which the tmux backend hands directly to ``new-session ... <cmd>``.
+        Matches the existing claude path that builds
+        ``f"{claude_cli} --dangerously-skip-permissions"``.
+        """
+        # Resolve AgentsConfig — tolerate auth-config load failure so the
+        # caller (create_session) doesn't blow up if config.json is missing
+        # in a degraded environment.
+        try:
+            agents = self.load_auth_config().agents
+        except Exception:
+            agents = AgentsConfig()
+
+        normalized = (agent_type or "claude").lower()
+
+        if normalized == "codex":
+            return agents.codex_command
+        if normalized == "hermes":
+            return agents.hermes_command
+        if normalized == "openclaw":
+            return agents.openclaw_command
+
+        # claude (or unknown → fall back to claude). Honor CLAUDE_CLI_PATH
+        # env var when the operator hasn't customized claude_command in
+        # config.json (i.e. it's still the model default).
+        default_claude = AgentsConfig.model_fields["claude_command"].default
+        if agents.claude_command == default_claude:
+            cli_path = self.get_claude_cli_path()
+            # Only swap in the env-resolved path when it actually differs
+            # from a bare ``claude`` (otherwise just use the model default
+            # verbatim — keeps the string identical for assertion-friendly
+            # callers).
+            if cli_path and cli_path != "claude":
+                return f"{cli_path} --dangerously-skip-permissions"
+        return agents.claude_command
+
     def load_auth_config(self) -> AuthConfig:
         """
         Load authentication configuration from JSON file + .env secrets.
@@ -416,6 +499,22 @@ class Settings(BaseSettings):
                 )
                 notifications_config = NotificationsConfig()
 
+            # Build AgentsConfig from optional "agents" block; same
+            # malformed-block tolerance as session/tunnel/etc. Missing block
+            # → defaults (claude_command, codex_command, hermes_command,
+            # openclaw_command). Backward-compatible with pre-Phase-6
+            # config.json files that have no "agents" key.
+            agents_data = data.get("agents", {}) or {}
+            try:
+                agents_config = AgentsConfig(**agents_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_agents_config_block",
+                    raw=agents_data,
+                )
+                agents_config = AgentsConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -442,6 +541,7 @@ class Settings(BaseSettings):
                 tunnel=tunnel_config,
                 auth_rate_limits=rate_limits_config,
                 notifications=notifications_config,
+                agents=agents_config,
             )
 
             # Validate secrets are set
@@ -461,6 +561,14 @@ class Settings(BaseSettings):
                 f"Invalid JSON in auth config file: {e}\n"
                 f"Check {config_path}"
             )
+
+    def get_project(self, name: str) -> Optional[ProjectConfig]:
+        """Look up a project by display name. Returns None if not found."""
+        auth_config = self.load_auth_config()
+        for p in auth_config.projects:
+            if p.name == name:
+                return p
+        return None
 
     def save_project(self, project: ProjectConfig) -> None:
         """
@@ -555,6 +663,97 @@ class Settings(BaseSettings):
 
             # Clear cache to force reload
             self._auth_config_cache = None
+
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in auth config file: {e}\n"
+                f"Check {config_path}"
+            )
+
+    def update_project(
+        self,
+        old_name: str,
+        new_name: Optional[str],
+        description: Optional[str],
+    ) -> ProjectConfig:
+        """
+        Update a project's display name and/or description.
+
+        Display name only — the folder on disk is never touched.
+
+        Args:
+            old_name: Current display name (used as the lookup key)
+            new_name: New display name. ``None`` = leave unchanged. If equal to
+                ``old_name`` it's treated as a no-op for the name field.
+            description: New description. ``None`` = leave unchanged. An empty
+                string is honored as an intentional clear.
+
+        Returns:
+            The updated ``ProjectConfig`` (reflecting the new name/description).
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist.
+            KeyError: If no project named ``old_name`` exists.
+            ValueError: ``"name conflict"`` if renaming to a name another
+                project already has, or for invalid JSON in the config file.
+        """
+        config_path = Path(self.auth_config_file).expanduser()
+
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Auth config file not found: {config_path}\n"
+                f"Run ./setup_auth.py to create it."
+            )
+
+        try:
+            # Read current config
+            with open(config_path) as f:
+                data = json.load(f)
+
+            projects_data = data.get("projects", [])
+
+            # Locate the target project (case-sensitive exact match)
+            target_index = None
+            for i, p in enumerate(projects_data):
+                if p.get("name") == old_name:
+                    target_index = i
+                    break
+
+            if target_index is None:
+                raise KeyError(old_name)
+
+            # Apply name change (with collision check)
+            if new_name is not None and new_name != old_name:
+                # Collision: any OTHER project (different index) with new_name
+                for i, p in enumerate(projects_data):
+                    if i != target_index and p.get("name") == new_name:
+                        raise ValueError("name conflict")
+                projects_data[target_index]["name"] = new_name
+
+            # Apply description change (None = no-op; "" = intentional clear)
+            if description is not None:
+                projects_data[target_index]["description"] = description
+
+            # Update data and persist atomically:
+            # write to .tmp → fsync → os.replace() (atomic on same filesystem).
+            data["projects"] = projects_data
+
+            tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, config_path)
+
+            # Clear cache to force reload
+            self._auth_config_cache = None
+
+            updated = projects_data[target_index]
+            return ProjectConfig(
+                name=updated["name"],
+                path=updated.get("path", ""),
+                description=updated.get("description"),
+            )
 
         except json.JSONDecodeError as e:
             raise ValueError(

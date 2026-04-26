@@ -1,0 +1,57 @@
+/* Claw theme — cosmic dark + coral red.
+   Starfield is rendered with two stacked radial-gradient patterns on body::before
+   so the CPU cost is zero (rasterized once, never animates). */
+
+:root[data-theme="claw"] body {
+  background: #0a0810;
+  position: relative;
+}
+
+:root[data-theme="claw"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, rgba(255, 255, 255, 0.5), transparent 50%),
+    radial-gradient(1px 1px at 70px 110px, rgba(255, 255, 255, 0.35), transparent 50%),
+    radial-gradient(1.5px 1.5px at 130px 60px, rgba(255, 255, 255, 0.55), transparent 50%),
+    radial-gradient(1px 1px at 200px 180px, rgba(255, 200, 200, 0.30), transparent 50%),
+    radial-gradient(1px 1px at 280px 40px, rgba(255, 255, 255, 0.40), transparent 50%),
+    radial-gradient(1.5px 1.5px at 90px 220px, rgba(255, 255, 255, 0.50), transparent 50%),
+    radial-gradient(1px 1px at 250px 250px, rgba(255, 230, 230, 0.35), transparent 50%),
+    radial-gradient(2px 2px at 160px 290px, rgba(255, 255, 255, 0.30), transparent 50%),
+    radial-gradient(ellipse at 30% 10%, rgba(255, 91, 91, 0.06), transparent 50%),
+    radial-gradient(ellipse at 80% 90%, rgba(124, 92, 255, 0.05), transparent 50%);
+  background-size: 320px 320px, 320px 320px, 320px 320px, 320px 320px,
+                   320px 320px, 320px 320px, 320px 320px, 320px 320px,
+                   100% 100%, 100% 100%;
+  background-repeat: repeat, repeat, repeat, repeat, repeat, repeat, repeat, repeat, no-repeat, no-repeat;
+}
+
+/* Make sure all real chrome sits above the starfield. */
+:root[data-theme="claw"] .header,
+:root[data-theme="claw"] main,
+:root[data-theme="claw"] .modal,
+:root[data-theme="claw"] #launchpad,
+:root[data-theme="claw"] #terminal-screen {
+  position: relative;
+  z-index: 1;
+}
+
+/* Subtle red glow on the destroy button — coral signature. */
+:root[data-theme="claw"] .btn-destroy:hover {
+  box-shadow: 0 0 16px rgba(255, 91, 91, 0.40);
+}
+
+/* Terminal scope. */
+#terminal-screen[data-session-theme="claw"] {
+  background: #0a0810;
+  color: #e6e6ea;
+}
+
+#terminal-screen[data-session-theme="claw"] .terminal-header {
+  background: #0a0810;
+  border-bottom: 1px solid #2a2438;
+}

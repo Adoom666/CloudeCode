@@ -1,0 +1,33 @@
+/* Green CRT theme — P1 phosphor on warm CRT black.
+ * Pure CSS (no canvas). Scanlines via repeating-linear-gradient overlay,
+ * 60Hz pulse via @keyframes (gated on prefers-reduced-motion),
+ * phosphor bloom via text-shadow.
+ */
+
+:root[data-theme="green_crt"] body {
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.18) 3px
+  );
+}
+
+:root[data-theme="green_crt"] * {
+  text-shadow: 0 0 1px currentColor, 0 0 6px rgba(51, 255, 51, 0.3);
+}
+
+@keyframes crtPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.97; }
+}
+
+:root[data-theme="green_crt"] body {
+  animation: crtPulse 4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="green_crt"] body {
+    animation: none;
+  }
+}

@@ -26,6 +26,12 @@
     "rate_limit_window_seconds": 60.0,
     "rate_limit_per_kind_cooldown_seconds": 10.0
   },
+  "agents": {
+    "claude_command": "claude --dangerously-skip-permissions",
+    "codex_command": "codex",
+    "hermes_command": "hermes",
+    "openclaw_command": "openclaw tui"
+  },
   "common_slash_commands": [
     "/clear",
     "/compact",
@@ -47,7 +53,8 @@
     {
       "name": "⚡ NeuralMesh3000",
       "path": "~/projects/neural-mesh",
-      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression"
+      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression",
+      "agent_type": "hermes"
     },
     {
       "name": "⚛️ ReactHook Nirvana",
