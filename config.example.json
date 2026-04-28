@@ -32,6 +32,12 @@
     "hermes_command": "hermes",
     "openclaw_command": "openclaw tui"
   },
+  "uploads": {
+    "enabled": true,
+    "ttl_seconds": 86400,
+    "sweep_interval_seconds": 3600,
+    "max_size_mb": 10
+  },
   "common_slash_commands": [
     "/clear",
     "/compact",

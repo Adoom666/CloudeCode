@@ -1,4 +1,12 @@
-"""Configuration management using pydantic-settings."""
+"""Configuration management using pydantic-settings.
+
+Sub-blocks on ``AuthConfig`` mirror the JSON top-level keys 1:1:
+``session``, ``tunnel``, ``auth_rate_limits``, ``notifications``,
+``agents``, ``uploads``. Each block is optional in ``config.json`` —
+missing keys deserialize as defaults so existing installs keep working.
+The ``uploads`` block governs the browser-paste image upload feature
+(endpoint, sweeper cadence, TTL, per-upload size cap).
+"""
 
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
@@ -139,6 +147,30 @@ class NotificationsConfig(BaseModel):
     rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
 
 
+class UploadsConfig(BaseModel):
+    """Browser-paste image upload configuration.
+
+    - ``enabled``: master switch for the upload endpoint and the periodic
+      sweeper task. False = the route still mounts but rejects calls,
+      and the sweeper exits its loop immediately on startup.
+    - ``ttl_seconds``: files in any session's ``.cloude_uploads/`` bucket
+      whose mtime is older than this are pruned by the sweeper. Default
+      24h gives the user a full working day to reference an image again
+      without it disappearing mid-session.
+    - ``sweep_interval_seconds``: how often the background sweeper wakes
+      to walk every configured project's ``.cloude_uploads/`` bucket and
+      delete TTL-expired files. Default 1h is the safety-net cadence;
+      destroy-on-kill and lifespan-startup sweeps cover the common cases.
+    - ``max_size_mb``: per-upload size cap. Claude API tops out at 30 MB
+      after base64 expansion, so 10 MB raw leaves headroom and rejects
+      pathologically large pastes before any disk write.
+    """
+    enabled: bool = True
+    ttl_seconds: int = Field(default=86400, ge=1)
+    sweep_interval_seconds: int = Field(default=3600, ge=1)
+    max_size_mb: int = Field(default=10, ge=1)
+
+
 class AuthRateLimits(BaseModel):
     """Rate-limit knobs for authentication endpoints.
 
@@ -179,6 +211,7 @@ class AuthConfig(BaseModel):
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    uploads: UploadsConfig = Field(default_factory=UploadsConfig)
 
 
 class Settings(BaseSettings):
@@ -515,6 +548,20 @@ class Settings(BaseSettings):
                 )
                 agents_config = AgentsConfig()
 
+            # Build UploadsConfig from optional "uploads" block; same
+            # malformed-block tolerance as session/tunnel/etc. Missing block
+            # → defaults (enabled=True, ttl 24h, sweep 1h, max 10 MB).
+            uploads_data = data.get("uploads", {}) or {}
+            try:
+                uploads_config = UploadsConfig(**uploads_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_uploads_config_block",
+                    raw=uploads_data,
+                )
+                uploads_config = UploadsConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -542,6 +589,7 @@ class Settings(BaseSettings):
                 auth_rate_limits=rate_limits_config,
                 notifications=notifications_config,
                 agents=agents_config,
+                uploads=uploads_config,
             )
 
             # Validate secrets are set

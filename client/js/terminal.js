@@ -250,6 +250,14 @@ class Terminal {
         // session swap, which would otherwise leave Shift+Enter dead).
         this._applyKeyHandlers();
 
+        // IMG-PASTE — wire image-paste pipeline. Both the paste listener
+        // (DOM event on #terminal container) and the mobile attach button
+        // are attached to the document/container, NOT to xterm's custom
+        // handler slot, so term.reset() during session swap does not wipe
+        // them — single attachment in initTerminal() is sufficient.
+        this._applyPasteHandler();
+        this._applyImageAttachButton();
+
         // Handle terminal input
         this.term.onData(data => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -380,6 +388,142 @@ class Terminal {
             }
             return true;  // all other keys pass through to default handling
         });
+    }
+
+    /**
+     * IMG-PASTE — desktop clipboard paste interceptor.
+     *
+     * Listens on the #terminal container in capture phase so we see the
+     * paste BEFORE xterm's internal handler. Iterates clipboardData.items
+     * looking for the first ``kind === 'file'`` item with an ``image/*``
+     * type. If found, we suppress xterm's default text paste, upload the
+     * blob, and inject the returned absolute path with a trailing space
+     * (NOT a newline — preserves Claude Code's native UX where the user
+     * keeps typing the prompt). If no image item is present we let the
+     * event fall through to xterm's text-paste path unchanged.
+     *
+     * Capture phase + stopPropagation matter: xterm registers its own
+     * paste listener on the same container in bubble phase; without
+     * capture-first interception the text-paste path would still fire
+     * for an image (which xterm renders as the literal text "[object
+     * File]" garbage in the prompt buffer).
+     */
+    _applyPasteHandler() {
+        const container = document.getElementById('terminal');
+        if (!container) return;
+        container.addEventListener('paste', async (e) => {
+            const items = (e.clipboardData && e.clipboardData.items) || [];
+            let imageItem = null;
+            for (const item of items) {
+                if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+                    imageItem = item;
+                    break;
+                }
+            }
+            if (!imageItem) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+            const blob = imageItem.getAsFile();
+            if (!blob) return;
+
+            await this._uploadAndInjectImage(blob, imageItem.type);
+        }, true);
+    }
+
+    /**
+     * IMG-PASTE — mobile / iOS attach-button wire-up.
+     *
+     * iOS Safari does NOT reliably fire ``paste`` events for image data
+     * outside focused contenteditable elements, so we surface an explicit
+     * 📎 button (gated to ``pointer: coarse`` via CSS). On tap we try
+     * ``navigator.clipboard.read()`` first as a bonus path — it can
+     * succeed on platforms where the implicit paste event would not —
+     * and fall through to the hidden file input on any failure (denied
+     * permission, no clipboard image, API absent, etc.).
+     *
+     * The file input has ``accept="image/*,image/heic,image/heif"`` so
+     * the OS picker offers both Photos library + Files; the server
+     * rejects HEIC at validation time with a "convert to PNG/JPEG"
+     * message (intentional v1 scope).
+     */
+    _applyImageAttachButton() {
+        const btn = document.getElementById('cloude-image-attach-button');
+        const input = document.getElementById('cloude-image-attach-input');
+        if (!btn || !input) return;
+
+        btn.addEventListener('click', async () => {
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+                    const items = await navigator.clipboard.read();
+                    for (const item of items) {
+                        if (item.types && item.types.includes('image/png')) {
+                            const blob = await item.getType('image/png');
+                            await this._uploadAndInjectImage(blob, 'image/png');
+                            return;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.log('[IMG-PASTE] clipboard.read unavailable, falling back to file picker:', err && err.message);
+            }
+            input.click();
+        });
+
+        input.addEventListener('change', async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            await this._uploadAndInjectImage(file, file.type || 'image/jpeg');
+            input.value = '';
+        });
+    }
+
+    /**
+     * IMG-PASTE — shared upload + path-injection routine.
+     *
+     * Trailing SPACE (not Enter) is intentional: Claude Code's CLI
+     * auto-attaches any absolute image path that appears in its prompt
+     * buffer once the user submits, so we want the path to land in the
+     * buffer with a space separator and let the user keep typing their
+     * prompt. Auto-Enter would submit a path-only message and waste the
+     * round-trip.
+     */
+    async _uploadAndInjectImage(blob, mimeType) {
+        this._showStatusPill('Uploading image...', 'info');
+        try {
+            const result = await window.API.uploadImage(blob, mimeType);
+            this.insertText(result.path + ' ');
+            this._showStatusPill('Pasted: ' + result.filename, 'success');
+        } catch (err) {
+            console.error('[IMG-PASTE] upload failed', err);
+            this._showStatusPill('Upload failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+        }
+    }
+
+    /**
+     * IMG-PASTE — inline status pill.
+     *
+     * Lazy-creates the pill the first time it is needed. The element is
+     * positioned ``fixed`` near the top center via CSS, so its DOM
+     * insertion point is irrelevant. Auto-dismisses after 3s for
+     * info/success and 5s for errors so the user has time to read the
+     * failure reason.
+     */
+    _showStatusPill(message, kind) {
+        let pill = document.getElementById('cloude-status-pill');
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.id = 'cloude-status-pill';
+            pill.className = 'cloude-status-pill';
+            document.body.appendChild(pill);
+        }
+        pill.textContent = message;
+        pill.dataset.kind = kind || 'info';
+        pill.classList.add('visible');
+        if (this._statusPillTimeout) clearTimeout(this._statusPillTimeout);
+        this._statusPillTimeout = setTimeout(() => {
+            pill.classList.remove('visible');
+        }, kind === 'error' ? 5000 : 3000);
     }
 
     /**

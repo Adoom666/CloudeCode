@@ -386,6 +386,72 @@ class API {
     }
 
     /**
+     * Sessions: Upload an image blob to the active session.
+     *
+     * Why this lives outside ``call()``: ``call()`` unconditionally
+     * ``JSON.stringify``s any ``typeof body === 'object'`` payload (line
+     * 79–81 above). ``FormData`` IS a typeof-object, so routing through
+     * ``call()`` would mangle the multipart body to "[object FormData]".
+     * Beyond that, the browser MUST set the multipart Content-Type with
+     * its own boundary token — explicitly setting Content-Type would
+     * destroy the boundary and the server would 422 the request.
+     *
+     * Auth + 401 retry mirrors ``call()`` exactly (single-flight refresh,
+     * one replay, then handleUnauthorized) — no behavior drift.
+     *
+     * @param {Blob} blob - Image bytes from the clipboard / file picker.
+     * @param {string} mimeType - e.g. ``'image/png'``. Used only for the
+     *   multipart filename suffix; the server renames to ``<uuid>.<ext>``.
+     * @param {object} [_meta] - internal; callers pass ``{_retrying: true}``
+     *   to break the refresh-then-retry loop.
+     * @returns {Promise<{path: string, filename: string, size: number}>}
+     */
+    async uploadImage(blob, mimeType, _meta = {}) {
+        const ext = (mimeType && mimeType.split('/')[1]) || 'png';
+        const filename = `paste.${ext}`;
+        const form = new FormData();
+        form.append('file', blob, filename);
+
+        const token = this.getToken();
+        const headers = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const url = `${this.baseURL}/sessions/upload-image`;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: form,
+            });
+
+            if (response.status === 401) {
+                if (!_meta._retrying && window.Auth && window.Auth.getRefreshToken()) {
+                    const refreshed = await this._singleFlightRefresh();
+                    if (refreshed) {
+                        console.log('API: 401 recovered via refresh, retrying uploadImage');
+                        return this.uploadImage(blob, mimeType, { _retrying: true });
+                    }
+                }
+                console.log('API: 401 Unauthorized on uploadImage - triggering re-auth');
+                this.handleUnauthorized();
+                throw new Error('Authentication required. Please log in again.');
+            }
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || errorData.message || `HTTP ${response.status}`);
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('API Error [uploadImage]:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Sessions: Destroy an external (non-active) tmux session by name.
      *
      * Direct kill via the server's `DELETE /sessions/external/{name}`

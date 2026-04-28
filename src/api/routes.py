@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from typing import List, Optional
 import structlog
 
@@ -25,8 +25,10 @@ from src.models import (
     AdoptSessionResponse,
     ThemeManifest,
     UpdatePinnedThemeRequest,
+    UploadImageResponse,
 )
 from src.api.auth import require_auth
+from src.api.uploads import validate_image, save_to_session_dir
 from src.config import settings
 
 logger = structlog.get_logger()
@@ -362,6 +364,71 @@ async def send_command(request: Request, body: CommandRequest):
     except Exception as e:
         logger.error("send_command_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to send command: {str(e)}")
+
+
+@router.post(
+    "/sessions/upload-image",
+    response_model=UploadImageResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def upload_image(request: Request, file: UploadFile = File(...)):
+    """Persist a pasted browser image into the active session's upload bucket.
+
+    The validated file is written to ``<working_dir>/.cloude_uploads/<uuid>.<ext>``
+    with mode 0o600 (directory 0o700). The client then injects the returned
+    absolute ``path`` into the terminal so Claude Code's CLI auto-attaches it.
+
+    Returns:
+        UploadImageResponse with the saved absolute path, basename, and size.
+
+    Raises:
+        HTTPException: 409 if no session is active, 400 on validation failure
+            (bad extension, oversize, magic-byte mismatch), 500 on disk error.
+    """
+    session_manager = request.app.state.session_manager
+
+    if not session_manager.has_active_session():
+        raise HTTPException(status_code=409, detail="No active session to upload into")
+
+    session = session_manager.session
+    if session is None or not session.working_dir:
+        raise HTTPException(status_code=409, detail="Active session has no working directory")
+
+    declared_filename = file.filename or ""
+    data = await file.read()
+
+    logger.info(
+        "api_upload_image_request",
+        declared_filename=declared_filename,
+        size=len(data),
+        content_type=file.content_type,
+    )
+
+    max_size_mb = settings.load_auth_config().uploads.max_size_mb
+    validated_bytes, ext = validate_image(data, declared_filename, max_size_mb)
+
+    try:
+        target_path = save_to_session_dir(
+            validated_bytes, ext, session.working_dir
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("upload_image_save_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+
+    logger.info(
+        "api_upload_image_saved",
+        path=str(target_path),
+        size=len(validated_bytes),
+    )
+
+    return UploadImageResponse(
+        path=str(target_path),
+        filename=target_path.name,
+        size=len(validated_bytes),
+    )
 
 
 @router.get("/sessions/logs", response_model=List[LogEntry], dependencies=[Depends(require_auth)])

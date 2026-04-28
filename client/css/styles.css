@@ -1948,3 +1948,98 @@ button[data-tooltip]:hover::after {
     }
 }
 
+/* =====================================================================
+ * IMG-PASTE — image attach button (mobile / touch only)
+ * ---------------------------------------------------------------------
+ * Hidden by default; revealed on coarse-pointer devices (phones /
+ * tablets) where the desktop paste-event path is unreliable on iOS
+ * Safari. Fixed-positioned over the bottom-right; sits BELOW the
+ * dpad-float-button (z-index 9998) so the d-pad always wins z-order
+ * priority but the attach button remains tappable on its own slot.
+ * ===================================================================== */
+.cloude-image-attach-button {
+    display: none;
+    position: fixed;
+    right: 16px;
+    bottom: 80px;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 60;
+    box-shadow: var(--shadow-modal);
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+}
+
+.cloude-image-attach-button:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-glow);
+}
+
+.cloude-image-attach-button:active {
+    transform: scale(0.95);
+}
+
+@media (pointer: coarse) {
+    .cloude-image-attach-button {
+        display: flex;
+    }
+}
+
+/* =====================================================================
+ * IMG-PASTE — inline status pill
+ * ---------------------------------------------------------------------
+ * Top-center toast for upload progress + result. Three semantic kinds
+ * driven by ``data-kind`` attribute: info (uploading), success (paste
+ * complete), error (upload failure). Animates in via opacity +
+ * translateY (compositor-only — no layout thrash). Auto-dismissed by
+ * the JS controller (3s info/success, 5s error).
+ * ===================================================================== */
+.cloude-status-pill {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-12px);
+    padding: 8px 14px;
+    border-radius: var(--radius-pill);
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-modal);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease, transform 200ms ease;
+    z-index: 70;
+    max-width: 80vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cloude-status-pill.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.cloude-status-pill[data-kind="error"] {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+    border-color: var(--color-danger-border);
+}
+
+.cloude-status-pill[data-kind="success"] {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+}
+

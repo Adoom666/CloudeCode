@@ -4,7 +4,7 @@ import os
 import structlog
 import asyncio
 import httpx
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,7 @@ from src.core.log_monitor import LogMonitor
 from src.core.tunnel.manager import TunnelManager
 from src.core.auto_tunnel import AutoTunnelOrchestrator
 from src.core.refresh_store import RefreshStore
+from src.core.upload_sweeper import UploadSweeper
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
 from src.api.routes import router as api_router
@@ -189,6 +190,28 @@ async def lifespan(app: FastAPI):
     app.state.refresh_store = refresh_store
     app.state.notification_router = notification_router
 
+    # Background upload-uploads TTL pruner — safety net for long-running
+    # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan
+    # sweep in SessionManager.lifespan_startup) cover the common cases;
+    # this handles slow-bleed accumulation when the server stays up for
+    # weeks. No-op when uploads.enabled is False.
+    upload_sweeper_task = None
+    if auth_cfg.uploads.enabled:
+        cfg = auth_cfg.uploads
+        upload_sweeper = UploadSweeper(
+            ttl_seconds=cfg.ttl_seconds,
+            interval_seconds=cfg.sweep_interval_seconds,
+            project_paths=[p.path for p in auth_cfg.projects],
+            default_dir=settings.get_working_dir(),
+        )
+        app.state.upload_sweeper = upload_sweeper
+        upload_sweeper_task = asyncio.create_task(upload_sweeper.run())
+        logger.info(
+            "upload_sweeper_scheduled",
+            interval_seconds=cfg.sweep_interval_seconds,
+            ttl_seconds=cfg.ttl_seconds,
+        )
+
     logger.info("application_ready")
 
     # Only probe public HTTPS when the active backend actually exposes
@@ -207,6 +230,15 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown
     logger.info("application_shutting_down")
+
+    # Stop the upload sweeper first — it touches no other components, so
+    # cancelling it early gives its CancelledError handler a clean window
+    # to log shutdown intent before the rest of teardown noise hits.
+    if upload_sweeper_task is not None:
+        upload_sweeper_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await upload_sweeper_task
+        logger.info("upload_sweeper_stopped")
 
     # Cancel the refresh-token purge loop first so it doesn't try to
     # touch a closed DB connection.

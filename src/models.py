@@ -356,6 +356,22 @@ class BrowseResponse(BaseModel):
     entries: List[DirectoryEntry] = Field(default_factory=list, description="Subdirectories inside the listed path")
 
 
+class UploadImageResponse(BaseModel):
+    """Response model for ``POST /sessions/upload-image``.
+
+    Returned after a validated image has been persisted into the active
+    session's ``.cloude_uploads/`` bucket. ``path`` is the absolute on-disk
+    location the client injects into the terminal (Claude Code's CLI
+    auto-attaches files referenced by absolute path with an image
+    extension). ``filename`` is the UUID-named basename for display in
+    the client's status pill; ``size`` lets the client surface a friendly
+    "uploaded N KB" confirmation without re-reading the file.
+    """
+    path: str = Field(..., description="Absolute path to the saved image file")
+    filename: str = Field(..., description="Saved filename (basename only)")
+    size: int = Field(..., description="Saved file size in bytes")
+
+
 # API Response Models
 
 class ErrorResponse(BaseModel):

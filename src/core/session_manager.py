@@ -10,6 +10,7 @@ import json
 import os
 import re
 import base64
+import shutil
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -21,6 +22,7 @@ from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEnt
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.notifications.idle_watcher import IdleWatcher
+from src.core.upload_sweeper import UPLOAD_DIR_NAME, UploadSweeper
 from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
 
@@ -192,6 +194,22 @@ class SessionManager:
           the new schema directly.
         - Log other discovered sessions and leave them alone (orphan
           cleanup is out of scope — a v2 ``cloude-cleanup`` script).
+
+        After tmux reconciliation, runs a one-shot orphan sweep of
+        ``.cloude_uploads/`` buckets to catch files left by force-killed
+        previous runs where ``destroy_session()`` never ran. Wrapped in
+        ``try/finally`` so the sweep fires regardless of which
+        reconciliation branch exited.
+        """
+        try:
+            await self._lifespan_tmux_reconcile()
+        finally:
+            await self._sweep_orphan_uploads()
+
+    async def _lifespan_tmux_reconcile(self) -> None:
+        """Tmux-side of lifespan startup. See ``lifespan_startup`` for
+        full contract. Extracted so the public method can guarantee
+        the orphan-upload sweep runs after every reconciliation path.
         """
         # Phase 6 — one-shot agent_type backfill. Logic extracted to the
         # top-level ``backfill_agent_type`` helper for direct unit testing
@@ -350,6 +368,29 @@ class SessionManager:
         except Exception as exc:
             logger.error("failed_to_delete_stale_metadata", error=str(exc))
         self.session = None
+
+    async def _sweep_orphan_uploads(self) -> None:
+        """One-shot sweep on startup using current AuthConfig.uploads settings.
+
+        Catches files left behind by force-killed previous runs where
+        destroy_session() never ran. Identical prune logic to the periodic
+        UploadSweeper so they share intent.
+        """
+        auth_cfg = settings.load_auth_config()
+        cfg = auth_cfg.uploads
+        if not cfg.enabled:
+            return
+        sweeper = UploadSweeper(
+            ttl_seconds=cfg.ttl_seconds,
+            interval_seconds=0,
+            project_paths=[p.path for p in auth_cfg.projects],
+            default_dir=settings.get_working_dir(),
+        )
+        try:
+            result = await sweeper.sweep_now()
+            logger.info("upload_orphan_sweep_complete", **result)
+        except Exception as exc:
+            logger.warning("upload_orphan_sweep_failed", error=str(exc))
 
     # ---- metadata persistence -------------------------------------------
 
@@ -902,6 +943,16 @@ class SessionManager:
                 self.backend = None
 
             self.session.status = SessionStatus.STOPPED
+
+            working_dir = self.session.working_dir if self.session else None
+            if working_dir:
+                uploads_dir = Path(working_dir).expanduser() / UPLOAD_DIR_NAME
+                if uploads_dir.exists():
+                    shutil.rmtree(uploads_dir, ignore_errors=True)
+                    logger.info(
+                        "upload_dir_cleaned_on_destroy",
+                        path=str(uploads_dir),
+                    )
 
             metadata_path = settings.get_session_metadata_path()
             if metadata_path.exists():
