@@ -107,6 +107,14 @@ because the app has been hardened for hostile traffic.
   encodings; client emits ESC+CR (`\x1b\r`) and suppresses xterm's hidden-
   textarea duplicate `\r` via `ev.preventDefault()`. Forensic logging via
   `ws_input_short` traces the exact bytes hitting tmux.
+- **Image paste** — Cmd/Ctrl+V drops a clipboard image into a per-session
+  `.cloude_uploads/` and types its absolute path into the Claude Code
+  prompt with a trailing space (Claude Code auto-attaches paths with
+  `.png/.jpg/.gif/.webp` extensions). iOS gets a 📎 button that tries
+  `navigator.clipboard.read()` then falls back to a file picker. Server
+  validates with magic-byte verification (Pillow), 10 MB cap. Background
+  sweeper prunes uploads older than `uploads.ttl_seconds` (24h default)
+  every `uploads.sweep_interval_seconds` (1h default).
 
 ---
 
@@ -650,6 +658,7 @@ Base URL: `http://<host>:8000` · REST prefix: `/api/v1`
 | `POST`   | `/api/v1/sessions/detach`            | —                        | `SuccessResponse`           |
 | `GET`    | `/api/v1/sessions/attachable`        | —                        | `List[AttachableSession]`  |
 | `POST`   | `/api/v1/sessions/adopt`             | `AdoptSessionRequest`    | `AdoptSessionResponse`     |
+| `POST`   | `/api/v1/sessions/upload-image`      | `multipart/form-data`    | `UploadImageResponse`      |
 | `POST`   | `/api/v1/sessions/command`           | `CommandRequest`         | `SuccessResponse`          |
 | `GET`    | `/api/v1/sessions/logs?limit=N`      | —                        | `List[LogEntry]`           |
 | `GET`    | `/api/v1/tunnels`                    | —                        | `List[Tunnel]`             |
@@ -1038,7 +1047,28 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.5.4 (current)
+### v0.5.5 (current)
+
+- **Image paste from browser → Claude Code session.** Browser captures
+  clipboard image (paste event on desktop, file picker / clipboard.read()
+  on iOS), POSTs to new `/api/v1/sessions/upload-image` endpoint, server
+  validates via Pillow magic-byte check and saves to
+  `<session.working_dir>/.cloude_uploads/<uuid>.<ext>`, then injects the
+  absolute path + trailing space into the tmux pane via the existing
+  `TerminalController.insertText()` path. Claude Code auto-attaches it.
+  Three-layer cleanup: rmtree on `destroy_session()`, sweep on lifespan
+  startup (catches force-killed orphans), periodic background sweeper
+  (`UploadSweeper` task, 1h cadence, 24h TTL, both configurable under
+  `uploads.*` in `config.json`).
+- **New config block** — `uploads.{enabled, ttl_seconds, sweep_interval_seconds, max_size_mb}` 
+  on `AuthConfig` (defaults: true / 86400 / 3600 / 10).
+- **iOS Safari support** — 📎 button visible only via
+  `@media (pointer: coarse)`, tries `navigator.clipboard.read()` for
+  `image/png` first, falls back to a hidden `<input type="file" accept="image/*,image/heic,image/heif">`.
+- **Dependency** — `python-multipart>=0.0.9` added to `requirements.txt`
+  (FastAPI's `UploadFile` dep refuses to register the route without it).
+
+### v0.5.4
 
 - **Setup-required banner fix.** The web UI's "Setup Required" banner now
   hides when `GET /api/v1/auth/qr` returns `403` — meaning the server is
