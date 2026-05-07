@@ -129,14 +129,15 @@ async def websocket_terminal(websocket: WebSocket):
 
     # Get app state
     session_manager = websocket.app.state.session_manager
-    auto_tunnel = websocket.app.state.auto_tunnel
+    local_servers = websocket.app.state.local_servers
     log_monitor = websocket.app.state.log_monitor
 
     # Subscribe to PTY output
     pty_output_queue = session_manager.subscribe_output()
 
-    # Subscribe to tunnel events (keep for port detection)
-    tunnel_queue = auto_tunnel.subscribe()
+    # Subscribe to local-server events (replaces the old tunnel queue —
+    # carries `local_server_detected` / `local_server_lost` payloads).
+    local_servers_queue = local_servers.subscribe()
 
     # Subscribe to log events (keep for system messages)
     log_queue = log_monitor.subscribe()
@@ -256,12 +257,25 @@ async def websocket_terminal(websocket: WebSocket):
                     logger.debug("ws_handshake_ctrl_l_sent")
                 except Exception as exc:
                     logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
+        else:
+            # Degraded-mode fallback: client never delivered handshake dims
+            # (timeout, bad dims, or disconnect-during-handshake recovered).
+            # A frozen banner is the worst possible UX — at least force a
+            # redraw at the pane's current (birth) size so the user sees
+            # SOMETHING. Ctrl+L is harmless if the foreground app can't honor it.
+            if session_manager.backend is not None:
+                try:
+                    await asyncio.sleep(0.15)
+                    await session_manager.backend.write(b"\x0c")
+                    logger.info("ws_handshake_ctrl_l_sent_fallback")
+                except Exception as exc:
+                    logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
         session_manager.unsubscribe_output(pty_output_queue)
-        auto_tunnel.unsubscribe(tunnel_queue)
+        local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
         return
@@ -276,8 +290,8 @@ async def websocket_terminal(websocket: WebSocket):
         send_pty_task = asyncio.create_task(
             send_pty_output(websocket, pty_output_queue, log_monitor)
         )
-        send_tunnels_task = asyncio.create_task(
-            send_queue_messages(websocket, tunnel_queue)
+        send_local_servers_task = asyncio.create_task(
+            send_queue_messages(websocket, local_servers_queue)
         )
         send_logs_task = asyncio.create_task(
             send_queue_messages(websocket, log_queue)
@@ -285,7 +299,7 @@ async def websocket_terminal(websocket: WebSocket):
 
         # Wait for any task to complete (or fail)
         done, pending = await asyncio.wait(
-            [receive_task, send_pty_task, send_tunnels_task, send_logs_task],
+            [receive_task, send_pty_task, send_local_servers_task, send_logs_task],
             return_when=asyncio.FIRST_COMPLETED
         )
 
@@ -300,7 +314,7 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup
         session_manager.unsubscribe_output(pty_output_queue)
-        auto_tunnel.unsubscribe(tunnel_queue)
+        local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
 

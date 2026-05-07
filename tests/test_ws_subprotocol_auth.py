@@ -242,7 +242,7 @@ def test_token_signed_with_wrong_secret_rejected():
 #
 # We build a minimal FastAPI app that mounts ONLY the WS router with the
 # app state the handler expects. This avoids bringing up the full main.py
-# lifespan (tunnels, log monitor, etc.) which has heavy side effects in
+# lifespan (local-servers tracker, log monitor, etc.) which has heavy side effects in
 # test environments.
 
 
@@ -273,7 +273,9 @@ class _FakeSessionManager:
         pass
 
 
-class _FakeAutoTunnel:
+class _FakeLocalServers:
+    """Stand-in for ``LocalServersTracker`` — only the WS surface is needed."""
+
     def subscribe(self):
         return _FakeQueue()
 
@@ -303,7 +305,7 @@ def ws_app():
 
     app = FastAPI()
     app.state.session_manager = _FakeSessionManager()
-    app.state.auto_tunnel = _FakeAutoTunnel()
+    app.state.local_servers = _FakeLocalServers()
     app.state.log_monitor = _FakeLogMonitor()
     app.include_router(ws_router)
     return app

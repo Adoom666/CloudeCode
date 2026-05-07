@@ -1,8 +1,11 @@
 #!/bin/bash
 
-# Nuke script for Cloude Code
-# Completely removes all configuration and setup from the system
-# WARNING: This will delete the Cloudflare tunnel and all DNS records!
+# Nuke script for Cloude Code.
+# Completely removes local configuration, venv, and state.
+#
+# Plan v3.2: the Cloudflare tunnel system was demolished. This script no
+# longer touches Cloudflare resources (tunnels, DNS records) or the
+# `cloudflared` binary state — there's nothing to tear down on Cloudflare.
 
 set -e
 
@@ -30,12 +33,9 @@ if [ "$SKIP_CONFIRM" = "false" ]; then
     echo ""
     echo "This will completely remove ALL Cloude Code configuration and setup:"
     echo ""
-    echo "  ✗ Cloudflare tunnel will be DELETED from Cloudflare"
-    echo "  ✗ All DNS records will be DELETED from Cloudflare"
     echo "  ✗ All local configuration files (.env, config.json, etc.)"
     echo "  ✗ Python virtual environment"
     echo "  ✗ All logs and temporary files"
-    echo "  ✗ Cloudflared authentication and tunnel configs"
     echo "  ✗ macOS app settings and LaunchAgent"
     echo ""
     echo -e "${YELLOW}You will need to run setup.sh again to use Cloude Code.${NC}"
@@ -84,15 +84,6 @@ else
     log_skip "Server process not running"
 fi
 
-# Stop cloudflared tunnel
-CLOUDFLARED_PIDS=$(pgrep -f "cloudflared tunnel" || echo "")
-if [ -n "$CLOUDFLARED_PIDS" ]; then
-    echo "$CLOUDFLARED_PIDS" | xargs kill -9 2>/dev/null || true
-    log_cleanup "Stopped cloudflared tunnel processes"
-else
-    log_skip "Cloudflared tunnel not running"
-fi
-
 # Stop macOS menubar app
 MENUBAR_PIDS=$(pgrep -f "Cloude Code" || echo "")
 if [ -n "$MENUBAR_PIDS" ]; then
@@ -104,64 +95,10 @@ fi
 
 echo ""
 
-# 2. Delete Cloudflare infrastructure
-echo "Cleaning up Cloudflare infrastructure..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Load .env to get tunnel name and credentials
+# Source .env so subsequent steps can resolve LOG_DIRECTORY / DEFAULT_WORKING_DIR.
 if [ -f ".env" ]; then
     source .env
-
-    if [ -n "$CLOUDFLARE_TUNNEL_NAME" ] && command -v cloudflared &> /dev/null; then
-        # Delete tunnel (this also removes DNS records associated with it)
-        echo "Deleting Cloudflare tunnel: $CLOUDFLARE_TUNNEL_NAME"
-
-        if cloudflared tunnel delete "$CLOUDFLARE_TUNNEL_NAME" -f 2>/dev/null; then
-            log_cleanup "Deleted Cloudflare tunnel: $CLOUDFLARE_TUNNEL_NAME"
-        else
-            log_skip "Tunnel not found in Cloudflare (may have been deleted already)"
-        fi
-
-        # Delete DNS records manually if needed
-        if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ZONE_ID" ] && [ -n "$CLOUDFLARE_DOMAIN" ]; then
-            echo "Checking for DNS records to clean up..."
-
-            # Get the tunnel ID if it exists
-            TUNNEL_ID_FILE=$(find ~/.cloudflared -name "*.json" -not -name "cert.pem" 2>/dev/null | head -1)
-            if [ -n "$TUNNEL_ID_FILE" ]; then
-                TUNNEL_ID=$(basename "$TUNNEL_ID_FILE" .json)
-
-                # Delete DNS records pointing to the tunnel
-                # This uses curl to call Cloudflare API
-                export AWS_PAGER=""  # Disable pager for AWS CLI compatibility
-
-                # Get all DNS records
-                DNS_RECORDS=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-                    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                    -H "Content-Type: application/json")
-
-                # Find records pointing to our tunnel
-                RECORD_IDS=$(echo "$DNS_RECORDS" | grep -o '"id":"[^"]*"' | grep -B10 "$TUNNEL_ID" | grep '"id"' | cut -d'"' -f4 || echo "")
-
-                if [ -n "$RECORD_IDS" ]; then
-                    echo "$RECORD_IDS" | while read -r RECORD_ID; do
-                        curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-                            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null
-                    done
-                    log_cleanup "Deleted DNS records from Cloudflare"
-                else
-                    log_skip "No DNS records found"
-                fi
-            fi
-        fi
-    else
-        log_skip "Cloudflare tunnel name not found in .env or cloudflared not installed"
-    fi
-else
-    log_skip ".env file not found, skipping Cloudflare cleanup"
 fi
-
-echo ""
 
 # 3. Remove local files
 echo "Removing local files..."
@@ -227,7 +164,6 @@ fi
 
 # Remove /tmp logs
 TMP_LOGS=(
-    "/tmp/cloudflared-tunnel.log"
     "/tmp/cloudecode-server.log"
     "/tmp/cloudecode-menubar.log"
     "/tmp/cloudecode-menubar-error.log"
@@ -249,42 +185,6 @@ if [ -d "/tmp/cloude-app-extract" ]; then
     log_cleanup "Removed: /tmp/cloude-app-extract"
 else
     log_skip "Directory: /tmp/cloude-app-extract"
-fi
-
-echo ""
-
-# 5. Remove cloudflared configs
-echo "Removing cloudflared configuration..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Remove tunnel JSON files
-TUNNEL_JSON_FILES=$(find ~/.cloudflared -name "*.json" -not -name "cert.pem" 2>/dev/null || echo "")
-if [ -n "$TUNNEL_JSON_FILES" ]; then
-    echo "$TUNNEL_JSON_FILES" | while read -r file; do
-        rm -f "$file"
-        log_cleanup "Removed: $file"
-    done
-else
-    log_skip "Tunnel credential files"
-fi
-
-# Remove tunnel YAML files
-TUNNEL_YAML_FILES=$(find ~/.cloudflared -name "*.yml" 2>/dev/null || echo "")
-if [ -n "$TUNNEL_YAML_FILES" ]; then
-    echo "$TUNNEL_YAML_FILES" | while read -r file; do
-        rm -f "$file"
-        log_cleanup "Removed: $file"
-    done
-else
-    log_skip "Tunnel config files"
-fi
-
-# Remove cert.pem (Cloudflare auth certificate)
-if [ -f ~/.cloudflared/cert.pem ]; then
-    rm -f ~/.cloudflared/cert.pem
-    log_cleanup "Removed: ~/.cloudflared/cert.pem"
-else
-    log_skip "File: ~/.cloudflared/cert.pem"
 fi
 
 echo ""

@@ -96,13 +96,6 @@ _EVENT_PRESENTATION: dict[EventType, dict[str, object]] = {
         "tags": "test_tube",
         "has_link": True,
     },
-    EventType.TUNNEL_CREATED: {
-        "title": "Cloude: tunnel ready",
-        "body": "Public URL is up.",
-        "priority": 3,
-        "tags": "globe_with_meridians",
-        "has_link": False,
-    },
 }
 
 

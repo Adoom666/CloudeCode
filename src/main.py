@@ -3,8 +3,7 @@
 import os
 import structlog
 import asyncio
-import httpx
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +16,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from src.config import settings
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
-from src.core.tunnel.manager import TunnelManager
-from src.core.auto_tunnel import AutoTunnelOrchestrator
+from src.core.local_servers import LocalServersTracker
 from src.core.refresh_store import RefreshStore
-from src.core.upload_sweeper import UploadSweeper
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
 from src.api.routes import router as api_router
@@ -42,63 +39,10 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
-async def verify_public_access():
-    """Verify that the public URL is accessible."""
-    public_url = f"https://{settings.cloudflare_domain}/health"
-
-    logger.info("verifying_public_access", url=public_url)
-
-    # Wait a bit for DNS to propagate
-    await asyncio.sleep(5)
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(public_url)
-
-                if response.status_code == 200:
-                    logger.info(
-                        "public_access_verified",
-                        url=f"https://{settings.cloudflare_domain}",
-                        status_code=response.status_code
-                    )
-                    print("\n" + "="*80)
-                    print(f"✅ PUBLIC ACCESS VERIFIED!")
-                    print(f"🌐 Your API is accessible at: https://{settings.cloudflare_domain}")
-                    print(f"📊 Health endpoint: {public_url}")
-                    print("="*80 + "\n")
-                    return True
-                else:
-                    logger.warning(
-                        "public_access_check_failed",
-                        attempt=attempt + 1,
-                        status_code=response.status_code
-                    )
-        except Exception as e:
-            logger.warning(
-                "public_access_check_error",
-                attempt=attempt + 1,
-                error=str(e)
-            )
-
-        if attempt < max_retries - 1:
-            await asyncio.sleep(5)
-
-    logger.error("public_access_verification_failed_after_retries")
-    print("\n" + "="*80)
-    print(f"⚠️  PUBLIC ACCESS VERIFICATION FAILED")
-    print(f"🔗 Expected URL: https://{settings.cloudflare_domain}")
-    print(f"💡 The tunnel may still be initializing. Try accessing it in a few moments.")
-    print("="*80 + "\n")
-    return False
-
-
 # Global instances (will be initialized in lifespan)
 session_manager: SessionManager = None
 log_monitor: LogMonitor = None
-tunnel_manager: TunnelManager = None
-auto_tunnel: AutoTunnelOrchestrator = None
+local_servers: LocalServersTracker = None
 refresh_store: RefreshStore = None
 _refresh_purge_task: asyncio.Task = None
 notification_router: NotificationRouter = None
@@ -128,7 +72,7 @@ async def _refresh_purge_loop(store: RefreshStore):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global session_manager, log_monitor, tunnel_manager, auto_tunnel
+    global session_manager, log_monitor, local_servers
     global refresh_store, _refresh_purge_task, notification_router
 
     logger.info("application_starting", version="1.0.0")
@@ -141,8 +85,7 @@ async def lifespan(app: FastAPI):
     log_monitor = LogMonitor(session_manager)
 
     # Item 6: notification router. Wired AFTER log_monitor (which is the
-    # signal source for IdleWatcher in Item 7) but BEFORE auto_tunnel
-    # (which may want to fire a TUNNEL_CREATED event on bring-up).
+    # signal source for IdleWatcher in Item 7).
     auth_cfg = settings.load_auth_config()
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
@@ -155,19 +98,15 @@ async def lifespan(app: FastAPI):
     # instances created via create_session have a valid emit target.
     session_manager.attach_notification_router(notification_router)
 
-    tunnel_manager = TunnelManager.from_settings(
-        settings, session_manager=session_manager
-    )
+    # Plan v3.2 — LocalServersTracker replaces the demolished tunnel
+    # subsystem. Hooks into log_monitor pattern callbacks for detection
+    # and runs a 30s janitor that retires stopped listeners.
+    local_servers = LocalServersTracker(loop=asyncio.get_running_loop())
+    local_servers.attach(log_monitor, session_manager)
+    await local_servers.start()
 
-    # Initialize tunnel manager
-    await tunnel_manager.initialize()
-
-    auto_tunnel = AutoTunnelOrchestrator(log_monitor, tunnel_manager)
-
-    # Initialize auto-tunnel orchestrator
-    auto_tunnel.initialize()
-
-    # Start log monitoring
+    # Start log monitoring (must come AFTER local_servers.attach so the
+    # callback registry is populated before pattern matches start firing).
     await log_monitor.start_monitoring()
 
     # Item 5: refresh-token revocation store. Lives in the existing state
@@ -185,60 +124,21 @@ async def lifespan(app: FastAPI):
     # Make components available to app state
     app.state.session_manager = session_manager
     app.state.log_monitor = log_monitor
-    app.state.tunnel_manager = tunnel_manager
-    app.state.auto_tunnel = auto_tunnel
+    app.state.local_servers = local_servers
     app.state.refresh_store = refresh_store
     app.state.notification_router = notification_router
 
-    # Background upload-uploads TTL pruner — safety net for long-running
-    # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan
-    # sweep in SessionManager.lifespan_startup) cover the common cases;
-    # this handles slow-bleed accumulation when the server stays up for
-    # weeks. No-op when uploads.enabled is False.
-    upload_sweeper_task = None
-    if auth_cfg.uploads.enabled:
-        cfg = auth_cfg.uploads
-        upload_sweeper = UploadSweeper(
-            ttl_seconds=cfg.ttl_seconds,
-            interval_seconds=cfg.sweep_interval_seconds,
-            project_paths=[p.path for p in auth_cfg.projects],
-            default_dir=settings.get_working_dir(),
-        )
-        app.state.upload_sweeper = upload_sweeper
-        upload_sweeper_task = asyncio.create_task(upload_sweeper.run())
-        logger.info(
-            "upload_sweeper_scheduled",
-            interval_seconds=cfg.sweep_interval_seconds,
-            ttl_seconds=cfg.ttl_seconds,
-        )
-
     logger.info("application_ready")
-
-    # Only probe public HTTPS when the active backend actually exposes
-    # the server publicly. LAN-only runs log the detected LAN URL instead.
-    if tunnel_manager.backend.supports_public():
-        await verify_public_access()
-    else:
-        status = await tunnel_manager.backend.status()
-        logger.info(
-            "server_ready_local_only",
-            backend=status.get("backend"),
-            url=status.get("base_url"),
-        )
+    logger.info(
+        "server_ready_local_only",
+        host=settings.host,
+        port=settings.port,
+    )
 
     yield
 
     # Cleanup on shutdown
     logger.info("application_shutting_down")
-
-    # Stop the upload sweeper first — it touches no other components, so
-    # cancelling it early gives its CancelledError handler a clean window
-    # to log shutdown intent before the rest of teardown noise hits.
-    if upload_sweeper_task is not None:
-        upload_sweeper_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await upload_sweeper_task
-        logger.info("upload_sweeper_stopped")
 
     # Cancel the refresh-token purge loop first so it doesn't try to
     # touch a closed DB connection.
@@ -252,8 +152,8 @@ async def lifespan(app: FastAPI):
         await refresh_store.close()
 
     await log_monitor.stop_monitoring()
-    await auto_tunnel.cleanup()
-    await tunnel_manager.shutdown()
+    if local_servers is not None:
+        await local_servers.stop()
 
     # Item 6: tear down notification pipeline AFTER everything else has
     # stopped emitting. Router cancels its worker; ntfy backend closes

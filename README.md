@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.5.4-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.4/Cloude.Code-0.5.4-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.5.6-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.6/Cloude.Code-0.5.6-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 Cloude.Code-0.5.4-arm64.dmg
-# expected: 915ddc64bd54e42bb71cd145384cddb6bf53170ade20bcaf459802e16e5c3a6f
+shasum -a 256 Cloude.Code-0.5.6-arm64.dmg
+# expected: fc3da613bb2eb446881b5b7d796705fc3b3a00760ee2d80e7761e2154c5095ef
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -68,7 +68,9 @@ because the app has been hardened for hostile traffic.
 - **Adopt-external sessions** — start a tmux session by hand
   (`tmux -L cloude new -s mywork`) and the launchpad lists it for one-click
   adoption. Cloude-owned vs user-owned is cross-referenced against a persisted
-  owned-set, not a spoofable prefix.
+  owned-set, not a spoofable prefix. Adopting an external session also
+  auto-adds it to **Recent Projects**, so the entry survives an external
+  `tmux kill-session` and you can relaunch with one click.
 - **Detach-not-destroy invariant** — switching sessions never kills. The X
   button is the *only* kill path in the UI. `tmux kill-session` is the only
   kill path in the shell. Everything else detaches.
@@ -309,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude Code-0.5.4-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude Code-0.5.6-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -883,6 +885,19 @@ opens the file with `O_NONBLOCK`, seeks to EOF (or to the recorded adopt
 offset), and fans bytes out via `on_output`. Rotation: 10 MiB cap or 24 hour
 age, rename to `.1`, truncate.
 
+**Pipe-pane is CloudeCode-owned.** On adopt, `TmuxBackend` *replaces* any
+existing `pipe-pane` on the target pane instead of bailing silently. An
+external observer (e.g. another tool that ran `tmux pipe-pane` on the same
+pane before adoption) used to leave its pipe in place, which short-circuited
+our streaming chain and surfaced as a frozen-terminal-after-banner symptom.
+The replace-on-adopt invariant fixes that root cause.
+
+**WS handshake fallback.** If the resize handshake times out or the client
+never reports dims, `websocket.py` writes a Ctrl+L (0x0c) at the recorded
+birth geometry rather than leaving the pane dark. Degraded mode beats
+dead-screen — you get a redrawn pane at 80×24 and can resize manually
+instead of staring at nothing.
+
 ### Window size (the 80x24 bug that's not a bug)
 
 We never attach a tmux client — output is streamed via `pipe-pane`. Without a
@@ -1047,7 +1062,61 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.5.5 (current)
+### v0.5.6 (current — `weekend-mvp-v3.1`)
+
+- **Frozen-terminal-on-adopt fix.** `tmux_backend.py` now replaces any
+  existing `pipe-pane` on the target pane during adopt instead of bailing
+  silently when one is already wired. Stale external pipes were short-
+  circuiting our streaming chain and surfacing as a dead pane after the
+  Claude banner. CloudeCode now owns the pipe outright.
+- **WS handshake fallback.** `websocket.py` writes a Ctrl+L at the recorded
+  birth dims if the resize handshake times out or the client never reports
+  dims. Degraded redraw beats dead-screen.
+- **Adopt → auto-add to Recent Projects.** Clicking an externally-running
+  tmux session in the launchpad now auto-creates a project entry, mirroring
+  the create flow. The session survives an external `tmux kill-session` —
+  you can relaunch from Recent Projects without re-typing the path.
+- **6th FAB action — New console.** The "+ new" speed-dial FAB on the
+  Running Sessions heading now offers six actions:
+  `new-project` / `open-folder` / `clone-github` / `connect-openclaw` /
+  `connect-hermes` / `new-console`. New-console opens a plain `$SHELL -i`
+  tmux session in `~/` — bare shell, no agent CLI. Backend gained
+  `AgentsConfig.shell_command` (default `"$SHELL -i"`); `routes.py` now
+  expands `~` in `working_dir` so the FAB's home-dir hint actually lands.
+- **Agent type system.** Sessions carry an `agent_type` field
+  (`claude` / `codex` / `hermes` / `openclaw` / `shell`) that selects which
+  command tmux launches:
+
+  | `agent_type` | Command source                | Notes                                  |
+  | ------------ | ----------------------------- | -------------------------------------- |
+  | `claude`     | `AgentsConfig.claude_command` | Default; `claude --dangerously-skip-permissions` |
+  | `codex`      | `AgentsConfig.codex_command`  | OpenAI Codex CLI                       |
+  | `hermes`     | `AgentsConfig.hermes_command` | `hermes` (NOT `hermes-agent`)          |
+  | `openclaw`   | `AgentsConfig.openclaw_command` | `openclaw tui` (NOT bare `openclaw`) |
+  | `shell`      | `AgentsConfig.shell_command`  | `$SHELL -i` — no agent, just a shell   |
+
+- **Tunnels nuked.** The Cloudflare tunnel UI/wiring was removed from the
+  shipping app surface; the LAN-only threat model is now the only mode the
+  UI exposes. `local_only` remains the backend default. (Cloudflare backend
+  classes still exist in source for legacy configs.)
+- **Local Servers detector.** Launchpad surfaces locally-listening dev
+  servers detected on the host so you can tell at a glance whether a Vite /
+  Flask / node process is up.
+- **Per-session pinned theme.** Pluggable theme system; each session
+  remembers its pinned theme across reconnect.
+- **Header identity polish.** Session header swaps in the active
+  project's name + agent-type label instead of a generic "Cloude Code"
+  banner.
+- **FAB on Running Sessions heading** (was on Recent Projects). Mirrors
+  the typical create-flow mental model: "I want to start something" lives
+  next to the running list.
+- **Clone-from-GitHub.** New-project flow can clone a repo via the local
+  `gh` CLI; first-class FAB action.
+- **Project rename + description edit** via `PATCH /api/v1/projects/{name}`.
+- **Image paste from browser → Claude Code session** (carried forward from
+  v0.5.5). See v0.5.5 below.
+
+### v0.5.5
 
 - **Image paste from browser → Claude Code session.** Browser captures
   clipboard image (paste event on desktop, file picker / clipboard.read()

@@ -63,9 +63,12 @@ class Launchpad {
         // Map the FAB's data-action attrs onto our existing handlers.
         // Wrapped so `this` resolves correctly inside the dispatch table.
         const actions = {
-            'new-project':  () => this.createNewSession(),
-            'open-folder':  () => this.openProjectFromFolder(),
-            'clone-github': () => this.showCloneFromGithubModal(),
+            'new-project':      () => this.createNewSession(),
+            'open-folder':      () => this.openProjectFromFolder(),
+            'clone-github':     () => this.showCloneFromGithubModal(),
+            'connect-openclaw': () => this.createNewSessionWithAgent('openclaw'),
+            'connect-hermes':   () => this.createNewSessionWithAgent('hermes'),
+            'new-console':      () => this.createConsoleSession(),
         };
 
         trigger.addEventListener('click', (e) => {
@@ -581,6 +584,26 @@ class Launchpad {
             const fifoStartOffset = typeof response.fifo_start_offset === 'number'
                 ? response.fifo_start_offset
                 : null;
+
+            // Auto-add adopted session to Recent Projects so the user can
+            // relaunch it after tmux dies. Mirrors the create-flow pattern
+            // (lines 1164-1177). Skip if working_dir is missing (shouldn't
+            // happen for adopted sessions but defensive).
+            if (session && session.working_dir) {
+                try {
+                    await window.API.createProject({
+                        name: session.tmux_session || tmuxName,
+                        path: session.working_dir,
+                        description: ''
+                    });
+                } catch (error) {
+                    // If project already exists, that's ok - continue anyway
+                    if (!error.message.includes('already exists')) {
+                        console.error('Launchpad: Failed to save adopted project:', error);
+                    }
+                }
+            }
+
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
             }));
@@ -599,8 +622,8 @@ class Launchpad {
                 <div class="launchpad-prompt">select a project or create a new project</div>
 
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
-                    <div class="launchpad-section-title">
-                        ► running sessions
+                    <div class="launchpad-section-title launchpad-section-title--row">
+                        <span class="launchpad-section-title__text">► running sessions</span>
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
@@ -613,20 +636,6 @@ class Launchpad {
                                 <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
                             </div>
                         </details>
-                    </div>
-                    <div id="running-sessions-list"></div>
-                </div>
-
-                <!-- "new project" actions live in the inline speed-dial FAB
-                     to the right of the "recent projects" heading. The FAB
-                     trigger sits as a sibling of the heading text inside a
-                     flex row (justify-content: space-between). The fan-out
-                     menu anchors absolutely off the .new-fab wrapper.
-                     Wired in setupNewFab(). -->
-
-                <div class="launchpad-section" id="projects-section">
-                    <div class="launchpad-section-title launchpad-section-title--row">
-                        <span class="launchpad-section-title__text">► recent projects</span>
                         <div class="new-fab" id="new-fab">
                             <button class="new-fab__trigger" id="new-fab-trigger" type="button" aria-label="New" aria-haspopup="menu" aria-expanded="false">
                                 <svg class="new-fab__plus" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
@@ -660,9 +669,46 @@ class Launchpad {
                                     </span>
                                     <span class="new-fab__label">clone from github</span>
                                 </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="connect-openclaw" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M6 3v6a4 4 0 0 0 4 4h4a4 4 0 0 1 4 4v4"/>
+                                            <path d="M6 3l-2 2"/>
+                                            <path d="M6 3l2 2"/>
+                                            <path d="M18 21l-2-2"/>
+                                            <path d="M18 21l2-2"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">connect to openclaw</span>
+                                </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="connect-hermes" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M13 2L4 14h7l-2 8 9-12h-7l2-8z"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">connect to hermes</span>
+                                </button>
+                                <button class="new-fab__item" type="button" role="menuitem" data-action="new-console" tabindex="-1">
+                                    <span class="new-fab__icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="4 7 9 12 4 17"/>
+                                            <line x1="12" y1="18" x2="20" y2="18"/>
+                                        </svg>
+                                    </span>
+                                    <span class="new-fab__label">new console</span>
+                                </button>
                             </div>
                         </div>
                     </div>
+                    <div id="running-sessions-list"></div>
+                </div>
+
+                <!-- "new project" actions live in the inline speed-dial FAB
+                     to the right of the "running sessions" heading. Wired in setupNewFab(). -->
+
+                <div class="launchpad-section" id="projects-section">
+                    <div class="launchpad-section-title">► recent projects</div>
                     <div id="project-list" class="project-list">
                         <div class="launchpad-empty">loading projects...</div>
                     </div>
@@ -1078,14 +1124,98 @@ class Launchpad {
     }
 
     /**
-     * Create new project with auto-generated workspace
+     * Create new project with auto-generated workspace.
+     * Default behavior — server falls back to ProjectConfig.agent_type
+     * or "claude". Does NOT send agent_type in the payload.
      */
     async createNewSession() {
-        console.log('Launchpad: Creating new project');
+        return this._createNewSessionInner(null);
+    }
+
+    /**
+     * Create new project pinned to a specific agent (openclaw, hermes, codex).
+     * Sends agent_type in the createSession payload so the backend spawns
+     * the matching CLI (configured in src/config.py AgentsConfig).
+     */
+    async createNewSessionWithAgent(agentType) {
+        return this._createNewSessionInner(agentType);
+    }
+
+    /**
+     * Create a plain "console" tmux session in ~/ running $SHELL — no
+     * Claude/codex/hermes/openclaw. For quick shell work straight from the
+     * launchpad.
+     *
+     * Auto-generates a name (console-<base36 ts>) — no modal prompt, since
+     * a bare shell isn't a "project" in the conventional sense. Still
+     * registers a Recent Projects entry so a killed pane can be relaunched
+     * the same way every other create path works.
+     */
+    async createConsoleSession() {
+        console.log('Launchpad: Creating new console session');
+
+        const sessionName = `console-${Date.now().toString(36)}`;
 
         try {
-            // Show modal to get project details
-            const projectDetails = await this.showProjectNameModal();
+            this.updateStatus('creating new console...');
+
+            const _dims = this._getTerminalDims();
+            const payload = {
+                auto_start_claude: true,   // server gates on this to spawn the command
+                copy_templates: false,
+                project_name: sessionName,
+                working_dir: '~',          // server-side os.path.expanduser
+                agent_type: 'shell',
+                ..._dims
+            };
+            const session = await window.API.createSession(payload);
+
+            console.log('Launchpad: New console created:', session);
+
+            // Auto-add the project entry (mirrors _createNewSessionInner).
+            try {
+                await window.API.createProject({
+                    name: sessionName,
+                    path: session.working_dir,
+                    description: 'console session',
+                });
+            } catch (error) {
+                if (!error.message.includes('already exists')) {
+                    console.error('Launchpad: Failed to save console project:', error);
+                }
+            }
+
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session }
+            }));
+
+        } catch (error) {
+            console.error('Launchpad: Failed to create console session:', error);
+            if (error.message && error.message.includes('already running')) {
+                // Reuse the same detach-and-create handoff the agent paths use.
+                this.detachAndCreateNew('shell');
+            } else {
+                this.showError('failed to create console: ' + (error.message || error));
+            }
+        }
+    }
+
+    /**
+     * Inner implementation for createNewSession / createNewSessionWithAgent.
+     * @param {string|null} agentType - 'openclaw' | 'hermes' | 'codex' | null
+     *   When null, agent_type is OMITTED from the payload (preserves server
+     *   fallback behavior for the default "+ new project" FAB action).
+     */
+    async _createNewSessionInner(agentType = null) {
+        console.log('Launchpad: Creating new project', agentType ? `(agent: ${agentType})` : '');
+
+        try {
+            // Show modal to get project details. Title reflects the agent
+            // so users know which CLI is about to spawn in the new pane.
+            const modalTitle = agentType
+                ? `name this ${agentType} project`
+                : 'name this project';
+            const projectDetails = await this.showProjectNameModal({ title: modalTitle });
 
             if (!projectDetails) {
                 console.log('Launchpad: Project creation cancelled');
@@ -1093,19 +1223,30 @@ class Launchpad {
             }
 
             // Show loading state
-            this.updateStatus('creating new project...');
+            this.updateStatus(
+                agentType
+                    ? `creating new ${agentType} project...`
+                    : 'creating new project...'
+            );
 
             // Create session with auto-generated path and template copying.
             // Include current xterm cell grid dims so the tmux pane is
             // birthed at the right size (avoids the 132x40 default → resize
             // flash before the WS handshake reshapes it).
             const _dims = this._getTerminalDims();
-            const session = await window.API.createSession({
+            const payload = {
                 auto_start_claude: true,
                 copy_templates: true,
                 project_name: projectDetails.name,
                 ..._dims
-            });
+            };
+            // Only include agent_type when explicitly set, so the server's
+            // existing fallback chain (ProjectConfig.agent_type → "claude")
+            // continues to work for the default "new-project" button.
+            if (agentType) {
+                payload.agent_type = agentType;
+            }
+            const session = await window.API.createSession(payload);
 
             console.log('Launchpad: New project created:', session);
 
@@ -1137,7 +1278,7 @@ class Launchpad {
             // tmux session is detached (not killed) and stays available in
             // the running-sessions list / banner for rejoin.
             if (error.message.includes('already running')) {
-                this.detachAndCreateNew();
+                this.detachAndCreateNew(agentType);
             } else {
                 this.showError('failed to create session: ' + error.message);
             }
@@ -1529,14 +1670,21 @@ class Launchpad {
      * fresh one. Mirror of ``detachAndOpenProject`` for the "new project"
      * path — prior session lingers and can be re-adopted later.
      */
-    async detachAndCreateNew() {
+    async detachAndCreateNew(agentType = null) {
         try {
             this.updateStatus('detaching from current session...');
             await window.API.detachSession();
 
             // Wait a moment, then create new. Same race-avoidance rationale
-            // as ``detachAndOpenProject``.
-            setTimeout(() => this.createNewSession(), 500);
+            // as ``detachAndOpenProject``. Honor the agentType so the
+            // re-create lands on the same CLI the user originally picked.
+            setTimeout(() => {
+                if (agentType) {
+                    this.createNewSessionWithAgent(agentType);
+                } else {
+                    this.createNewSession();
+                }
+            }, 500);
         } catch (error) {
             console.error('Launchpad: Failed to detach session:', error);
             this.showError('failed to detach session: ' + error.message);

@@ -10,7 +10,6 @@ import json
 import os
 import re
 import base64
-import shutil
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -22,7 +21,6 @@ from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEnt
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.notifications.idle_watcher import IdleWatcher
-from src.core.upload_sweeper import UPLOAD_DIR_NAME, UploadSweeper
 from src.utils.pty_session import PTYSessionError
 from src.utils.template_manager import copy_templates as copy_template_files
 
@@ -143,8 +141,20 @@ class SessionManager:
         # it None (tailer seeks to EOF as before).
         self.adopt_fifo_start_offset: Optional[int] = None
 
+        # SESSION-IDENTITY-V2 — durable per-tmux-name pinned-theme map.
+        # Lives in its own file (``pinned_themes.json``) so it survives
+        # detach + swap + re-adopt cycles; ``session_metadata.json`` is
+        # unlinked on detach and overwritten on swap and so cannot
+        # function as the source of truth for a per-name pin. Mutated
+        # by ``set_pinned_theme`` / ``clear_pinned_theme``; consulted by
+        # ``adopt_external_session`` (seeds Session.pinned_theme on
+        # re-entry) and ``list_attachable_sessions`` (decorates rows so
+        # the launchpad can paint the pin without entering the session).
+        self.pinned_themes: dict[str, str] = {}
+
         # Load persisted session if it exists
         self._load_session_metadata()
+        self._load_pinned_themes()
 
     # ---- notification wiring --------------------------------------------
 
@@ -194,22 +204,6 @@ class SessionManager:
           the new schema directly.
         - Log other discovered sessions and leave them alone (orphan
           cleanup is out of scope — a v2 ``cloude-cleanup`` script).
-
-        After tmux reconciliation, runs a one-shot orphan sweep of
-        ``.cloude_uploads/`` buckets to catch files left by force-killed
-        previous runs where ``destroy_session()`` never ran. Wrapped in
-        ``try/finally`` so the sweep fires regardless of which
-        reconciliation branch exited.
-        """
-        try:
-            await self._lifespan_tmux_reconcile()
-        finally:
-            await self._sweep_orphan_uploads()
-
-    async def _lifespan_tmux_reconcile(self) -> None:
-        """Tmux-side of lifespan startup. See ``lifespan_startup`` for
-        full contract. Extracted so the public method can guarantee
-        the orphan-upload sweep runs after every reconciliation path.
         """
         # Phase 6 — one-shot agent_type backfill. Logic extracted to the
         # top-level ``backfill_agent_type`` helper for direct unit testing
@@ -247,6 +241,25 @@ class SessionManager:
                 self.owned_tmux_sessions -= stale
                 if self.session is not None:
                     self._save_session_metadata()
+
+        # SESSION-IDENTITY-V2 — prune pinned-theme entries whose tmux
+        # session is gone. We only prune when we have a confirmed live
+        # tmux probe (non-empty ``tmux_alive`` OR a successful empty
+        # listing — both mean the probe ran). Prevents indefinite
+        # growth from sessions the user destroyed outside our UI
+        # (e.g. ``tmux -L cloude kill-session``).
+        if self.pinned_themes:
+            dead_pins = {
+                name for name in self.pinned_themes if name not in tmux_alive
+            }
+            if dead_pins:
+                logger.info(
+                    "pinned_themes_pruning_dead",
+                    names=sorted(dead_pins),
+                )
+                for name in dead_pins:
+                    self.pinned_themes.pop(name, None)
+                self._save_pinned_themes()
 
         if self.session is None:
             # No metadata on disk → nothing to re-adopt.
@@ -369,29 +382,6 @@ class SessionManager:
             logger.error("failed_to_delete_stale_metadata", error=str(exc))
         self.session = None
 
-    async def _sweep_orphan_uploads(self) -> None:
-        """One-shot sweep on startup using current AuthConfig.uploads settings.
-
-        Catches files left behind by force-killed previous runs where
-        destroy_session() never ran. Identical prune logic to the periodic
-        UploadSweeper so they share intent.
-        """
-        auth_cfg = settings.load_auth_config()
-        cfg = auth_cfg.uploads
-        if not cfg.enabled:
-            return
-        sweeper = UploadSweeper(
-            ttl_seconds=cfg.ttl_seconds,
-            interval_seconds=0,
-            project_paths=[p.path for p in auth_cfg.projects],
-            default_dir=settings.get_working_dir(),
-        )
-        try:
-            result = await sweeper.sweep_now()
-            logger.info("upload_orphan_sweep_complete", **result)
-        except Exception as exc:
-            logger.warning("upload_orphan_sweep_failed", error=str(exc))
-
     # ---- metadata persistence -------------------------------------------
 
     def _load_session_metadata(self):
@@ -503,6 +493,112 @@ class SessionManager:
 
         except Exception as e:
             logger.error("failed_to_save_session_metadata", error=str(e))
+
+    # ---- pinned-themes persistence (SESSION-IDENTITY-V2) ---------------
+
+    def _load_pinned_themes(self) -> None:
+        """Load the per-tmux-name pinned-theme map from disk.
+
+        Missing file = empty map (first run / never pinned). Malformed
+        file = empty map + warning log; we never crash startup over a
+        corrupt non-critical preferences file. Values must be strings;
+        any other type is dropped on load.
+        """
+        path = settings.get_pinned_themes_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, "r") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                logger.warning(
+                    "pinned_themes_unexpected_shape",
+                    type=type(raw).__name__,
+                )
+                return
+            self.pinned_themes = {
+                str(k): v for k, v in raw.items()
+                if isinstance(v, str) and v
+            }
+            logger.info(
+                "pinned_themes_loaded", count=len(self.pinned_themes)
+            )
+        except Exception as exc:
+            logger.warning("failed_to_load_pinned_themes", error=str(exc))
+
+    def _save_pinned_themes(self) -> None:
+        """Persist the pinned-theme map atomically.
+
+        Re-uses the same atomic-rename protocol as ``_save_session_metadata``
+        so a crash mid-write can never leave a half-written file at the
+        canonical path.
+        """
+        path = settings.get_pinned_themes_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with tmp.open("w") as f:
+                json.dump(self.pinned_themes, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(str(tmp), str(path))
+        except Exception as exc:
+            logger.error("failed_to_save_pinned_themes", error=str(exc))
+
+    def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
+        """Return the persisted pin for a tmux session name, or None."""
+        if not tmux_name:
+            return None
+        return self.pinned_themes.get(tmux_name)
+
+    def set_pinned_theme(
+        self, tmux_name: str, theme_id: Optional[str]
+    ) -> None:
+        """Persist (or clear) the pinned theme for a tmux session name.
+
+        ``theme_id`` None or empty clears the pin. Always persists — a
+        cleared pin must round-trip across server restart same as a set
+        one. Mirrors onto the live in-memory ``Session.pinned_theme``
+        when the named session is the currently-active backend, so a
+        subsequent ``get_session_info()`` reflects the change without
+        requiring a re-load from disk.
+        """
+        if not tmux_name:
+            return
+        if theme_id:
+            self.pinned_themes[tmux_name] = theme_id
+        else:
+            self.pinned_themes.pop(tmux_name, None)
+        self._save_pinned_themes()
+
+        # Mirror onto the live Session if this name IS the active backend,
+        # so SessionInfo serialization picks it up immediately.
+        if (
+            self.session is not None
+            and self.backend is not None
+            and getattr(self.backend, "tmux_session", None) == tmux_name
+        ):
+            self.session.pinned_theme = theme_id
+            # Also persist into session_metadata so a server-restart
+            # rehydrate path keeps the in-memory mirror coherent. This
+            # is belt-and-suspenders — the durable source of truth is
+            # ``pinned_themes.json``; ``adopt_external_session`` seeds
+            # from there on every re-entry regardless.
+            self._save_session_metadata()
+
+    def discard_pinned_theme(self, tmux_name: str) -> None:
+        """Drop a name's pin entry entirely. No-op if not present.
+
+        Called on explicit destroy paths (``destroy_session`` /
+        ``destroy_external_session``) so a tmux name that's truly gone
+        doesn't accumulate dead pins forever.
+        """
+        if tmux_name and tmux_name in self.pinned_themes:
+            self.pinned_themes.pop(tmux_name, None)
+            self._save_pinned_themes()
 
     # ---- output fan-out -------------------------------------------------
 
@@ -700,6 +796,10 @@ class SessionManager:
                 created_at=datetime.utcnow(),
                 last_activity=datetime.utcnow(),
                 agent_type=resolved_agent_type,
+                # PIN-FIX-EXECUTE — carry the bare tmux name on the inner
+                # Session so frontend can use it as the pin-key handle
+                # without falling back to session.id.
+                tmux_session=tmux_session_name,
             )
 
             # Track 1: record tmux-backend ownership BEFORE returning, so
@@ -747,6 +847,32 @@ class SessionManager:
             if self.session:
                 self.session.status = SessionStatus.ERROR
             raise ValueError(f"Failed to create session: {e}") from e
+        except RuntimeError as e:
+            # Backend.start() raises RuntimeError for hard infrastructure
+            # failures: tmux missing on PATH, ``new-session`` non-zero exit,
+            # OR — added in the dead-on-arrival probe — when the spawned
+            # agent process exits immediately and tmux's remain-on-exit
+            # would otherwise leave the user staring at a frozen welcome
+            # screen. Preserve the type (do NOT rewrap as ValueError) so
+            # the route layer can return 502 Bad Gateway with the original
+            # message visible to the client. Same teardown as the generic
+            # branch — half-built state still needs cleanup.
+            logger.error("session_creation_failed_runtime", error=str(e))
+            if self.session:
+                self.session.status = SessionStatus.ERROR
+            if self.backend is not None:
+                try:
+                    await self.backend.stop()
+                except Exception:
+                    pass
+                self.backend = None
+            if self.idle_watcher is not None:
+                try:
+                    await self.idle_watcher.stop()
+                except Exception:
+                    pass
+                self.idle_watcher = None
+            raise
         except Exception as e:
             logger.error("session_creation_failed", error=str(e))
             if self.session:
@@ -937,22 +1063,16 @@ class SessionManager:
             owned_name = getattr(self.backend, "tmux_session", None) if self.backend else None
             if owned_name:
                 self.owned_tmux_sessions.discard(owned_name)
+                # SESSION-IDENTITY-V2 — explicit destroy means this name
+                # is dead; drop its pin too so the durable map doesn't
+                # accumulate ghost entries.
+                self.discard_pinned_theme(owned_name)
 
             if self.backend is not None:
                 await self.backend.stop()
                 self.backend = None
 
             self.session.status = SessionStatus.STOPPED
-
-            working_dir = self.session.working_dir if self.session else None
-            if working_dir:
-                uploads_dir = Path(working_dir).expanduser() / UPLOAD_DIR_NAME
-                if uploads_dir.exists():
-                    shutil.rmtree(uploads_dir, ignore_errors=True)
-                    logger.info(
-                        "upload_dir_cleaned_on_destroy",
-                        path=str(uploads_dir),
-                    )
 
             metadata_path = settings.get_session_metadata_path()
             if metadata_path.exists():
@@ -1079,7 +1199,7 @@ class SessionManager:
             total_commands=self.command_count,
             uptime_seconds=uptime,
             log_lines=len(self.log_buffer),
-            active_tunnels=len(self.session.tunnels)
+            local_servers=0,
         )
 
         # Pull tmux_session from the backend when available. The tmux backend
@@ -1092,7 +1212,7 @@ class SessionManager:
         return SessionInfo(
             session=self.session,
             recent_logs=self.get_recent_logs(),
-            active_tunnels=self.session.tunnels,
+            local_servers=[],
             stats=stats,
             session_backend=self.backend_name,
             tmux_session=tmux_session_name,
@@ -1131,9 +1251,20 @@ class SessionManager:
             working_dir=Path.home(),
             on_output=None,
         )
-        return probe.list_attachable_sessions(
+        rows = probe.list_attachable_sessions(
             owned_names=set(self.owned_tmux_sessions)
         )
+        # SESSION-IDENTITY-V2 — decorate each row with its persisted
+        # pinned theme (if any). The launchpad's active-session banner
+        # uses this so re-entering a session paints the right theme on
+        # first frame; without it, the client would wait until the
+        # adopt response to learn the pin and the user would see a
+        # one-frame Lovecraft flash before the pin paints.
+        for row in rows:
+            name = row.get("name")
+            if name:
+                row["pinned_theme"] = self.pinned_themes.get(name)
+        return rows
 
     async def adopt_external_session(
         self, name: str, confirm_detach: bool = False
@@ -1270,6 +1401,12 @@ class SessionManager:
 
         # Step 6 — register.
         self.backend = backend
+        # SESSION-IDENTITY-V2 — restore any previously-pinned theme for
+        # this tmux name. The active-session metadata file is unlinked
+        # on detach, so this lookup is what makes the pin survive the
+        # detach → swap-other-session → re-adopt round-trip the user
+        # sees as "pin theme to a session".
+        prior_pin = self.get_pinned_theme(name)
         self.session = Session(
             id=f"adopted:{name}",
             pty_pid=None,
@@ -1278,6 +1415,10 @@ class SessionManager:
             created_at=datetime.utcnow(),
             last_activity=datetime.utcnow(),
             agent_type=detected_agent_type,
+            pinned_theme=prior_pin,
+            # PIN-FIX-EXECUTE — carry the bare tmux name so frontend uses
+            # it (not the "adopted:" prefixed id) as the pin-key handle.
+            tmux_session=name,
         )
         # External sessions are intentionally NOT added to
         # ``owned_tmux_sessions`` — we don't own them; we adopted them.
@@ -1334,7 +1475,8 @@ class SessionManager:
 
         Refuses to destroy the currently-active backend's session — the
         caller should use ``DELETE /sessions`` for that path so the in-memory
-        backend, idle watcher, tunnels, and metadata get torn down cleanly.
+        backend, idle watcher, local-server tracker entries, and metadata
+        get torn down cleanly.
 
         ``kill-session`` is treated as idempotent: a missing session is
         success (returns ``already_gone=True``) so the UI converges even
@@ -1401,6 +1543,11 @@ class SessionManager:
                     name=name,
                     error=str(exc),
                 )
+
+        # SESSION-IDENTITY-V2 — drop any pinned theme for this name so
+        # killing a session also evicts its preference. No-op if no pin
+        # was set.
+        self.discard_pinned_theme(name)
 
         if rc == 0:
             logger.info("external_session_destroyed", name=name)

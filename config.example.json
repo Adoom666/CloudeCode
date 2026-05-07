@@ -6,11 +6,6 @@
     "tmux_socket_name": "cloude",
     "scrollback_lines": 3000
   },
-  "tunnel": {
-    "backend": "local_only",
-    "enable_cloudflare": false,
-    "lan_hostname": "auto"
-  },
   "auth_rate_limits": {
     "totp_verify_per_minute": 5,
     "totp_verify_per_hour": 20,
@@ -31,12 +26,6 @@
     "codex_command": "codex",
     "hermes_command": "hermes",
     "openclaw_command": "openclaw tui"
-  },
-  "uploads": {
-    "enabled": true,
-    "ttl_seconds": 86400,
-    "sweep_interval_seconds": 3600,
-    "max_size_mb": 10
   },
   "common_slash_commands": [
     "/clear",

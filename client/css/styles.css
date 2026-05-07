@@ -18,7 +18,7 @@
     --color-bg:               #1e1e1e;            /* body / terminal / modal */
     --color-bg-page:          #0a0a0a;            /* header / tooltip surface */
     --color-bg-elevated:      #2d2d30;            /* panels / inputs / cards */
-    --color-bg-card:          #252526;            /* tunnels card */
+    --color-bg-card:          #252526;            /* local servers card */
     --color-bg-hover:         #323235;            /* row hover state */
     --color-bg-overlay:       rgba(0, 0, 0, 0.85); /* modal scrim */
     --color-header-bg: var(--color-bg);
@@ -96,7 +96,7 @@
     --badge-color-hermes:    #8899ff;
     --badge-color-openclaw:  #fbbf24;
 
-    /* ---- Syntax-ish accents (tunnels link / heading) ------------ */
+    /* ---- Syntax-ish accents (local-servers link / heading) ------ */
     --color-syntax-cyan: #4ec9b0;
     --color-syntax-blue: #569cd6;
 
@@ -359,33 +359,70 @@ button[data-tooltip]:hover::after {
     color: var(--color-fg-muted);
 }
 
-/* Tunnels section */
-.tunnels {
+/* ---------------------------------------------------------------------- */
+/* Local Servers panel — pure detection readout. The server tracks any   */
+/* dev port detected in pane output (Vite, Next, Flask, etc.) and pushes */
+/* `local_server_detected` / `local_server_lost` over the WebSocket. The */
+/* row is intentionally minimal: monospace port chip on the left, the    */
+/* clickable URL on the right. No CRUD affordances — display-only.       */
+/* ---------------------------------------------------------------------- */
+.local-servers {
     background: var(--color-bg-card);
-    padding: 15px 20px;
+    padding: 14px 20px 16px;
     border-top: 1px solid var(--color-border);
 }
 
-.tunnels h3 {
-    margin-bottom: 10px;
+.local-servers h3 {
+    margin: 0 0 10px;
     color: var(--color-syntax-cyan);
-    font-size: 1.1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
-.tunnel-item {
+.local-server-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     background: var(--color-bg-elevated);
-    padding: 10px;
-    margin-bottom: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
     border-radius: var(--radius-md);
     border-left: 3px solid var(--color-syntax-cyan);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.tunnel-item a {
+.local-server-item:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.12);
+}
+
+.local-server-item:last-child {
+    margin-bottom: 0;
+}
+
+.local-server-port {
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    font-size: 0.85rem;
+    color: var(--color-syntax-cyan);
+    font-weight: 600;
+    min-width: 56px;
+    text-align: right;
+    opacity: 0.85;
+}
+
+.local-server-url {
     color: var(--color-syntax-blue);
     text-decoration: none;
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.tunnel-item a:hover {
+.local-server-url:hover {
     text-decoration: underline;
 }
 
@@ -1704,10 +1741,15 @@ button[data-tooltip]:hover::after {
     align-items: center;
     justify-content: flex-end;
     pointer-events: auto;
-    /* Stay above sibling content but no longer needs to clear a fixed
-     * header. Menu/backdrop still get their own z layers below. */
+    /* Default z stays low so neighboring rows can paint normally. */
     z-index: 2;
 }
+
+/* When open, lift ABOVE the backdrop (1050) so item clicks land on the
+ * pills, not the backdrop. Without this, the backdrop intercepts every
+ * click and silently closes the menu — which presents to the user as
+ * "the buttons don't do anything." */
+.new-fab--open { z-index: 1100; }
 
 .new-fab.hidden { display: none; }
 
@@ -1879,6 +1921,8 @@ button[data-tooltip]:hover::after {
 .new-fab--open .new-fab__item:nth-child(1) { transition-delay: 0ms; }
 .new-fab--open .new-fab__item:nth-child(2) { transition-delay: 60ms; }
 .new-fab--open .new-fab__item:nth-child(3) { transition-delay: 120ms; }
+.new-fab--open .new-fab__item:nth-child(4) { transition-delay: 180ms; }
+.new-fab--open .new-fab__item:nth-child(5) { transition-delay: 240ms; }
 
 .new-fab--open .new-fab__label {
     opacity: 1;
@@ -1887,6 +1931,8 @@ button[data-tooltip]:hover::after {
 .new-fab--open .new-fab__item:nth-child(1) .new-fab__label { transition-delay: 80ms; }
 .new-fab--open .new-fab__item:nth-child(2) .new-fab__label { transition-delay: 140ms; }
 .new-fab--open .new-fab__item:nth-child(3) .new-fab__label { transition-delay: 200ms; }
+.new-fab--open .new-fab__item:nth-child(4) .new-fab__label { transition-delay: 260ms; }
+.new-fab--open .new-fab__item:nth-child(5) .new-fab__label { transition-delay: 320ms; }
 
 /* ---- CLOSE state: reverse-stagger out (bottom → top) --------------- */
 /* When .new-fab--open is removed, default rules apply (opacity 0,
@@ -1902,6 +1948,8 @@ button[data-tooltip]:hover::after {
 .new-fab:not(.new-fab--open) .new-fab__item:nth-child(1) { transition-delay: 100ms; }
 .new-fab:not(.new-fab--open) .new-fab__item:nth-child(2) { transition-delay: 50ms; }
 .new-fab:not(.new-fab--open) .new-fab__item:nth-child(3) { transition-delay: 0ms; }
+.new-fab:not(.new-fab--open) .new-fab__item:nth-child(4) { transition-delay: 0ms; }
+.new-fab:not(.new-fab--open) .new-fab__item:nth-child(5) { transition-delay: 0ms; }
 .new-fab:not(.new-fab--open) .new-fab__label {
     transition: transform 120ms ease-in, opacity 100ms ease-in;
     transition-delay: 0ms;
@@ -1946,100 +1994,5 @@ button[data-tooltip]:hover::after {
     .new-fab--open .new-fab__label {
         transition-delay: 0ms !important;
     }
-}
-
-/* =====================================================================
- * IMG-PASTE — image attach button (mobile / touch only)
- * ---------------------------------------------------------------------
- * Hidden by default; revealed on coarse-pointer devices (phones /
- * tablets) where the desktop paste-event path is unreliable on iOS
- * Safari. Fixed-positioned over the bottom-right; sits BELOW the
- * dpad-float-button (z-index 9998) so the d-pad always wins z-order
- * priority but the attach button remains tappable on its own slot.
- * ===================================================================== */
-.cloude-image-attach-button {
-    display: none;
-    position: fixed;
-    right: 16px;
-    bottom: 80px;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-full);
-    background: var(--color-bg-elevated);
-    color: var(--color-fg);
-    border: 1px solid var(--color-border);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    z-index: 60;
-    box-shadow: var(--shadow-modal);
-    padding: 0;
-    align-items: center;
-    justify-content: center;
-}
-
-.cloude-image-attach-button:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
-
-.cloude-image-attach-button:active {
-    transform: scale(0.95);
-}
-
-@media (pointer: coarse) {
-    .cloude-image-attach-button {
-        display: flex;
-    }
-}
-
-/* =====================================================================
- * IMG-PASTE — inline status pill
- * ---------------------------------------------------------------------
- * Top-center toast for upload progress + result. Three semantic kinds
- * driven by ``data-kind`` attribute: info (uploading), success (paste
- * complete), error (upload failure). Animates in via opacity +
- * translateY (compositor-only — no layout thrash). Auto-dismissed by
- * the JS controller (3s info/success, 5s error).
- * ===================================================================== */
-.cloude-status-pill {
-    position: fixed;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%) translateY(-12px);
-    padding: 8px 14px;
-    border-radius: var(--radius-pill);
-    font-size: 13px;
-    font-weight: 500;
-    background: var(--color-bg-elevated);
-    color: var(--color-fg);
-    border: 1px solid var(--color-border);
-    box-shadow: var(--shadow-modal);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 200ms ease, transform 200ms ease;
-    z-index: 70;
-    max-width: 80vw;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.cloude-status-pill.visible {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-}
-
-.cloude-status-pill[data-kind="error"] {
-    background: var(--color-danger-bg);
-    color: var(--color-danger);
-    border-color: var(--color-danger-border);
-}
-
-.cloude-status-pill[data-kind="success"] {
-    background: var(--color-accent-bg);
-    color: var(--color-accent);
-    border-color: var(--color-accent-border);
 }
 

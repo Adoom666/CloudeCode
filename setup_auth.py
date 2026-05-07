@@ -173,21 +173,13 @@ def prompt_with_default(prompt_text, default_value=""):
 
 
 def setup_env_file(env_path):
-    """Interactive setup for .env file configuration."""
-    print("=" * 70)
-    print("Cloudflare Configuration")
-    print("=" * 70)
-    print()
-    print("You'll need:")
-    print("  1. A Cloudflare account with a domain added")
-    print("  2. API token (with Zone.DNS Edit and Tunnel Edit permissions)")
-    print("  3. Your Cloudflare Zone ID")
-    print()
-    print("IMPORTANT: DNS records will be created AUTOMATICALLY!")
-    print("  You don't need to manually create any DNS records.")
-    print("  Cloude Code will create them via the Cloudflare API.")
-    print()
+    """Interactive setup for .env file configuration.
 
+    Plan v3.2: the Cloudflare tunnel system was demolished. This wizard
+    no longer asks for Cloudflare credentials, tunnel names, or zone
+    IDs. It only collects local paths + the Claude CLI binary location;
+    secrets are minted later by the auth-secret block in main().
+    """
     # Get current values if .env exists
     current_values = {}
     if env_path.exists():
@@ -198,65 +190,8 @@ def setup_env_file(env_path):
                     key, value = line.split('=', 1)
                     current_values[key] = value
 
-    # Prompt for values
-    cf_domain = prompt_with_default(
-        "Cloudflare domain (e.g., claude.yourdomain.com)",
-        current_values.get('CLOUDFLARE_DOMAIN', '')
-    )
-
-    print()
     print("=" * 70)
-    print("How to Create a Cloudflare API Token:")
-    print("=" * 70)
-    print()
-    print("1. Go to: https://dash.cloudflare.com/profile/api-tokens")
-    print("2. Click 'Create Token'")
-    print("3. Click 'Create Custom Token'")
-    print("4. Set token name: 'Cloude Code'")
-    print("5. Add these permissions:")
-    print("   - Zone > DNS > Edit")
-    print("   - Account > Cloudflare Tunnel > Edit")
-    print("6. Set Zone Resources:")
-    print("   - Include > Specific zone > [select your domain]")
-    print("7. Click 'Continue to summary' then 'Create Token'")
-    print("8. Copy the token (you won't see it again!)")
-    print()
-    print("=" * 70)
-    print()
-
-    cf_token = prompt_with_default(
-        "Cloudflare API token",
-        current_values.get('CLOUDFLARE_API_TOKEN', '')
-    )
-
-    print()
-    print("=" * 70)
-    print("How to Find Your Zone ID:")
-    print("=" * 70)
-    print()
-    print("1. Go to: https://dash.cloudflare.com")
-    print("2. Click on your domain")
-    print("3. Scroll down on the Overview page")
-    print("4. Look for 'Zone ID' on the right sidebar")
-    print("5. Copy the Zone ID")
-    print()
-    print("=" * 70)
-    print()
-
-    cf_zone = prompt_with_default(
-        "Cloudflare Zone ID",
-        current_values.get('CLOUDFLARE_ZONE_ID', '')
-    )
-
-    cf_tunnel_name = prompt_with_default(
-        "Tunnel name",
-        current_values.get('CLOUDFLARE_TUNNEL_NAME', 'claude-tunnel')
-    )
-
-    # Optional settings
-    print()
-    print("=" * 70)
-    print("Optional Settings (press Enter to use defaults)")
+    print("Local paths")
     print("=" * 70)
     print()
 
@@ -304,8 +239,8 @@ def setup_env_file(env_path):
         with open(env_template_path) as f:
             content = f.read()
     else:
-        # Minimal template if .env.example doesn't exist
-        # Should match .env.example to ensure all fields are present
+        # Minimal template if .env.example doesn't exist.
+        # Plan v3.2: no Cloudflare/tunnel keys — the tunnel system is gone.
         content = (
             "# Server Configuration\n"
             "HOST=0.0.0.0\n"
@@ -323,19 +258,6 @@ def setup_env_file(env_path):
             "LOG_FILE_RETENTION=7\n"
             "LOG_DIRECTORY=/tmp/cloude-code-logs\n"
             "\n"
-            "# Tunnels\n"
-            "TUNNEL_PROVIDER=cloudflare\n"
-            "AUTO_CREATE_TUNNELS=true\n"
-            "TUNNEL_TIMEOUT=30\n"
-            "USE_NAMED_TUNNELS=true\n"
-            "\n"
-            "# Cloudflare Configuration\n"
-            "CLOUDFLARE_API_TOKEN=\n"
-            "CLOUDFLARE_ZONE_ID=\n"
-            "CLOUDFLARE_DOMAIN=cloude.mydomain.nyc\n"
-            "CLOUDFLARE_TUNNEL_NAME=cloude-controller\n"
-            "CLOUDFLARE_TUNNEL_ID=\n"
-            "\n"
             "# Security (Optional)\n"
             "API_KEY=\n"
             "# ALLOWED_ORIGINS defaults to [\"*\"] - only set if you need to restrict origins\n"
@@ -350,12 +272,6 @@ def setup_env_file(env_path):
 
     # Replace placeholders using regex for reliability
     import re
-
-    # Cloudflare Configuration - use regex to replace any existing value
-    content = re.sub(r'^CLOUDFLARE_DOMAIN=.*$', f'CLOUDFLARE_DOMAIN={cf_domain}', content, flags=re.MULTILINE)
-    content = re.sub(r'^CLOUDFLARE_API_TOKEN=.*$', f'CLOUDFLARE_API_TOKEN={cf_token}', content, flags=re.MULTILINE)
-    content = re.sub(r'^CLOUDFLARE_ZONE_ID=.*$', f'CLOUDFLARE_ZONE_ID={cf_zone}', content, flags=re.MULTILINE)
-    content = re.sub(r'^CLOUDFLARE_TUNNEL_NAME=.*$', f'CLOUDFLARE_TUNNEL_NAME={cf_tunnel_name}', content, flags=re.MULTILINE)
 
     # Replace optional settings
     # Handle CLAUDE_CLI_PATH
@@ -399,7 +315,7 @@ def setup_env_file(env_path):
             print("   You can update CLAUDE_CLI_PATH in .env later.")
             print()
 
-    return cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir
+    return claude_cli_path, working_dir, log_dir
 
 
 def _generate_ntfy_topic() -> str:
@@ -638,52 +554,12 @@ def main():
     print(f"🐍 Python {python_version}")
     print()
 
-    # Check cloudflared installation
-    import shutil
-    if not shutil.which('cloudflared'):
-        print("❌ cloudflared is not installed")
-        print()
-        print("Install with: brew install cloudflared")
-        print()
-        print("Visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/")
-        print()
-        input("Press Enter after installing cloudflared...")
-        # Check again
-        if not shutil.which('cloudflared'):
-            print("❌ cloudflared still not found. Please install and try again.")
-            sys.exit(1)
-
-    print("✅ cloudflared is installed")
-
-    # Check cloudflared authentication
-    cert_path = Path.home() / '.cloudflared' / 'cert.pem'
-    if not cert_path.exists():
-        print("⚠️  cloudflared is not authenticated")
-        print()
-        print("Authenticating with Cloudflare...")
-        print("A browser window will open. Please log in and authorize.")
-        print()
-
-        # Run cloudflared login
-        result = subprocess.run(['cloudflared', 'login'], capture_output=False)
-
-        if result.returncode != 0 or not cert_path.exists():
-            print("❌ cloudflared authentication failed")
-            print("Please run 'cloudflared login' manually and try again.")
-            sys.exit(1)
-
-        print("✅ cloudflared authenticated successfully")
-    else:
-        print("✅ cloudflared is authenticated")
-
-    print()
-
     # Project root
     project_root = Path(__file__).parent
     env_path = project_root / ".env"
 
-    # Interactive .env setup
-    cf_domain, cf_token, cf_zone, cf_tunnel_name, claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
+    # Interactive .env setup (LAN-only — no Cloudflare prompts)
+    claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
 
     # Create directories
     import os

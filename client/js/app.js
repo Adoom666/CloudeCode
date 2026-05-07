@@ -307,10 +307,11 @@ class AppController {
 
         // SESSION-IDENTITY-V2 — enter per-session theme scope. Subsequent
         // ThemeSelector swaps will PATCH the server-side pin instead of
-        // writing localStorage. Prefer tmux_session (canonical client-side
-        // handle) and fall back to session.id for the create-path response
-        // shape that doesn't carry tmux_session.
-        var sessionName = (session && (session.tmux_session || session.name || session.id)) || null;
+        // writing localStorage. Use tmux_session (canonical bare tmux name) or
+        // session.name. Do NOT fall through to session.id — that's
+        // "adopted:<name>" for adopted sessions, which the backend rejects
+        // and causes the PATCH to 404, silently breaking pin persistence.
+        var sessionName = (session && (session.tmux_session || session.name)) || null;
         if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
             window.Themes.setActiveSession(sessionName);
         }
@@ -400,7 +401,7 @@ class AppController {
         // older callers that pass the inner Session row.
         var inner = (session && session.session) ? session.session : session;
         var sessionName = (session && (session.tmux_session || session.name))
-            || (inner && (inner.tmux_session || inner.name || inner.id))
+            || (inner && (inner.tmux_session || inner.name))
             || null;
         var pinnedTheme = (session && session.pinned_theme)
             || (inner && inner.pinned_theme)

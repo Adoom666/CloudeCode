@@ -1,12 +1,4 @@
-"""Configuration management using pydantic-settings.
-
-Sub-blocks on ``AuthConfig`` mirror the JSON top-level keys 1:1:
-``session``, ``tunnel``, ``auth_rate_limits``, ``notifications``,
-``agents``, ``uploads``. Each block is optional in ``config.json`` —
-missing keys deserialize as defaults so existing installs keep working.
-The ``uploads`` block governs the browser-paste image upload feature
-(endpoint, sweeper cadence, TTL, per-upload size cap).
-"""
+"""Configuration management using pydantic-settings."""
 
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
@@ -52,6 +44,10 @@ class AgentsConfig(BaseModel):
     codex_command: str = "codex"
     hermes_command: str = "hermes"
     openclaw_command: str = "openclaw tui"
+    # Plain interactive shell — no agent CLI. Used by the "New console"
+    # FAB action so users can spawn a bare tmux session in ~/ for quick
+    # shell work. ``$SHELL -i`` ensures rc files (.zshrc/.bashrc) load.
+    shell_command: str = "$SHELL -i"
 
 
 class SessionConfig(BaseModel):
@@ -76,38 +72,6 @@ class SessionConfig(BaseModel):
         default=3000,
         description="Lines of scrollback to capture on re-attach",
         ge=0,
-    )
-
-
-class TunnelConfig(BaseModel):
-    """Tunnel backend configuration.
-
-    - ``backend``: ``"local_only"`` (default, LAN-only, zero deps),
-      ``"quick_cloudflare"`` (cloudflared --url quick tunnel), or
-      ``"named_cloudflare"`` (persistent named tunnel with CNAME ingress).
-    - ``enable_cloudflare``: second-layer feature flag. Cloudflare
-      backends refuse to instantiate unless this is True, even if
-      selected by name. This is the "double-flag guard" — you have to
-      both pick a Cloudflare backend AND flip the master switch to
-      actually go public.
-    - ``lan_hostname``: override for the LAN hostname used by
-      ``local_only``. Default ``"auto"`` triggers detection (socket →
-      netifaces → UDP-connect trick → 127.0.0.1 fallback).
-    """
-    backend: str = Field(
-        default="local_only",
-        description=(
-            "Tunnel backend: 'local_only' | 'quick_cloudflare' | "
-            "'named_cloudflare'"
-        ),
-    )
-    enable_cloudflare: bool = Field(
-        default=False,
-        description="Master flag — must be true to use any Cloudflare backend",
-    )
-    lan_hostname: str = Field(
-        default="auto",
-        description="LAN hostname/IP for local_only backend ('auto' = detect)",
     )
 
 
@@ -147,30 +111,6 @@ class NotificationsConfig(BaseModel):
     rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
 
 
-class UploadsConfig(BaseModel):
-    """Browser-paste image upload configuration.
-
-    - ``enabled``: master switch for the upload endpoint and the periodic
-      sweeper task. False = the route still mounts but rejects calls,
-      and the sweeper exits its loop immediately on startup.
-    - ``ttl_seconds``: files in any session's ``.cloude_uploads/`` bucket
-      whose mtime is older than this are pruned by the sweeper. Default
-      24h gives the user a full working day to reference an image again
-      without it disappearing mid-session.
-    - ``sweep_interval_seconds``: how often the background sweeper wakes
-      to walk every configured project's ``.cloude_uploads/`` bucket and
-      delete TTL-expired files. Default 1h is the safety-net cadence;
-      destroy-on-kill and lifespan-startup sweeps cover the common cases.
-    - ``max_size_mb``: per-upload size cap. Claude API tops out at 30 MB
-      after base64 expansion, so 10 MB raw leaves headroom and rejects
-      pathologically large pastes before any disk write.
-    """
-    enabled: bool = True
-    ttl_seconds: int = Field(default=86400, ge=1)
-    sweep_interval_seconds: int = Field(default=3600, ge=1)
-    max_size_mb: int = Field(default=10, ge=1)
-
-
 class AuthRateLimits(BaseModel):
     """Rate-limit knobs for authentication endpoints.
 
@@ -207,11 +147,9 @@ class AuthConfig(BaseModel):
     projects: List[ProjectConfig] = []
     common_slash_commands: List[str] = []
     session: SessionConfig = Field(default_factory=SessionConfig)
-    tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
     auth_rate_limits: AuthRateLimits = Field(default_factory=AuthRateLimits)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    uploads: UploadsConfig = Field(default_factory=UploadsConfig)
 
 
 class Settings(BaseSettings):
@@ -236,19 +174,6 @@ class Settings(BaseSettings):
     log_buffer_size: int = 1000  # lines to keep in memory
     log_file_retention: int = 7  # days
     log_directory: str  # Required in .env
-
-    # Tunnel Configuration
-    tunnel_provider: str = "cloudflare"
-    auto_create_tunnels: bool = True
-    tunnel_timeout: int = 30  # seconds to wait for tunnel URL
-    use_named_tunnels: bool = True  # Use Cloudflare named tunnels
-
-    # Cloudflare Configuration
-    cloudflare_api_token: Optional[str] = None
-    cloudflare_zone_id: Optional[str] = None
-    cloudflare_domain: Optional[str] = None
-    cloudflare_tunnel_name: Optional[str] = None
-    cloudflare_tunnel_id: Optional[str] = None  # Will be set after tunnel creation
 
     # Security Configuration
     api_key: Optional[str] = None
@@ -360,6 +285,19 @@ class Settings(BaseSettings):
         """Get the path for session metadata JSON file."""
         return Path(self.log_directory).expanduser() / "session_metadata.json"
 
+    def get_pinned_themes_path(self) -> Path:
+        """Path for the per-tmux-session pinned-theme map.
+
+        SESSION-IDENTITY-V2 — kept in its OWN file, distinct from
+        ``session_metadata.json``. The active-session metadata file is
+        unlinked on detach and overwritten on swap, so we cannot use it
+        as durable per-name storage. This file is name-keyed and survives
+        the full detach → swap → re-adopt round-trip; it is pruned only
+        when a session is explicitly destroyed (X button) or its tmux
+        session disappears at startup-reconciliation time.
+        """
+        return Path(self.log_directory).expanduser() / "pinned_themes.json"
+
     def get_claude_cli_path(self) -> str:
         """
         Get the path to the Claude CLI binary with auto-detection fallback.
@@ -430,6 +368,8 @@ class Settings(BaseSettings):
             return agents.hermes_command
         if normalized == "openclaw":
             return agents.openclaw_command
+        if normalized == "shell":
+            return agents.shell_command
 
         # claude (or unknown → fall back to claude). Honor CLAUDE_CLI_PATH
         # env var when the operator hasn't customized claude_command in
@@ -493,21 +433,8 @@ class Settings(BaseSettings):
                 )
                 session_config = SessionConfig()
 
-            # Build TunnelConfig from optional "tunnel" block; same
-            # malformed-block tolerance as session.
-            tunnel_data = data.get("tunnel", {}) or {}
-            try:
-                tunnel_config = TunnelConfig(**tunnel_data)
-            except Exception:
-                import structlog
-                structlog.get_logger().warning(
-                    "invalid_tunnel_config_block",
-                    raw=tunnel_data,
-                )
-                tunnel_config = TunnelConfig()
-
             # Build AuthRateLimits from optional "auth_rate_limits" block;
-            # same malformed-block tolerance as session/tunnel.
+            # same malformed-block tolerance as session.
             rate_limits_data = data.get("auth_rate_limits", {}) or {}
             try:
                 rate_limits_config = AuthRateLimits(**rate_limits_data)
@@ -548,20 +475,6 @@ class Settings(BaseSettings):
                 )
                 agents_config = AgentsConfig()
 
-            # Build UploadsConfig from optional "uploads" block; same
-            # malformed-block tolerance as session/tunnel/etc. Missing block
-            # → defaults (enabled=True, ttl 24h, sweep 1h, max 10 MB).
-            uploads_data = data.get("uploads", {}) or {}
-            try:
-                uploads_config = UploadsConfig(**uploads_data)
-            except Exception:
-                import structlog
-                structlog.get_logger().warning(
-                    "invalid_uploads_config_block",
-                    raw=uploads_data,
-                )
-                uploads_config = UploadsConfig()
-
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             auth_config = AuthConfig(
@@ -585,11 +498,9 @@ class Settings(BaseSettings):
                 projects=projects,
                 common_slash_commands=data.get("common_slash_commands", []),
                 session=session_config,
-                tunnel=tunnel_config,
                 auth_rate_limits=rate_limits_config,
                 notifications=notifications_config,
                 agents=agents_config,
-                uploads=uploads_config,
             )
 
             # Validate secrets are set

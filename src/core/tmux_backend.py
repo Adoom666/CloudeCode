@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -379,6 +380,95 @@ class TmuxBackend(SessionBackend):
             "set-option", "-t", self.tmux_session, "remain-on-exit", "on", check=False
         )
 
+        # ---- Dead-on-arrival probe ------------------------------------------
+        # ``remain-on-exit on`` is a double-edged blade: long, healthy sessions
+        # need it for replay/scrollback, but it ALSO preserves an empty dead
+        # pane forever when the spawned agent exits immediately (binary not
+        # on PATH, auth banner + non-zero exit, missing config, etc.). The
+        # tmux session creation succeeded, ``pipe-pane`` attaches to a pane
+        # that will never write a byte, and the WebSocket lands on a frozen
+        # "PTY terminal ready" welcome screen with no diagnostic.
+        #
+        # Mitigation: pause briefly to let the child either start or fail,
+        # then ask tmux ``#{pane_dead}`` + ``#{pane_dead_status}``. If dead,
+        # capture whatever the pane managed to print (banner / stderr),
+        # tear the corpse down so the user can retry without a name
+        # collision, and raise a RuntimeError that propagates up to the
+        # API layer as a 502.
+        #
+        # 250ms floor is the spec — empirically catches exec-not-found,
+        # missing-binary, and immediate-banner-and-exit cases on modern
+        # hardware while staying well below user-perceived launch latency.
+        await asyncio.sleep(0.25)
+
+        target_for_probe = _safe_target(self.tmux_session)
+        rc_probe, out_probe, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            "#{pane_dead} #{pane_dead_status}",
+            check=False,
+        )
+        if rc_probe == 0:
+            probe_line = out_probe.decode("utf-8", errors="replace").splitlines()[0] \
+                if out_probe.strip() else ""
+            parts = probe_line.split(" ", 1)
+            pane_dead = parts[0].strip() if parts else ""
+            pane_dead_status = parts[1].strip() if len(parts) > 1 else ""
+
+            if pane_dead == "1" or pane_dead_status:
+                # Capture pane output (banner / stderr) for diagnostics.
+                rc_cap, out_cap, _ = await self._run_tmux(
+                    "capture-pane",
+                    "-t",
+                    target_for_probe,
+                    "-p",
+                    "-S",
+                    "-200",
+                    check=False,
+                )
+                first_meaningful = ""
+                if rc_cap == 0:
+                    for raw_line in out_cap.decode("utf-8", errors="replace").splitlines():
+                        # Strip ANSI escape sequences so the surfaced message
+                        # is human-readable (the launch banner often opens
+                        # with cursor/color escapes). Coarse CSI/OSC strip —
+                        # good enough for a one-line error surface.
+                        cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line)
+                        cleaned = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", cleaned)
+                        cleaned = cleaned.strip()
+                        if cleaned:
+                            first_meaningful = cleaned
+                            break
+
+                # Tear down the dead session so the user can retry without
+                # tmux complaining about a duplicate session name.
+                await self._run_tmux(
+                    "kill-session",
+                    "-t",
+                    self.tmux_session,
+                    check=False,
+                )
+
+                logger.error(
+                    "tmux_pane_dead_on_arrival",
+                    session=self.tmux_session,
+                    command=command,
+                    pane_dead=pane_dead,
+                    pane_dead_status=pane_dead_status,
+                    capture=first_meaningful[:500],
+                )
+
+                if first_meaningful:
+                    raise RuntimeError(
+                        f"agent failed to launch: {first_meaningful}"
+                    )
+                raise RuntimeError(
+                    f"agent failed to launch: process exited immediately "
+                    f"(pane_dead_status={pane_dead_status or 'unknown'})"
+                )
+
         # Enable extended keys (tmux 3.2+) so modifier+key sequences like
         # Shift+Enter arrive as CSI u (`\x1b[13;2u`) at the pane intact,
         # instead of being collapsed to bare CR. Required for Claude Code
@@ -632,12 +722,22 @@ class TmuxBackend(SessionBackend):
         state = out.decode("utf-8", errors="replace").strip()
 
         if state == "1":
+            # Adoption contract: when the user hands the session over to
+            # CloudeCode, our pipe MUST be the one delivering bytes — otherwise
+            # the WS streaming loop tails an empty file forever and the
+            # browser sees a frozen banner. Close whatever pipe is already
+            # active (typically the user's own logging pipe-pane) before
+            # starting ours. `pipe-pane` with no command closes any
+            # currently-piped command on the target pane.
             logger.info(
-                "pipe_pane_already_active",
+                "pipe_pane_replacing_existing",
                 session=self.tmux_session,
-                note="user had their own pipe-pane; adoption will not clobber",
+                note="closing user's pipe-pane so adoption can stream output",
             )
-            return
+            await self._run_tmux(
+                "pipe-pane", "-t", target,
+                check=False,
+            )
 
         pipe_path = self._resolve_pipe_path()
         pipe_path.parent.mkdir(parents=True, exist_ok=True)

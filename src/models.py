@@ -14,23 +14,16 @@ class SessionStatus(str, Enum):
     ERROR = "error"
 
 
-class TunnelStatus(str, Enum):
-    """Tunnel status enumeration."""
-    CREATING = "creating"
-    ACTIVE = "active"
-    STOPPED = "stopped"
-    ERROR = "error"
-
-
-class Tunnel(BaseModel):
-    """Tunnel model for port forwarding."""
-    id: str = Field(..., description="Unique tunnel identifier")
-    session_id: str = Field(..., description="Associated session ID")
-    port: int = Field(..., description="Local port being tunneled")
-    public_url: str = Field(..., description="Public URL for accessing the tunnel")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    status: TunnelStatus = TunnelStatus.CREATING
-    process_pid: Optional[int] = Field(None, description="Cloudflared process PID")
+# Plan v3.2 — replaces the old ``Tunnel`` model. Pure detection record:
+# the server discovers a dev port by sniffing pane output, validates that
+# something is actually listening, and surfaces the URL to the client.
+# No process state, no public URL, no tunnel lifecycle.
+class LocalServerInfo(BaseModel):
+    """A dev-server port detected on the host, surfaced to the UI."""
+    port: int = Field(..., description="TCP port the server is bound to (1024-65535)")
+    url: str = Field(..., description="Clickable URL the web client should render")
+    first_seen: datetime = Field(default_factory=datetime.utcnow)
+    last_seen: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:
         json_encoders = {
@@ -56,7 +49,6 @@ class Session(BaseModel):
     status: SessionStatus = SessionStatus.CREATING
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_activity: datetime = Field(default_factory=datetime.utcnow)
-    tunnels: List[Tunnel] = Field(default_factory=list)
     agent_type: Optional[str] = Field(
         None,
         description="Agent CLI type: 'claude' | 'codex' | 'hermes' | 'openclaw' (None = unknown / pre-Phase-6 / not yet fingerprinted)",
@@ -68,6 +60,17 @@ class Session(BaseModel):
     pinned_theme: Optional[str] = Field(
         None,
         description="Theme id pinned to this session; None = follow global theme",
+    )
+    # PIN-FIX-EXECUTE — the bare tmux session name (e.g. "CoudeCode" — NOT
+    # "adopted:CoudeCode" or "cloude_CoudeCode"). Carried on the inner
+    # Session so WS event payloads and create-path responses give the
+    # frontend a usable handle for the PATCH pinned-theme URL without
+    # falling through to session.id (which is "adopted:<name>" for adopted
+    # sessions and breaks server lookup). Optional + None default keeps
+    # legacy session_metadata.json files deserializing cleanly.
+    tmux_session: Optional[str] = Field(
+        None,
+        description="Bare tmux session name (canonical pin-key handle)",
     )
 
     class Config:
@@ -94,14 +97,14 @@ class SessionStats(BaseModel):
     total_commands: int = 0
     uptime_seconds: int = 0
     log_lines: int = 0
-    active_tunnels: int = 0
+    local_servers: int = 0
 
 
 class SessionInfo(BaseModel):
-    """Complete session information including logs and tunnels."""
+    """Complete session information including logs and detected local servers."""
     session: Session
     recent_logs: List[LogEntry] = Field(default_factory=list)
-    active_tunnels: List[Tunnel] = Field(default_factory=list)
+    local_servers: List[LocalServerInfo] = Field(default_factory=list)
     stats: SessionStats = Field(default_factory=SessionStats)
     session_backend: str = Field(
         default="none",
@@ -179,11 +182,6 @@ class CreateSessionRequest(BaseModel):
 class CommandRequest(BaseModel):
     """Request model for sending a command."""
     command: str = Field(..., description="Command to execute in the session")
-
-
-class CreateTunnelRequest(BaseModel):
-    """Request model for manually creating a tunnel."""
-    port: int = Field(..., description="Local port to tunnel", ge=1, le=65535)
 
 
 class VerifyTOTPRequest(BaseModel):
@@ -356,22 +354,6 @@ class BrowseResponse(BaseModel):
     entries: List[DirectoryEntry] = Field(default_factory=list, description="Subdirectories inside the listed path")
 
 
-class UploadImageResponse(BaseModel):
-    """Response model for ``POST /sessions/upload-image``.
-
-    Returned after a validated image has been persisted into the active
-    session's ``.cloude_uploads/`` bucket. ``path`` is the absolute on-disk
-    location the client injects into the terminal (Claude Code's CLI
-    auto-attaches files referenced by absolute path with an image
-    extension). ``filename`` is the UUID-named basename for display in
-    the client's status pill; ``size`` lets the client surface a friendly
-    "uploaded N KB" confirmation without re-reading the file.
-    """
-    path: str = Field(..., description="Absolute path to the saved image file")
-    filename: str = Field(..., description="Saved filename (basename only)")
-    size: int = Field(..., description="Saved file size in bytes")
-
-
 # API Response Models
 
 class ErrorResponse(BaseModel):
@@ -420,7 +402,10 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Server status (running/stopped)")
     uptime: int = Field(..., description="Server uptime in seconds")
     session_name: Optional[str] = Field(None, description="Current session name/working dir")
-    tunnel_count: int = Field(0, description="Number of active tunnels")
+    # Number of dev servers currently tracked across all sessions. Replaces
+    # the legacy ``tunnel_count`` surface; the menu-bar tray reads this
+    # field to show "Local servers: N" in its dropdown.
+    local_server_count: int = Field(0, description="Number of detected local dev servers")
 
 
 # WebSocket Message Models
@@ -428,8 +413,12 @@ class HealthResponse(BaseModel):
 class WSMessageType(str, Enum):
     """WebSocket message types."""
     LOG = "log"
-    TUNNEL_CREATED = "tunnel_created"
-    TUNNEL_STOPPED = "tunnel_stopped"
+    # Plan v3.2 — replaces TUNNEL_CREATED / TUNNEL_STOPPED. Detection-only:
+    # when a port shows up in pane output and a TCP listener is confirmed,
+    # the tracker emits ``local_server_detected``; the periodic janitor
+    # emits ``local_server_lost`` when the listener stops responding.
+    LOCAL_SERVER_DETECTED = "local_server_detected"
+    LOCAL_SERVER_LOST = "local_server_lost"
     SESSION_STATUS = "session_status"
     COMMAND = "command"
     ERROR = "error"
@@ -462,15 +451,19 @@ class WSLogMessage(BaseModel):
         }
 
 
-class WSTunnelMessage(BaseModel):
-    """WebSocket tunnel event message."""
-    type: WSMessageType
-    tunnel: Tunnel
+class WSLocalServerDetectedMessage(BaseModel):
+    """Server -> client event when a new local dev server is detected."""
+    type: WSMessageType = WSMessageType.LOCAL_SERVER_DETECTED
+    session: str
+    port: int
+    url: str
 
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+
+class WSLocalServerLostMessage(BaseModel):
+    """Server -> client event when a tracked local server stops responding."""
+    type: WSMessageType = WSMessageType.LOCAL_SERVER_LOST
+    session: str
+    port: int
 
 
 class WSSessionStatusMessage(BaseModel):

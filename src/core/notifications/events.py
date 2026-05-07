@@ -26,7 +26,6 @@ class EventType(str, Enum):
     ERROR = "error"
     BUILD_COMPLETE = "build_complete"
     TEST_RESULT = "test_result"
-    TUNNEL_CREATED = "tunnel_created"
 
 
 @dataclass
