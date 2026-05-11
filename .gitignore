@@ -57,6 +57,12 @@ logs/
 session_metadata.json
 /claude-projects/
 
+# Image Uploads (per-session bucket — must never be committed)
+.cloude_uploads/
+
+# Auth State (refresh-token store — must never be committed)
+refresh_tokens.db
+
 # Test Coverage
 .coverage
 htmlcov/

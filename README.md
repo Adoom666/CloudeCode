@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.5.6-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.6/Cloude.Code-0.5.6-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude Code-0.5.7-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.7/Cloude%20Code-0.5.7-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 Cloude.Code-0.5.6-arm64.dmg
-# expected: fc3da613bb2eb446881b5b7d796705fc3b3a00760ee2d80e7761e2154c5095ef
+shasum -a 256 "Cloude Code-0.5.7-arm64.dmg"
+# expected: 6ed801fa045cff4148124a481fdc458f27652380610a53770164369897b8ac19
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude Code-0.5.6-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude Code-0.5.7-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1062,7 +1062,28 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.5.6 (current — `weekend-mvp-v3.1`)
+### v0.5.7 (current — `weekend-mvp-v3.1`)
+
+- **Image paste from browser → Claude Code session — restored.** The v0.5.5
+  feature was wiped from DEV during the v0.5.6 PROD promotion (rsync
+  exclusion miss); replayed PROD commit `5b22cd2` onto DEV to bring the
+  backend back. The full `POST /sessions/{id}/upload-image` endpoint is
+  live again: Pillow magic-byte validation (PNG/JPEG/GIF/WebP, 10 MB cap,
+  4096×4096 dim cap), per-session tmp dir under `~/.cloudecode/uploads/`,
+  three-layer cleanup (rmtree on session destroy, startup orphan sweep,
+  periodic `UploadSweeper` with 1h soft / 24h hard TTL). Covered by 16
+  pytest cases (all green). The image-paste docs that have been sitting in
+  this README since v0.5.5 are now actually backed by code.
+- **Adopted-session project-name dedup.** Adopting an external tmux session
+  used to write the *raw* `cloude_<name>` session name into Recent Projects;
+  clicking that entry then re-prepended `cloude_` at launch time, producing
+  `cloude_cloude_<name>` sessions and orphaned-looking project rows.
+  Frontend now strips one leading `cloude_` before saving, and the server
+  normalizes idempotently before re-prepending as a backstop. Clean names
+  end-to-end — existing duplicates can be renamed via `PATCH
+  /api/v1/projects/{name}` or just deleted and re-adopted.
+
+### v0.5.6 (`weekend-mvp-v3.1`)
 
 - **Frozen-terminal-on-adopt fix.** `tmux_backend.py` now replaces any
   existing `pipe-pane` on the target pane during adopt instead of bailing

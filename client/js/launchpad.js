@@ -591,8 +591,16 @@ class Launchpad {
             // happen for adopted sessions but defensive).
             if (session && session.working_dir) {
                 try {
+                    // Strip the `cloude_` tmux-namespace prefix that
+                    // session_manager.py adds when minting the tmux name —
+                    // otherwise Recent Projects ends up storing
+                    // `cloude_<name>`, and the next launch double-prefixes
+                    // it to `cloude_cloude_<name>`. The display name in
+                    // Recent Projects should be the bare project name.
+                    const rawName = session.tmux_session || tmuxName;
+                    const cleanName = rawName.replace(/^cloude_/, '');
                     await window.API.createProject({
-                        name: session.tmux_session || tmuxName,
+                        name: cleanName,
                         path: session.working_dir,
                         description: ''
                     });

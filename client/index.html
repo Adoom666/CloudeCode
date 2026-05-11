@@ -94,5 +94,13 @@
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>
+
+    <!-- IMG-PASTE — image attach controls. The hidden file input is
+         triggered programmatically by the 📎 button in terminal.js
+         (_applyImageAttachButton). Visibility of the button is gated
+         to coarse-pointer (touch) devices via CSS so desktop users get
+         the paste-only flow. -->
+    <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
+    <button type="button" id="cloude-image-attach-button" class="cloude-image-attach-button" aria-label="Attach image">📎</button>
 </body>
 </html>
