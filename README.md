@@ -12,14 +12,14 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude Code-0.5.7-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.7/Cloude%20Code-0.5.7-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude Code-0.5.7-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.7/Cloude.Code-0.5.7-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude Code-0.5.7-arm64.dmg"
+shasum -a 256 "Cloude.Code-0.5.7-arm64.dmg"
 # expected: 6ed801fa045cff4148124a481fdc458f27652380610a53770164369897b8ac19
 ```
 
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude Code-0.5.7-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.5.7-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
