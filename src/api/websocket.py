@@ -125,15 +125,39 @@ async def websocket_terminal(websocket: WebSocket):
     # accept() without a matching subprotocol the browser will drop the
     # connection client-side even though the TCP handshake "succeeded".
     await websocket.accept(subprotocol=SUBPROTOCOL_MARKER)
-    await connection_manager.connect(websocket)
 
     # Get app state
     session_manager = websocket.app.state.session_manager
     local_servers = websocket.app.state.local_servers
     log_monitor = websocket.app.state.log_monitor
 
-    # Subscribe to PTY output
-    pty_output_queue = session_manager.subscribe_output()
+    # ---- session scoping --------------------------------------------------
+    # Which session is this WS for? Path is ``/ws/terminal?session_id=<id>``.
+    # Missing query param → fall back to the current (most-recent) session
+    # so legacy single-session clients (and the auth-only test) keep working.
+    sessions_map = getattr(session_manager, "sessions", None)
+    requested_sid = websocket.query_params.get("session_id")
+    target_sid: Optional[str] = None
+    if requested_sid:
+        if sessions_map is not None and requested_sid not in sessions_map:
+            # Unknown session id — close with a clear app-range code.
+            logger.warning("ws_unknown_session", session_id=requested_sid)
+            await websocket.close(code=4404, reason="unknown session")
+            return
+        target_sid = requested_sid
+    else:
+        cur = None
+        if hasattr(session_manager, "current_session"):
+            try:
+                cur = session_manager.current_session()
+            except Exception:
+                cur = None
+        target_sid = cur.id if cur is not None else None
+
+    await connection_manager.connect(websocket)
+
+    # Subscribe to THIS session's PTY output only.
+    pty_output_queue = session_manager.subscribe_output(target_sid)
 
     # Subscribe to local-server events (replaces the old tunnel queue —
     # carries `local_server_detected` / `local_server_lost` payloads).
@@ -237,7 +261,9 @@ async def websocket_terminal(websocket: WebSocket):
                 rows=handshake_rows,
             )
             try:
-                session_manager.resize_terminal(handshake_cols, handshake_rows)
+                session_manager.resize_terminal(
+                    handshake_cols, handshake_rows, session_id=target_sid
+                )
             except Exception as exc:
                 logger.error("ws_handshake_resize_failed", error=str(exc))
 
@@ -251,9 +277,14 @@ async def websocket_terminal(websocket: WebSocket):
             # Claude's "clear + repaint" convention — the app owns the
             # repaint, which means it paints at its CURRENT (post-resize)
             # cell grid, not the stale grid any cached output was drawn in.
-            if session_manager.backend is not None:
+            _hs_backend = (
+                session_manager.get_backend(target_sid)
+                if target_sid and hasattr(session_manager, "get_backend")
+                else getattr(session_manager, "backend", None)
+            )
+            if _hs_backend is not None:
                 try:
-                    await session_manager.backend.write(b"\x0c")
+                    await _hs_backend.write(b"\x0c")
                     logger.debug("ws_handshake_ctrl_l_sent")
                 except Exception as exc:
                     logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
@@ -263,10 +294,15 @@ async def websocket_terminal(websocket: WebSocket):
             # A frozen banner is the worst possible UX — at least force a
             # redraw at the pane's current (birth) size so the user sees
             # SOMETHING. Ctrl+L is harmless if the foreground app can't honor it.
-            if session_manager.backend is not None:
+            _hs_backend = (
+                session_manager.get_backend(target_sid)
+                if target_sid and hasattr(session_manager, "get_backend")
+                else getattr(session_manager, "backend", None)
+            )
+            if _hs_backend is not None:
                 try:
                     await asyncio.sleep(0.15)
-                    await session_manager.backend.write(b"\x0c")
+                    await _hs_backend.write(b"\x0c")
                     logger.info("ws_handshake_ctrl_l_sent_fallback")
                 except Exception as exc:
                     logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
@@ -274,7 +310,7 @@ async def websocket_terminal(websocket: WebSocket):
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
-        session_manager.unsubscribe_output(pty_output_queue)
+        session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
@@ -285,10 +321,10 @@ async def websocket_terminal(websocket: WebSocket):
     try:
         # Create tasks for receiving and sending
         receive_task = asyncio.create_task(
-            receive_messages(websocket, session_manager)
+            receive_messages(websocket, session_manager, target_sid)
         )
         send_pty_task = asyncio.create_task(
-            send_pty_output(websocket, pty_output_queue, log_monitor)
+            send_pty_output(websocket, pty_output_queue, log_monitor, target_sid)
         )
         send_local_servers_task = asyncio.create_task(
             send_queue_messages(websocket, local_servers_queue)
@@ -312,20 +348,22 @@ async def websocket_terminal(websocket: WebSocket):
     except Exception as e:
         logger.error("websocket_error", error=str(e))
     finally:
-        # Cleanup
-        session_manager.unsubscribe_output(pty_output_queue)
+        # Cleanup — unsubscribe ONLY this session's queue. Do NOT detach or
+        # destroy the session: other tabs (or a later reconnect) may want it.
+        session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         connection_manager.disconnect(websocket)
 
 
-async def receive_messages(websocket: WebSocket, session_manager):
+async def receive_messages(websocket: WebSocket, session_manager, session_id=None):
     """
     Receive messages from the WebSocket client.
 
     Args:
         websocket: WebSocket connection
         session_manager: SessionManager instance
+        session_id: the session this WS is bound to (None = current)
     """
     try:
         while True:
@@ -342,7 +380,7 @@ async def receive_messages(websocket: WebSocket, session_manager):
                             logger.info("ws_input_short", hex=data.hex(), length=len(data))
                         # Convert bytes to string for PTY input
                         text = data.decode('utf-8')
-                        await session_manager.send_input(text)
+                        await session_manager.send_input(text, session_id=session_id)
                     except Exception as e:
                         logger.error("input_failed", error=str(e))
                         error_msg = WSErrorMessage(
@@ -363,7 +401,10 @@ async def receive_messages(websocket: WebSocket, session_manager):
                             resize_msg = WSPTYResizeMessage(**msg)
                             logger.info("terminal_resize_request", cols=resize_msg.cols, rows=resize_msg.rows)
                             try:
-                                session_manager.resize_terminal(resize_msg.cols, resize_msg.rows)
+                                session_manager.resize_terminal(
+                                    resize_msg.cols, resize_msg.rows,
+                                    session_id=session_id,
+                                )
                             except Exception as e:
                                 logger.error("resize_failed", error=str(e))
 
@@ -396,7 +437,7 @@ async def receive_messages(websocket: WebSocket, session_manager):
         raise
 
 
-async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monitor=None):
+async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monitor=None, session_id=None):
     """
     Send PTY output from queue to the WebSocket client as binary frames.
 
@@ -404,6 +445,7 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
         websocket: WebSocket connection
         queue: Queue containing PTY output (base64 encoded strings)
         log_monitor: Optional LogMonitor for pattern detection
+        session_id: the session this stream is bound to (None = current)
     """
     try:
         while True:
@@ -414,14 +456,22 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # Decode base64 to raw bytes
                 raw_bytes = base64.b64decode(encoded_data)
 
-                # Pattern detection + idle watching. We skip both when the
-                # backend is in replay mode so replayed scrollback doesn't
-                # look like "new" activity to downstream consumers.
+                # Pattern detection + idle watching, scoped to THIS session.
+                # We skip both when the backend is in replay mode so replayed
+                # scrollback doesn't look like "new" activity downstream.
                 sm = websocket.app.state.session_manager
+                _backend = None
+                _idle_watcher = None
+                if sm is not None:
+                    if session_id and hasattr(sm, "get_backend"):
+                        _backend = sm.get_backend(session_id)
+                        _idle_watcher = getattr(sm, "idle_watchers", {}).get(session_id)
+                    else:
+                        _backend = getattr(sm, "backend", None)
+                        _idle_watcher = getattr(sm, "idle_watcher", None)
                 in_replay = (
-                    sm is not None
-                    and sm.backend is not None
-                    and getattr(sm.backend, "replay_in_progress", False)
+                    _backend is not None
+                    and getattr(_backend, "replay_in_progress", False)
                 )
                 if log_monitor and not in_replay:
                     try:
@@ -437,9 +487,9 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # / TASK_COMPLETE from its background poll. Errors are
                 # swallowed — terminal streaming is load-bearing, notifications
                 # are not.
-                if sm is not None and sm.idle_watcher is not None and not in_replay:
+                if _idle_watcher is not None and not in_replay:
                     try:
-                        await sm.idle_watcher.handle_chunk(raw_bytes)
+                        await _idle_watcher.handle_chunk(raw_bytes)
                     except Exception as e:
                         logger.debug("idle_watcher_chunk_error", error=str(e))
 

@@ -254,22 +254,38 @@ class _FakeQueue:
 
 
 class _FakeSessionManager:
+    """Stand-in exercising the session-scoped WS handler surface.
+
+    The WS handler now threads an optional ``session_id`` through
+    subscribe/unsubscribe/send/resize and consults ``.sessions`` to
+    validate a requested id. With no ``session_id`` query param, the
+    handler falls back to ``current_session()`` — which here is None,
+    so output routes to the "__orphan__" bucket and the send tasks
+    just park on ``_FakeQueue``.
+    """
     def __init__(self):
         self.backend = None
+        self.sessions = {}
 
-    def subscribe_output(self):
+    def current_session(self):
+        return None
+
+    def get_backend(self, session_id):
+        return None
+
+    def subscribe_output(self, session_id=None):
         return _FakeQueue()
 
-    def unsubscribe_output(self, q):
+    def unsubscribe_output(self, q, session_id=None):
         pass
 
-    def capture_scrollback(self):
+    def capture_scrollback(self, lines=3000, session_id=None):
         return b""
 
-    async def send_input(self, text):
+    async def send_input(self, text, session_id=None):
         pass
 
-    def resize_terminal(self, cols, rows):
+    def resize_terminal(self, cols, rows, session_id=None):
         pass
 
 

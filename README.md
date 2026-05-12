@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude Code-0.5.7-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.5.7/Cloude.Code-0.5.7-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.6.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.6.0/Cloude.Code-0.6.0-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.5.7-arm64.dmg"
-# expected: 6ed801fa045cff4148124a481fdc458f27652380610a53770164369897b8ac19
+shasum -a 256 "Cloude.Code-0.6.0-arm64.dmg"
+# expected: f02bfb21c7c655dd5da56604fba770a82b6ee064a39bb4ce065ac58563bd60ce
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.5.7-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.6.0-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1062,7 +1062,29 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.5.7 (current — `weekend-mvp-v3.1`)
+### v0.6.0 (current — `weekend-mvp-v3.1`)
+
+- **Concurrent sessions.** You can now run multiple terminal sessions at
+  once. Open two browser tabs, attach a different session in each, and
+  neither disconnects the other — opening a 2nd session no longer kicks
+  the 1st. Internally `SessionManager` became a session-id-keyed registry
+  (sessions / backends / output-queues / log-buffers all per-session); the
+  websocket endpoint is now `/ws/terminal?session_id=<id>` and only
+  subscribes to that session's output. `POST /sessions` and
+  `/sessions/adopt` no longer reject when a session is already live; new
+  `GET /sessions/list` returns all live sessions; the launchpad's Running
+  Sessions list shows every one.
+- **Mouse-wheel scrolling fixed.** Scrolling the wheel in the browser
+  terminal now scrolls xterm's scrollback instead of being translated into
+  up/down-arrow keystrokes — which Claude Code's TUI was interpreting as
+  "cycle prompt history." Scrollback buffer also bumped 10k → 50k lines.
+- **Adopt-external clarity.** The adopt help text now spells out that any
+  tmux session on the `cloude` socket with `claude` running inside it is
+  adoptable — not just sessions CloudeCode created — and calls out the
+  `tmux -L cloude` socket requirement so a default-socket session doesn't
+  silently fail to appear.
+
+### v0.5.7 (`weekend-mvp-v3.1`)
 
 - **Image paste from browser → Claude Code session — restored.** The v0.5.5
   feature was wiped from DEV during the v0.5.6 PROD promotion (rsync

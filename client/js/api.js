@@ -343,11 +343,22 @@ class API {
     }
 
     /**
-     * Sessions: Get current session info
-     * @returns {Promise<object>} - Session data
+     * Sessions: Get session info.
+     * @param {string|null} sessionId - specific session id, or null for the
+     *   current (most-recently-created) one (back-compat).
+     * @returns {Promise<object>} - SessionInfo
      */
-    async getSession() {
-        return await this.call('/sessions');
+    async getSession(sessionId = null) {
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        return await this.call(`/sessions${q}`);
+    }
+
+    /**
+     * Sessions: List ALL live sessions (multi-session).
+     * @returns {Promise<Array<object>>} - array of SessionInfo
+     */
+    async listSessions() {
+        return await this.call('/sessions/list');
     }
 
     /**
@@ -376,11 +387,14 @@ class API {
     }
 
     /**
-     * Sessions: Destroy current session
+     * Sessions: Destroy a session (kill its backend/tmux).
+     * @param {string|null} sessionId - specific session id, or null for the
+     *   current one (back-compat). Other live sessions are untouched.
      * @returns {Promise<object>}
      */
-    async destroySession() {
-        return await this.call('/sessions', {
+    async destroySession(sessionId = null) {
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        return await this.call(`/sessions${q}`, {
             method: 'DELETE'
         });
     }
@@ -402,11 +416,14 @@ class API {
      * @param {Blob} blob - Image bytes from the clipboard / file picker.
      * @param {string} mimeType - e.g. ``'image/png'``. Used only for the
      *   multipart filename suffix; the server renames to ``<uuid>.<ext>``.
+     * @param {string|null} [sessionId] - which session's working dir to
+     *   write into. The pasting tab passes its own id so the image lands
+     *   in the right project; omitted → current session (back-compat).
      * @param {object} [_meta] - internal; callers pass ``{_retrying: true}``
      *   to break the refresh-then-retry loop.
      * @returns {Promise<{path: string, filename: string, size: number}>}
      */
-    async uploadImage(blob, mimeType, _meta = {}) {
+    async uploadImage(blob, mimeType, sessionId = null, _meta = {}) {
         const ext = (mimeType && mimeType.split('/')[1]) || 'png';
         const filename = `paste.${ext}`;
         const form = new FormData();
@@ -418,7 +435,8 @@ class API {
             headers['Authorization'] = `Bearer ${token}`;
         }
 
-        const url = `${this.baseURL}/sessions/upload-image`;
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        const url = `${this.baseURL}/sessions/upload-image${q}`;
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -431,7 +449,7 @@ class API {
                     const refreshed = await this._singleFlightRefresh();
                     if (refreshed) {
                         console.log('API: 401 recovered via refresh, retrying uploadImage');
-                        return this.uploadImage(blob, mimeType, { _retrying: true });
+                        return this.uploadImage(blob, mimeType, sessionId, { _retrying: true });
                     }
                 }
                 console.log('API: 401 Unauthorized on uploadImage - triggering re-auth');
@@ -485,8 +503,9 @@ class API {
      *
      * @returns {Promise<object>}
      */
-    async detachSession() {
-        return await this.call('/sessions/detach', {
+    async detachSession(sessionId = null) {
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        return await this.call(`/sessions/detach${q}`, {
             method: 'POST'
         });
     }
@@ -559,11 +578,16 @@ class API {
      * Does NOT append a token — JWT auth is carried in the
      * Sec-WebSocket-Protocol header via openWebSocket() below.
      *
+     * @param {string|null} sessionId - the session this WS is for. When
+     *   given, appended as ``?session_id=<id>`` so the server scopes the
+     *   stream to that session — two browser tabs can each be on a
+     *   different session. Omitted → server falls back to the current one.
      * @param {string} path - WebSocket path (default '/ws/terminal')
-     * @returns {string} - WebSocket URL (no query string, no token)
+     * @returns {string} - WebSocket URL (no token; session_id in query)
      */
-    getWebSocketURL(path = '/ws/terminal') {
-        return `${this.wsBaseURL}${path}`;
+    getWebSocketURL(sessionId = null, path = '/ws/terminal') {
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        return `${this.wsBaseURL}${path}${q}`;
     }
 
     /**
@@ -585,12 +609,15 @@ class API {
      * Pattern modeled on the Kubernetes API server's WebSocket streams,
      * which use a similar two-element subprotocol array for bearer tokens.
      *
+     * @param {string|null} sessionId - the session this WS is for (query
+     *   param ``session_id``). Omitted → server uses the current session.
      * @param {string} path - WebSocket path (default '/ws/terminal')
      * @returns {WebSocket} - Open (pending) WebSocket
      */
-    openWebSocket(path = '/ws/terminal') {
+    openWebSocket(sessionId = null, path = '/ws/terminal') {
         const token = this.getToken();
-        const url = `${this.wsBaseURL}${path}`;
+        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+        const url = `${this.wsBaseURL}${path}${q}`;
         // Two-element subprotocol array: marker + token. The server parses
         // these out of the Sec-WebSocket-Protocol header and verifies the
         // JWT before accepting. Do NOT collapse into a single string —

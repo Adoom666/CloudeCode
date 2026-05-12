@@ -114,19 +114,20 @@ async def create_session(request: Request, body: CreateSessionRequest):
 
 
 @router.get("/sessions", response_model=SessionInfo, dependencies=[Depends(require_auth)])
-async def get_session(request: Request):
+async def get_session(request: Request, session_id: Optional[str] = None):
     """
-    Get information about the current session.
+    Get information about a session.
 
-    Returns:
-        Session information
+    ``session_id`` (query, optional) selects a specific session; omitted
+    returns the current (most-recently-created) one. Back-compat: existing
+    clients call ``GET /sessions`` with no params and get "the" session.
 
     Raises:
-        HTTPException: If no session exists
+        HTTPException: 404 if the requested (or current) session doesn't exist
     """
     session_manager = request.app.state.session_manager
 
-    session_info = await session_manager.get_session_info()
+    session_info = await session_manager.get_session_info(session_id=session_id)
 
     if not session_info:
         raise HTTPException(status_code=404, detail="No active session")
@@ -134,28 +135,52 @@ async def get_session(request: Request):
     return session_info
 
 
-@router.delete("/sessions", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
-async def destroy_session(request: Request):
-    """
-    Destroy the current session.
+@router.get(
+    "/sessions/list",
+    response_model=List[SessionInfo],
+    dependencies=[Depends(require_auth)],
+)
+async def list_sessions(request: Request):
+    """List ALL live sessions (oldest first).
 
-    Returns:
-        Success response
+    Multi-session: two browser tabs can each be attached to a different
+    session. The launchpad's "Running Sessions" list uses this to surface
+    every owned-and-live session (in addition to ``/sessions/attachable``
+    for external/detached ones).
+    """
+    session_manager = request.app.state.session_manager
+    if hasattr(session_manager, "list_session_infos"):
+        return await session_manager.list_session_infos()
+    # Defensive: a single-session manager shim.
+    one = await session_manager.get_session_info()
+    return [one] if one else []
+
+
+@router.delete("/sessions", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
+async def destroy_session(request: Request, session_id: Optional[str] = None):
+    """
+    Destroy a session (kill its backend / tmux).
+
+    ``session_id`` (query, optional) selects which session; omitted destroys
+    the current one. Other live sessions are untouched.
 
     Raises:
-        HTTPException: If session destruction fails
+        HTTPException: 404 if the session doesn't exist, 500 on teardown error
     """
     session_manager = request.app.state.session_manager
     local_servers = request.app.state.local_servers
 
     try:
-        logger.info("api_destroy_session_request")
+        logger.info("api_destroy_session_request", session_id=session_id)
 
-        # Drop any local-server detections owned by the active session
-        # before tearing the session down. Best-effort: we look up the
-        # active backend's tmux name (the same key local_servers tracks
-        # entries under) and clear it.
-        backend = getattr(session_manager, "backend", None)
+        # Drop any local-server detections owned by THIS session before
+        # tearing it down. Best-effort: look up the backend's tmux name
+        # (the key local_servers tracks entries under) and clear it.
+        backend = None
+        if session_id and hasattr(session_manager, "get_backend"):
+            backend = session_manager.get_backend(session_id)
+        else:
+            backend = getattr(session_manager, "backend", None)
         active_name = (
             getattr(backend, "tmux_session", None) if backend else None
         )
@@ -163,7 +188,7 @@ async def destroy_session(request: Request):
             await local_servers.clear_session(active_name)
 
         # Destroy session
-        await session_manager.destroy_session()
+        await session_manager.destroy_session(session_id=session_id)
 
         return SuccessResponse(message="Session destroyed successfully")
 
@@ -179,22 +204,22 @@ async def destroy_session(request: Request):
     response_model=SuccessResponse,
     dependencies=[Depends(require_auth)],
 )
-async def detach_session(request: Request):
-    """Detach from the current session WITHOUT killing tmux.
+async def detach_session(request: Request, session_id: Optional[str] = None):
+    """Detach from a session WITHOUT killing tmux.
 
     Soft counterpart to ``DELETE /sessions`` — tears down the server-side
-    backend refs (reader task, idle watcher, our pipe-pane) while leaving
-    the tmux session alive. The user can re-adopt the detached session
-    from the Adopt list later, or just return to it via the active-session
-    banner before swapping to a different project.
+    backend refs (reader task, idle watcher, our pipe-pane) for THAT session
+    while leaving the tmux session alive. ``session_id`` (query, optional)
+    selects which session; omitted detaches the current one. Other live
+    sessions are untouched.
 
-    Returns 404 when no session is active. Other failures propagate as 500.
+    Returns 404 when the session isn't active. Other failures propagate as 500.
     """
     session_manager = request.app.state.session_manager
 
-    logger.info("api_detach_session_request")
+    logger.info("api_detach_session_request", session_id=session_id)
 
-    detached = await session_manager.detach_current_session()
+    detached = await session_manager.detach_current_session(session_id=session_id)
     if not detached:
         raise HTTPException(status_code=404, detail="No active session to detach")
 
@@ -218,12 +243,19 @@ async def list_attachable_sessions(request: Request):
 
     sessions = session_manager.list_attachable_sessions()
 
-    # Filter out the currently-active backend's name to prevent self-adopt.
-    active_name: Optional[str] = None
-    if session_manager.backend is not None:
-        active_name = getattr(session_manager.backend, "tmux_session", None)
-    if active_name:
-        sessions = [s for s in sessions if s.get("name") != active_name]
+    # Filter out EVERY tmux name currently bound to a live backend so the
+    # UI never offers self-adopt for any open session (the client also
+    # filters defensively).
+    if hasattr(session_manager, "active_tmux_names"):
+        active_names = session_manager.active_tmux_names()
+    else:
+        active_names = set()
+        b = getattr(session_manager, "backend", None)
+        n = getattr(b, "tmux_session", None) if b else None
+        if n:
+            active_names.add(n)
+    if active_names:
+        sessions = [s for s in sessions if s.get("name") not in active_names]
 
     return sessions
 
@@ -234,15 +266,13 @@ async def list_attachable_sessions(request: Request):
     dependencies=[Depends(require_auth)],
 )
 async def adopt_session(request: Request, body: AdoptSessionRequest):
-    """Adopt an externally-started tmux session into Cloude Code's active slot.
+    """Adopt an externally-started tmux session as a new concurrent session.
 
-    Returns 409 if a session is already active and ``confirm_detach`` is
-    False — the client must present a confirmation modal and retry with
-    ``confirm_detach=True``. Switching never kills the prior session; it
-    detaches (tmux stays alive, re-adoptable). Destruction only happens
-    via the explicit destroy button. Other failures (pane dead, tmux not
-    running, unsafe session name) propagate as 500 via the app's error
-    middleware; we deliberately do NOT wrap them here — keep handlers clean.
+    Multi-session: this NEVER detaches another session and NEVER returns 409
+    — multiple adopted/owned sessions coexist. ``confirm_detach`` in the body
+    is accepted for API back-compat and ignored. Other failures (pane dead,
+    tmux not running, unsafe session name) propagate as 500 via the app's
+    error middleware; we deliberately do NOT wrap them here.
     """
     session_manager = request.app.state.session_manager
 
@@ -252,9 +282,7 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
         confirm_detach=body.confirm_detach,
     )
 
-    # ``adopt_external_session`` raises HTTPException(409) directly when the
-    # single-active invariant would be violated without explicit consent —
-    # FastAPI propagates it as-is. It returns a dict shaped exactly like
+    # ``adopt_external_session`` returns a dict shaped exactly like
     # AdoptSessionResponse, so ``**result`` wires straight through pydantic.
     result = await session_manager.adopt_external_session(
         name=body.session_name,
@@ -351,9 +379,11 @@ async def set_pinned_theme(
         session_name = session_name[len("adopted:"):]
 
     # Build the set of tmux names we recognize: live attachable rows
-    # (caught by tmux probe) ∪ owned_tmux_sessions ∪ active backend.
+    # (caught by tmux probe) ∪ owned_tmux_sessions ∪ every live backend.
     known_names: set[str] = set(session_manager.owned_tmux_sessions)
-    if session_manager.backend is not None:
+    if hasattr(session_manager, "active_tmux_names"):
+        known_names |= session_manager.active_tmux_names()
+    elif session_manager.backend is not None:
         active_name = getattr(session_manager.backend, "tmux_session", None)
         if active_name:
             known_names.add(active_name)
@@ -389,17 +419,20 @@ async def set_pinned_theme(
         all_pin_keys=sorted(session_manager.pinned_themes.keys()),
     )
 
-    # Return the current SessionInfo when the pinned name is the active
-    # backend (the most useful response shape for the live caller). When
-    # the pin targets a non-active session, synthesize a minimal echo so
-    # the route's response_model contract still holds.
-    info = await session_manager.get_session_info()
-    if info is not None:
-        active_name = (
-            getattr(session_manager.backend, "tmux_session", None)
-            if session_manager.backend else None
-        )
-        if active_name == session_name:
+    # Return the SessionInfo of whichever live session carries this tmux
+    # name (the most useful response shape for the live caller). When the
+    # pin targets a non-live session, synthesize a minimal echo so the
+    # route's response_model contract still holds.
+    matched_sid: Optional[str] = None
+    backends_map = getattr(session_manager, "backends", None)
+    if backends_map is not None:
+        for sid, b in backends_map.items():
+            if getattr(b, "tmux_session", None) == session_name:
+                matched_sid = sid
+                break
+    if matched_sid is not None:
+        info = await session_manager.get_session_info(session_id=matched_sid)
+        if info is not None:
             # set_pinned_theme already mirrored onto session.pinned_theme.
             return info
     # Non-active pin update — return a minimal SessionInfo-shaped echo
@@ -464,26 +497,35 @@ async def send_command(request: Request, body: CommandRequest):
     status_code=201,
     dependencies=[Depends(require_auth)],
 )
-async def upload_image(request: Request, file: UploadFile = File(...)):
-    """Persist a pasted browser image into the active session's upload bucket.
+async def upload_image(
+    request: Request,
+    file: UploadFile = File(...),
+    session_id: Optional[str] = None,
+):
+    """Persist a pasted browser image into a session's upload bucket.
 
     The validated file is written to ``<working_dir>/.cloude_uploads/<uuid>.<ext>``
     with mode 0o600 (directory 0o700). The client then injects the returned
     absolute ``path`` into the terminal so Claude Code's CLI auto-attaches it.
 
-    Returns:
-        UploadImageResponse with the saved absolute path, basename, and size.
+    ``session_id`` (query, optional) picks which session's working dir to
+    write into; omitted uses the current session. The terminal tab that's
+    pasting passes its own session id so the image lands in the right project.
 
     Raises:
-        HTTPException: 409 if no session is active, 400 on validation failure
+        HTTPException: 409 if no matching session, 400 on validation failure
             (bad extension, oversize, magic-byte mismatch), 500 on disk error.
     """
     session_manager = request.app.state.session_manager
 
-    if not session_manager.has_active_session():
-        raise HTTPException(status_code=409, detail="No active session to upload into")
-
-    session = session_manager.session
+    session = None
+    if session_id and hasattr(session_manager, "get_session"):
+        session = session_manager.get_session(session_id)
+    if session is None:
+        # Back-compat: fall back to "the" session.
+        if not session_manager.has_active_session():
+            raise HTTPException(status_code=409, detail="No active session to upload into")
+        session = session_manager.session
     if session is None or not session.working_dir:
         raise HTTPException(status_code=409, detail="Active session has no working directory")
 

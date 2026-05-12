@@ -988,46 +988,16 @@ def test_for_external_rejects_unsafe_session_name():
         )
 
 
-# ---- Test 4: adopt_external_session 409 / detach-on-confirm -------------
+# ---- Test 4: adopt_external_session coexists w/ another session ---------
+# (multi-session refactor: adopt no longer raises 409 and no longer detaches)
 
 
 @pytest.mark.asyncio
-async def test_adopt_external_session_raises_409_without_confirm():
-    """If a session is already active, adopt must raise HTTPException(409)
-    unless ``confirm_detach=True`` — silent detach of a user's live
-    session is unacceptable (the user should see the swap modal first).
-    """
-    from fastapi import HTTPException
-
-    from src.core.session_manager import SessionManager
-
-    # Instantiate without hitting _load_session_metadata's side effects.
-    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
-        sm = SessionManager()
-
-    # Simulate an active session.
-    sm.has_active_session = MagicMock(return_value=True)  # type: ignore[assignment]
-
-    with pytest.raises(HTTPException) as excinfo:
-        await sm.adopt_external_session("some_external", confirm_detach=False)
-
-    assert excinfo.value.status_code == 409, (
-        f"expected 409 when active session exists and confirm_detach=False, "
-        f"got {excinfo.value.status_code}"
-    )
-    assert "confirm_detach" in excinfo.value.detail.lower(), (
-        f"409 detail should mention confirm_detach; got {excinfo.value.detail!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_adopt_external_session_detaches_prior_when_confirmed():
-    """With ``confirm_detach=True``, adopt must invoke ``detach_current_session``
-    (NOT ``destroy_session``) on the prior backend BEFORE building the new
-    one. Switching never kills — the prior tmux session stays alive so the
-    user can re-adopt it later. Destruction is only via the explicit
-    destroy button. Mocks the TmuxBackend factory so we don't touch tmux
-    at all — this is purely a control-flow test of the adopt sequence.
+async def test_adopt_external_session_no_409_when_other_session_active():
+    """Multi-session: adopting an external tmux session when another session
+    is already live must NOT raise 409 — both sessions coexist. The legacy
+    single-active 409 gate (and the ``confirm_detach`` modal it implied) is
+    gone; ``confirm_detach`` is accepted for API back-compat and ignored.
     """
     from src.core.session_manager import SessionManager
     from src.models import Session, SessionStatus
@@ -1035,34 +1005,26 @@ async def test_adopt_external_session_detaches_prior_when_confirmed():
     with patch.object(SessionManager, "_load_session_metadata", return_value=None):
         sm = SessionManager()
 
-    # Pretend there's an active session. has_active_session() must report
-    # True initially so the confirm-gate sees it and triggers detach.
-    sm.session = Session(
-        id="prior_session",
+    # Pre-register an existing live session A directly into the dicts.
+    sess_a = Session(
+        id="ses_existing",
         pty_pid=None,
         working_dir="/tmp",
         status=SessionStatus.RUNNING,
         created_at=datetime_for_tests(),
         last_activity=datetime_for_tests(),
     )
-    sm.backend = MagicMock()
-    sm.backend.is_alive = MagicMock(return_value=True)
-    sm.backend.tmux_session = "cloude_prior"
+    backend_a = MagicMock()
+    backend_a.is_alive = MagicMock(return_value=True)
+    backend_a.tmux_session = "cloude_existing"
+    sm._register_session(sess_a, backend_a)
 
-    # Track detach call. The old destroy path must NOT be invoked —
-    # destruction is reserved for the explicit destroy button.
-    detach_mock = AsyncMock(return_value=True)
-    sm.detach_current_session = detach_mock  # type: ignore[assignment]
-    destroy_mock = AsyncMock(return_value=True)
-    sm.destroy_session = destroy_mock  # type: ignore[assignment]
-
-    # Stub _resolve_external_cwd so we don't actually shell out.
     sm._resolve_external_cwd = AsyncMock(return_value=Path("/tmp"))  # type: ignore[assignment]
 
-    # Mock the TmuxBackend.for_external classmethod so no real tmux work runs.
     fake_backend = MagicMock()
     fake_backend.attach_existing = AsyncMock(return_value=None)
     fake_backend.capture_scrollback = MagicMock(return_value=b"")
+    fake_backend.tmux_session = "external_target"
     fake_backend._pipe_path = Path("/tmp/does_not_exist_for_test.pipe")
 
     with patch(
@@ -1071,7 +1033,72 @@ async def test_adopt_external_session_detaches_prior_when_confirmed():
     ), patch(
         "src.core.session_manager.settings"
     ) as mock_settings:
-        # Stub auth config so load_auth_config().session.* resolves.
+        auth_cfg = MagicMock()
+        auth_cfg.session.tmux_socket_name = "cloude"
+        auth_cfg.session.scrollback_lines = 3000
+        auth_cfg.notifications.idle_threshold_seconds = 30.0
+        mock_settings.load_auth_config.return_value = auth_cfg
+
+        # Both with and without confirm_detach must succeed (no 409 ever).
+        result = await sm.adopt_external_session(
+            "external_target", confirm_detach=False
+        )
+
+    assert "session" in result and "initial_scrollback_b64" in result
+    assert "fifo_start_offset" in result
+    # Session A must still be registered — adopt never detaches/destroys it.
+    assert "ses_existing" in sm.sessions, (
+        "adopting a second session must NOT remove the first one"
+    )
+    assert "adopted:external_target" in sm.sessions, (
+        "the adopted session must be registered as a concurrent session"
+    )
+    fake_backend.attach_existing.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_adopt_external_session_does_not_detach_or_destroy_prior():
+    """Multi-session: adopt must NEVER invoke ``detach_current_session`` or
+    ``destroy_session`` — switching to a different session is now additive,
+    not a swap. Pure control-flow test; the TmuxBackend factory is mocked.
+    """
+    from src.core.session_manager import SessionManager
+    from src.models import Session, SessionStatus
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+
+    sess_a = Session(
+        id="prior_session",
+        pty_pid=None,
+        working_dir="/tmp",
+        status=SessionStatus.RUNNING,
+        created_at=datetime_for_tests(),
+        last_activity=datetime_for_tests(),
+    )
+    backend_a = MagicMock()
+    backend_a.is_alive = MagicMock(return_value=True)
+    backend_a.tmux_session = "cloude_prior"
+    sm._register_session(sess_a, backend_a)
+
+    detach_mock = AsyncMock(return_value=True)
+    sm.detach_current_session = detach_mock  # type: ignore[assignment]
+    destroy_mock = AsyncMock(return_value=True)
+    sm.destroy_session = destroy_mock  # type: ignore[assignment]
+    sm._resolve_external_cwd = AsyncMock(return_value=Path("/tmp"))  # type: ignore[assignment]
+
+    fake_backend = MagicMock()
+    fake_backend.attach_existing = AsyncMock(return_value=None)
+    fake_backend.capture_scrollback = MagicMock(return_value=b"")
+    fake_backend.tmux_session = "external_target"
+    fake_backend._pipe_path = Path("/tmp/does_not_exist_for_test.pipe")
+
+    with patch(
+        "src.core.tmux_backend.TmuxBackend.for_external",
+        return_value=fake_backend,
+    ), patch(
+        "src.core.session_manager.settings"
+    ) as mock_settings:
         auth_cfg = MagicMock()
         auth_cfg.session.tmux_socket_name = "cloude"
         auth_cfg.session.scrollback_lines = 3000
@@ -1079,20 +1106,16 @@ async def test_adopt_external_session_detaches_prior_when_confirmed():
         mock_settings.load_auth_config.return_value = auth_cfg
 
         result = await sm.adopt_external_session(
-            "external_target",
-            confirm_detach=True,
+            "external_target", confirm_detach=True
         )
 
-    detach_mock.assert_awaited_once(), (
-        "detach_current_session must be awaited on confirmed detach"
+    detach_mock.assert_not_awaited(), (
+        "adopt must NOT detach the prior session — sessions are additive now"
     )
     destroy_mock.assert_not_awaited(), (
-        "destroy_session must NEVER be called on adopt-swap — "
-        "switching is detach-only; destruction is only via the destroy button"
+        "adopt must NEVER call destroy_session"
     )
-    assert "session" in result, "adopt response must contain 'session'"
-    assert "initial_scrollback_b64" in result, "adopt response must contain 'initial_scrollback_b64'"
-    assert "fifo_start_offset" in result, "adopt response must contain 'fifo_start_offset'"
+    assert "session" in result
     fake_backend.attach_existing.assert_awaited_once()
 
 
@@ -1100,6 +1123,83 @@ def datetime_for_tests():
     """Small helper — imports datetime only at call site to avoid top clutter."""
     from datetime import datetime
     return datetime.utcnow()
+
+
+# ---- Test 4b: per-session output fan-out isolation ---------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sessions_output_isolation():
+    """Two concurrent sessions, each with its own subscriber queue.
+
+    - Output produced by session A's backend lands ONLY in A's queue.
+    - B's queue stays empty.
+    - Destroying A does NOT touch B's subscribers (B's queue still works).
+    This is the core invariant the multi-session refactor buys.
+    """
+    import base64
+
+    from src.core.session_manager import SessionManager
+    from src.models import Session, SessionStatus
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+
+    # Register two sessions A and B directly (no real backends needed —
+    # we exercise the fan-out plumbing, not tmux).
+    def _mk_backend(name):
+        b = MagicMock()
+        b.is_alive = MagicMock(return_value=True)
+        b.tmux_session = name
+
+        async def _stop():
+            return None
+
+        b.stop = _stop
+        return b
+
+    sess_a = Session(id="ses_a", working_dir="/tmp", status=SessionStatus.RUNNING)
+    sess_b = Session(id="ses_b", working_dir="/tmp", status=SessionStatus.RUNNING)
+    sm._register_session(sess_a, _mk_backend("cloude_a"))
+    sm._register_session(sess_b, _mk_backend("cloude_b"))
+
+    qa = sm.subscribe_output("ses_a")
+    qb = sm.subscribe_output("ses_b")
+
+    # Push output through session A's bound handler.
+    handler_a = sm._make_output_handler("ses_a")
+    await handler_a(b"hello-A")
+
+    assert not qa.empty(), "session A's subscriber must receive A's bytes"
+    got = base64.b64decode(await qa.get())
+    assert got == b"hello-A"
+    assert qb.empty(), "session B's subscriber must NOT receive A's bytes"
+
+    # Symmetric check for B.
+    handler_b = sm._make_output_handler("ses_b")
+    await handler_b(b"hello-B")
+    assert not qb.empty()
+    assert base64.b64decode(await qb.get()) == b"hello-B"
+    assert qa.empty()
+
+    # Destroy A. B's subscriber list must be untouched.
+    metadata_path = sm.__class__.__module__  # noqa: F841 (sanity, unused)
+    with patch.object(type(sm), "_save_session_metadata", lambda *a, **k: None), \
+         patch("src.core.session_manager.settings") as mock_settings:
+        mock_settings.get_session_metadata_path.return_value = Path(
+            "/tmp/never_existent_metadata_for_test.json"
+        )
+        await sm.destroy_session("ses_a")
+
+    assert "ses_a" not in sm.sessions
+    assert "ses_b" in sm.sessions, "destroying A must NOT remove B"
+    assert qb in sm._subscribers.get("ses_b", []), (
+        "destroying A must not clear B's subscribers"
+    )
+    # B's queue still functions after A's teardown.
+    handler_b2 = sm._make_output_handler("ses_b")
+    await handler_b2(b"still-alive-B")
+    assert base64.b64decode(await qb.get()) == b"still-alive-B"
 
 
 # ---- Test 5: adopt_external_session propagates pane-dead error ----------
@@ -1161,13 +1261,16 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
         sm = SessionManager()
 
     # Simulate loaded metadata: session exists, but owned set is empty.
-    sm.session = Session(
-        id="foo",
-        pty_pid=None,
-        working_dir=str(tmp_path),
-        status=SessionStatus.RUNNING,
-        created_at=datetime_for_tests(),
-        last_activity=datetime_for_tests(),
+    sm._register_session(
+        Session(
+            id="foo",
+            pty_pid=None,
+            working_dir=str(tmp_path),
+            status=SessionStatus.RUNNING,
+            created_at=datetime_for_tests(),
+            last_activity=datetime_for_tests(),
+        ),
+        backend=None,
     )
     sm.owned_tmux_sessions = set()  # NOT owned
     sm._legacy_metadata_needs_backfill = False  # new-schema file
@@ -1188,19 +1291,19 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
         "src.core.session_manager.build_backend",
         side_effect=[fake_probe, fake_hydrate],
     ):
-        # Stub _clear_stale_metadata so we don't touch the filesystem.
+        # Stub _clear_stale_metadata so we don't touch the filesystem;
+        # mirror the real method's effect of wiping the session's state.
         sm._clear_stale_metadata = MagicMock(  # type: ignore[assignment]
-            side_effect=lambda: setattr(sm, "session", None),
+            side_effect=lambda sid=None: sm._wipe_session_state(sid or "foo"),
         )
         await sm.lifespan_startup()
 
     # The hydrate backend's attach_existing must NOT have been called —
     # ownership gate must block it.
     attach_mock.assert_not_awaited()
-    # And the backend attribute must NOT have been swapped to the hydrate
-    # candidate — sm.backend stays unchanged (None here).
-    assert sm.backend is None, (
-        "non-owned session must not be registered as the active backend"
+    # And no backend must have been registered for the non-owned session.
+    assert sm.current_backend is None, (
+        "non-owned session must not be registered as an active backend"
     )
 
 
@@ -1217,13 +1320,16 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
     with patch.object(SessionManager, "_load_session_metadata", return_value=None):
         sm = SessionManager()
 
-    sm.session = Session(
-        id="legacy_sess",
-        pty_pid=None,
-        working_dir=str(tmp_path),
-        status=SessionStatus.RUNNING,
-        created_at=datetime_for_tests(),
-        last_activity=datetime_for_tests(),
+    sm._register_session(
+        Session(
+            id="legacy_sess",
+            pty_pid=None,
+            working_dir=str(tmp_path),
+            status=SessionStatus.RUNNING,
+            created_at=datetime_for_tests(),
+            last_activity=datetime_for_tests(),
+        ),
+        backend=None,
     )
     sm.owned_tmux_sessions = set()  # empty set
     sm._legacy_metadata_needs_backfill = True  # <-- key flag for the legacy path

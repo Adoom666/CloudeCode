@@ -273,21 +273,27 @@ async def test_destroy_session_cleans_uploads_dir(tmp_path, monkeypatch):
     assert uploads_dir.exists()
 
     manager = SessionManager()
-    manager.session = Session(
-        id="ses_destroy01",
-        working_dir=str(tmp_path),
-        status=SessionStatus.RUNNING,
-    )
     backend = MagicMock()
 
     async def _stop():
         return None
 
     backend.stop = _stop
+    backend.is_alive = MagicMock(return_value=True)
     backend.tmux_session = "cloude_destroy01"
-    manager.backend = backend
+    # Multi-session manager: register the session into the per-session dicts
+    # rather than assigning the (now read-only) ``.session`` / ``.backend``.
+    manager._register_session(
+        Session(
+            id="ses_destroy01",
+            working_dir=str(tmp_path),
+            status=SessionStatus.RUNNING,
+        ),
+        backend,
+    )
 
     await manager.destroy_session()
 
     assert not uploads_dir.exists(), "uploads dir must be removed on destroy"
     assert manager.session is None
+    assert manager.sessions == {}

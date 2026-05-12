@@ -289,24 +289,37 @@ class Launchpad {
             }
             this.runningSessions = [];
         }
-        // Augment with the CURRENTLY ACTIVE backend, which the server filters
-        // out of /sessions/attachable to prevent self-adopt. Refetch via GET
-        // /sessions (returns 404 when none active) and merge.
+        // Augment with EVERY currently-live session, which the server
+        // filters out of /sessions/attachable to prevent self-adopt.
+        // Multi-session: two tabs can each be on a different session, so
+        // we pull the full list via GET /sessions/list (oldest first) and
+        // merge each one in, tagging is_active + carrying its session id.
         try {
-            const current = await window.API.getCurrentSession();
-            if (current && current.tmux_session) {
-                const already = this.runningSessions.some(s => s.name === current.tmux_session);
-                if (!already) {
+            let liveSessions = [];
+            if (typeof window.API.listSessions === 'function') {
+                liveSessions = await window.API.listSessions();
+            }
+            if (!Array.isArray(liveSessions) || liveSessions.length === 0) {
+                // Back-compat fallback: single-session server.
+                const current = await window.API.getCurrentSession();
+                liveSessions = current ? [current] : [];
+            }
+            for (const live of liveSessions) {
+                const tmuxName = live && live.tmux_session;
+                if (!tmuxName) continue;
+                const existing = this.runningSessions.find(s => s.name === tmuxName);
+                if (existing) {
+                    existing.is_active = true;
+                    existing.session_id = (live.session && live.session.id) || live.id || existing.session_id;
+                } else {
                     this.runningSessions.unshift({
-                        name: current.tmux_session,
+                        name: tmuxName,
                         created_by_cloude: true,
-                        created_at_epoch: current.created_at_epoch || 0,
+                        created_at_epoch: live.created_at_epoch || 0,
                         window_count: 1,
                         is_active: true,
+                        session_id: (live.session && live.session.id) || live.id || null,
                     });
-                } else {
-                    const row = this.runningSessions.find(s => s.name === current.tmux_session);
-                    if (row) row.is_active = true;
                 }
             }
         } catch (err) {
@@ -356,6 +369,7 @@ class Launchpad {
             name: s.name,
             owned: !!s.created_by_cloude,
             active: !!s.is_active,
+            sid: s.session_id || null,
         })));
         if (sig === this._lastRunningSig) {
             this._updateRunningSessionAges();
@@ -369,8 +383,9 @@ class Launchpad {
             const ageStr = s.created_at_epoch ? this._formatRelativeTime(s.created_at_epoch) : '';
             const escapedName = this._escapeHtml(s.name);
             const escapedDisplay = this._escapeHtml(displayName);
+            const sidAttr = s.session_id ? ` data-session-id="${this._escapeHtml(s.session_id)}"` : '';
             return `
-                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}">
+                <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}>
                   <div class="running-session-top">
                     <span class="running-session-dot" aria-hidden="true"></span>
                     <span class="running-session-name">${escapedDisplay}</span>
@@ -501,26 +516,29 @@ class Launchpad {
             if (killEl) {
                 e.stopPropagation();
                 const name = killEl.dataset.kill;
-                await this._handleKillRunningSession(name);
+                const sid = rowEl.dataset.sessionId || null;
+                await this._handleKillRunningSession(name, sid);
                 return;
             }
 
-            // Row click — return or swap
+            // Row click — return or attach
             const name = rowEl.dataset.name;
             const isActive = rowEl.dataset.active === '1';
+            const rowSessionId = rowEl.dataset.sessionId || null;
             if (isActive) {
-                // Already the active backend → jump straight to terminal
+                // Already a live backend → jump straight to ITS terminal
+                // (multi-session: this row may not be the "current" one).
                 try {
-                    const current = await window.API.getCurrentSession();
-                    if (current) {
-                        window.App.returnToExistingTerminal(current);
+                    const info = await window.API.getSession(rowSessionId);
+                    if (info) {
+                        window.App.returnToExistingTerminal(info);
                     }
                 } catch (err) {
                     this.showError('failed to return to terminal: ' + (err.message || err));
                 }
                 return;
             }
-            // Different session → swap
+            // Not yet attached → adopt it as a (new, concurrent) session
             await this._handleAttachRunningSession(name);
         });
         container.__boundRunningClicks = true;
@@ -543,7 +561,7 @@ class Launchpad {
      *      adoption entirely and is also idempotent if the session is
      *      already gone server-side.
      */
-    async _handleKillRunningSession(tmuxName) {
+    async _handleKillRunningSession(tmuxName, sessionId = null) {
         const display = this._deriveRunningSessionDisplayName(tmuxName);
         const confirmed = await this.showConfirmModal(
             'end session?',
@@ -554,9 +572,19 @@ class Launchpad {
         );
         if (!confirmed) return;
         try {
-            const current = await window.API.getCurrentSession().catch(() => null);
-            if (current && current.tmux_session === tmuxName) {
-                await window.API.destroySession();
+            // Resolve the session id for this tmux name if not supplied:
+            // a live session bound to it must go through DELETE /sessions
+            // (full teardown). External/detached → direct kill-session.
+            let sid = sessionId;
+            if (!sid && typeof window.API.listSessions === 'function') {
+                const live = await window.API.listSessions().catch(() => []);
+                const match = Array.isArray(live)
+                    ? live.find(x => x && x.tmux_session === tmuxName)
+                    : null;
+                sid = match ? ((match.session && match.session.id) || match.id || null) : null;
+            }
+            if (sid) {
+                await window.API.destroySession(sid);
             } else {
                 await window.API.destroyExternalSession(tmuxName);
             }
@@ -567,14 +595,13 @@ class Launchpad {
     }
 
     /**
-     * Attach/swap flow for a running tmux session (non-active row click).
+     * Adopt flow for a not-yet-attached running tmux session (row click).
      *
-     * Swap immediately — the prior session is detached (not killed) so it
-     * stays alive in tmux and reappears in the running-sessions list. On
-     * adopt success, dispatch `session-created` with the full adopt-specific
-     * detail payload (initialScrollbackB64, fifoStartOffset, adopted:true)
-     * so App.showTerminal() can plumb scrollback into the terminal
-     * controller.
+     * Multi-session: this is purely additive — adopting this tmux session
+     * does NOT detach or kill any other session. On adopt success, dispatch
+     * `session-created` with the adopt-specific detail payload
+     * (initialScrollbackB64, fifoStartOffset, adopted:true) so
+     * App.showTerminal() can plumb scrollback into the terminal controller.
      */
     async _handleAttachRunningSession(tmuxName) {
         try {
@@ -635,13 +662,15 @@ class Launchpad {
                         <details class="adopt-disclosure">
                             <summary>?</summary>
                             <div class="adopt-disclosure-body">
-                                <p>Sessions shown here run on the <code>cloude</code> tmux socket. Start one externally with <code>tmux -L cloude new -s &lt;name&gt;</code> — it'll appear here.</p>
-                                <p>To launch claude in one line:</p>
+                                <p>you don't have to launch through cloude — <em>any</em> tmux session on the <code>cloude</code> socket with <code>claude</code> running inside it is adoptable from here. start one yourself in any terminal:</p>
+                                <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork; claude</code></pre>
+                                <p>it shows up in this list tagged <code>EXTERNAL</code> — click it to adopt. note the <code>-L cloude</code>: a plain <code>tmux new -s mywork</code> lives on the default socket and won't appear here.</p>
+                                <p>to launch claude in one line so the pane survives claude exiting:</p>
                                 <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec \$SHELL"</code></pre>
-                                <p>The <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
-                                <p>If you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
+                                <p>the <code>exec \$SHELL</code> trick keeps the pane alive with a shell prompt after claude exits.</p>
+                                <p>if you have a custom launcher alias (e.g. <code>cld</code>) defined in your <code>~/.zshrc</code> or <code>~/.bashrc</code>, wrap the inner command in an interactive shell:</p>
                                 <pre class="adopt-disclosure-code"><code>tmux -L cloude new -s mywork "\$SHELL -ic 'cld; exec \$SHELL'"</code></pre>
-                                <p>Full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
+                                <p>full setup in the <a href="https://github.com/Adoom666/CloudeCode#launching-claude-with-a-custom-alias" target="_blank" rel="noopener">README</a>.</p>
                             </div>
                         </details>
                         <div class="new-fab" id="new-fab">

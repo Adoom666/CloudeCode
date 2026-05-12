@@ -167,7 +167,7 @@ class Terminal {
             theme: initialXtermTheme,
             allowProposedApi: true,
             convertEol: false,
-            scrollback: 10000,
+            scrollback: 50000,
             windowsMode: false
         });
 
@@ -249,6 +249,11 @@ class Terminal {
         // (xterm wipes the custom key handler during core reset on
         // session swap, which would otherwise leave Shift+Enter dead).
         this._applyKeyHandlers();
+
+        // Wire the capture-phase wheel interceptor (see _applyWheelHandler).
+        // DOM listener on term.element survives term.reset() since the
+        // element isn't recreated, so a single attachment is sufficient.
+        this._applyWheelHandler();
 
         // IMG-PASTE — wire image-paste pipeline. Both the paste listener
         // (DOM event on #terminal container) and the mobile attach button
@@ -391,6 +396,27 @@ class Terminal {
     }
 
     /**
+     * Attach a capture-phase wheel listener that scrolls xterm's own
+     * scrollback instead of letting xterm translate the wheel into cursor
+     * (up/down arrow) keystrokes — which it does on the alternate screen
+     * buffer (active during a Claude Code TUI), where Claude reads those
+     * arrows as "cycle previous prompts" and the scrollback never moves.
+     * Capture phase + stopPropagation runs before xterm's own bubble-phase
+     * wheel handler, so the arrow-key path never fires.
+     */
+    _applyWheelHandler() {
+        if (!this.term || !this.term.element || this._wheelHandlerAttached) return;
+        this.term.element.addEventListener('wheel', (e) => {
+            if (e.deltaY === 0) return;
+            const lines = Math.ceil(Math.abs(e.deltaY) / 40) * (e.deltaY > 0 ? 1 : -1);
+            this.term.scrollLines(lines || (e.deltaY > 0 ? 1 : -1));
+            e.preventDefault();
+            e.stopPropagation();
+        }, { capture: true });
+        this._wheelHandlerAttached = true;
+    }
+
+    /**
      * IMG-PASTE — desktop clipboard paste interceptor.
      *
      * Listens on the #terminal container in capture phase so we see the
@@ -491,7 +517,10 @@ class Terminal {
     async _uploadAndInjectImage(blob, mimeType) {
         this._showStatusPill('Uploading image...', 'info');
         try {
-            const result = await window.API.uploadImage(blob, mimeType);
+            // Multi-session: scope the upload to THIS tab's session so the
+            // image lands in the right project's working dir.
+            const sessionId = this._sessionId();
+            const result = await window.API.uploadImage(blob, mimeType, sessionId);
             this.insertText(result.path + ' ');
             this._showStatusPill('Pasted: ' + result.filename, 'success');
         } catch (err) {
@@ -886,13 +915,31 @@ class Terminal {
 
         // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
         // the Sec-WebSocket-Protocol header, NOT in the URL — so no token
-        // redaction is needed when logging the URL.
-        const wsURL = window.API.getWebSocketURL();
+        // redaction is needed when logging the URL. Multi-session: the
+        // session id goes in the ``?session_id=`` query param so the
+        // server scopes this stream to OUR session — another tab on a
+        // different session keeps its own WS undisturbed. ``_currentSession``
+        // may be a bare Session ({id}) or a SessionInfo ({session:{id}}).
+        const sessionId = this._sessionId();
+        const wsURL = window.API.getWebSocketURL(sessionId);
         console.log('Terminal: Connecting to WebSocket:', wsURL);
 
-        this.ws = window.API.openWebSocket();
+        this.ws = window.API.openWebSocket(sessionId);
         this.ws.binaryType = 'arraybuffer';
         this.setupWebSocketHandlers();
+    }
+
+    /**
+     * Resolve THIS tab's session id from ``_currentSession``, which may be
+     * a bare Session ({id}) or a SessionInfo ({session:{id}}). Returns null
+     * when not yet known (server falls back to "the" current session).
+     */
+    _sessionId() {
+        const s = this._currentSession;
+        if (!s) return null;
+        if (s.id) return s.id;
+        if (s.session && s.session.id) return s.session.id;
+        return null;
     }
 
     /**
@@ -1166,7 +1213,10 @@ class Terminal {
         try {
             this.updateStatus('Destroying session...');
 
-            await window.API.destroySession();
+            // Multi-session: destroy THIS tab's session only — other tabs'
+            // sessions are untouched.
+            const sessionId = this._sessionId();
+            await window.API.destroySession(sessionId);
 
             this.sessionActive = false;
             this.stopReconnecting();
