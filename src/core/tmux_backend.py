@@ -488,7 +488,8 @@ class TmuxBackend(SessionBackend):
         # Enable mouse mode on the cloude socket so wheel events get intercepted
         # by tmux instead of going through as arrow keys to TUI apps in alt-screen
         # (e.g. Claude Code, which would otherwise cycle prompt history).
-        await self._run_tmux("set-option", "-s", "mouse", "on", check=False)
+        # Global session option so all sessions on the cloude socket pick it up.
+        await self._run_tmux("set-option", "-g", "mouse", "on", check=False)
 
         # Override the default WheelUp/DownPane bindings: in alt-screen (any TUI),
         # enter copy-mode and let tmux's scrollback drive the wheel. In normal

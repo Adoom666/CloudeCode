@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.7.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.0/Cloude.Code-0.7.0-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.7.1-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.1/Cloude.Code-0.7.1-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.7.0-arm64.dmg"
-# expected: f328081ab8f18fa2ed7de67e9033a9f5a6de7a3633804e17eeaef81da7a5961e
+shasum -a 256 "Cloude.Code-0.7.1-arm64.dmg"
+# expected: d62775ccf3d5d7de28b5310bda9181f380f4935f8a1f35d9b4cbaa9ba541ae4a
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.7.0-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.7.1-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1062,7 +1062,11 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.7.0 (current — `weekend-mvp-v3.1`)
+### v0.7.1 (current — `weekend-mvp-v3.1`)
+
+- **Native tmux scroll actually works now** — v0.6.1 added `set-option -s mouse on` on the cloude socket, but tmux's `mouse` option is session-scope, not server-scope. The `-s` call silently no-op'd (the `check=False` flag swallowed the error). Bindings were correctly installed but never reached because mouse mode itself stayed off. Fix is a one-character change: `-s` → `-g`. Verified live: `tmux -L cloude show-options -gv mouse` now returns `on`.
+
+### v0.7.0 (`weekend-mvp-v3.1`)
 
 - **Project-scoped themes.** Theme is now keyed by PROJECT (the session's
   `working_dir`), not by tmux session. Canonical store: `<working_dir>/.cc.theme`
