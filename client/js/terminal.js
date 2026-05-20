@@ -408,6 +408,7 @@ class Terminal {
         if (!this.term || !this.term.element || this._wheelHandlerAttached) return;
         this.term.element.addEventListener('wheel', (e) => {
             if (e.deltaY === 0) return;
+            this.autoScrollEnabled = false;  // bypass the 100ms scroll-listener debounce race
             const lines = Math.ceil(Math.abs(e.deltaY) / 40) * (e.deltaY > 0 ? 1 : -1);
             this.term.scrollLines(lines || (e.deltaY > 0 ? 1 : -1));
             e.preventDefault();
@@ -771,8 +772,15 @@ class Terminal {
                 for (let i = 0; i < bin.length; i++) {
                     bytes[i] = bin.charCodeAt(i) & 0xff;
                 }
+                // Exit any alt-screen state + clear + home cursor so the captured bytes
+                // paint into a known-clean screen instead of on top of stale parser
+                // state (the bytes carry escape sequences relative to the tmux pane's
+                // screen state at capture time — we have none of that here).
+                this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
                 this.term.write(bytes);
                 console.log(`Terminal: painted ${bytes.length} bytes of adopt scrollback`);
+                // Flag to send Ctrl+L in ws.onopen after dims handshake settles
+                this._needsReplayCtrlL = true;
             } catch (e) {
                 // Non-fatal — if the b64 is malformed we still want the
                 // session to come up. The user will just miss the pre-
@@ -972,6 +980,16 @@ class Terminal {
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
             this.sendResize('ws.onopen');
+
+            // If replay just finished, send Ctrl+L to nudge app repaint after dims settle
+            if (this._needsReplayCtrlL) {
+                this._needsReplayCtrlL = false;
+                setTimeout(() => {
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send(new Uint8Array([0x0c]));  // Ctrl+L — repaint after replay
+                    }
+                }, 50);
+            }
 
             // Start keepalive ping
             if (this.keepaliveInterval) {

@@ -77,7 +77,7 @@ class SessionConfig(BaseModel):
         description="Dedicated tmux socket name (tmux -L <name>)",
     )
     scrollback_lines: int = Field(
-        default=3000,
+        default=10000,
         description="Lines of scrollback to capture on re-attach",
         ge=0,
     )

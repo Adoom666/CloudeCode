@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.6.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.6.0/Cloude.Code-0.6.0-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.6.1-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.6.1/Cloude.Code-0.6.1-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.6.0-arm64.dmg"
-# expected: f02bfb21c7c655dd5da56604fba770a82b6ee064a39bb4ce065ac58563bd60ce
+shasum -a 256 "Cloude.Code-0.6.1-arm64.dmg"
+# expected: 466ff38454bc0e51a791fec8347bc813fd51a7ed8d25223b7d0f106870bd9999
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.6.0-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.6.1-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1062,7 +1062,33 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.6.0 (current — `weekend-mvp-v3.1`)
+### v0.6.1 (current — `weekend-mvp-v3.1`)
+
+- **Browser scrollback replay no longer jumbled.** When resuming a session
+  in the browser, the replayed history would paint as a misaligned mess —
+  lines duplicated at multiple rows, leading columns truncated — because
+  the captured bytes carried alt-screen escape sequences that xterm had no
+  prior state for. Three coordinated fixes: tmux `capture-pane` no longer
+  joins wrapped lines (drop `-J`), a screen-reset preamble
+  (`\x1b[?1049l\x1b[2J\x1b[H`) is written before the replay so the xterm
+  parser starts clean, and a Ctrl+L follow-up fires 50ms after the WS
+  opens so the live app (Claude's TUI) repaints fresh on top of the
+  replayed history. `scrollback_lines` default also bumped 3000 → 10000.
+- **Mid-stream scroll-up works now.** While Claude was streaming output,
+  scrolling up would snap the viewport back to the bottom on every chunk.
+  The wheel handler was racing the scroll-listener's 100ms debounce that
+  flips `autoScrollEnabled` off; the PTY flush cycle was faster. Fixed by
+  flipping `autoScrollEnabled = false` synchronously inside the wheel
+  handler. Scroll-to-bottom still re-engages auto-follow.
+- **Server-side desktop tmux scroll.** When sitting at the Mac in a
+  native terminal attached to a `-L cloude` session, mouse wheel was
+  being forwarded to whatever TUI was in the pane (Claude → cycle prompt
+  history). Now `set -s mouse on` is set on the cloude socket, and
+  `WheelUpPane` / `WheelDownPane` are bound to enter copy-mode when the
+  pane is in alt-screen. The browser path is unaffected (no client is
+  attached to the pipe-pane FIFO so no mouse escapes flow to xterm.js).
+
+### v0.6.0 (`weekend-mvp-v3.1`)
 
 - **Concurrent sessions.** You can now run multiple terminal sessions at
   once. Open two browser tabs, attach a different session in each, and

@@ -484,6 +484,30 @@ class TmuxBackend(SessionBackend):
         await self._run_tmux(
             "set-option", "-s", "extended-keys", "on", check=False
         )
+
+        # Enable mouse mode on the cloude socket so wheel events get intercepted
+        # by tmux instead of going through as arrow keys to TUI apps in alt-screen
+        # (e.g. Claude Code, which would otherwise cycle prompt history).
+        await self._run_tmux("set-option", "-s", "mouse", "on", check=False)
+
+        # Override the default WheelUp/DownPane bindings: in alt-screen (any TUI),
+        # enter copy-mode and let tmux's scrollback drive the wheel. In normal
+        # screen mode (a shell prompt), forward as usual so rare shell-mouse use
+        # still works. -T root binds at the root key-table.
+        await self._run_tmux(
+            "bind-key", "-T", "root", "WheelUpPane",
+            "if-shell", "-Ft=", "#{alternate_on}",
+            "copy-mode -e ; send-keys -X -N 3 scroll-up",
+            "send-keys -M",
+            check=False,
+        )
+        await self._run_tmux(
+            "bind-key", "-T", "root", "WheelDownPane",
+            "if-shell", "-Ft=", "#{pane_in_mode}",
+            "send-keys -X -N 3 scroll-down",
+            "send-keys -M",
+            check=False,
+        )
         # ``-as`` = append-and-set to the terminal-features option list.
         # We target xterm-256color (our default TERM set above) and add the
         # ``extkeys`` feature flag which tells tmux this terminal supports
@@ -1094,8 +1118,7 @@ class TmuxBackend(SessionBackend):
         """Capture the pane's recent scrollback as raw bytes (UTF-8).
 
         ``capture-pane -p`` writes to stdout. ``-S -<N>`` sets start line N
-        lines above the cursor. ``-J`` joins wrapped lines (matches what
-        users see in the terminal). ``-e`` preserves ANSI escape sequences
+        lines above the cursor. ``-e`` preserves ANSI escape sequences
         so xterm.js can replay colors/positioning faithfully.
         """
         if lines <= 0:
@@ -1107,7 +1130,6 @@ class TmuxBackend(SessionBackend):
                 "capture-pane",
                 "-p",
                 "-e",
-                "-J",
                 "-S",
                 f"-{lines}",
                 "-t",
