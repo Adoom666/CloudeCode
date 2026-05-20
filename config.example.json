@@ -19,7 +19,8 @@
     "idle_threshold_seconds": 30.0,
     "rate_limit_global_cap": 10,
     "rate_limit_window_seconds": 60.0,
-    "rate_limit_per_kind_cooldown_seconds": 10.0
+    "rate_limit_per_kind_cooldown_seconds": 10.0,
+    "slack_webhook_url": ""
   },
   "agents": {
     "claude_command": "claude --dangerously-skip-permissions",

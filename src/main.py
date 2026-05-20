@@ -21,6 +21,8 @@ from src.core.refresh_store import RefreshStore
 from src.core.upload_sweeper import UploadSweeper
 from src.core.notifications import NotificationRouter
 from src.core.notifications import ntfy as ntfy_backend
+from src.core.notifications import slack as slack_backend
+from src.core import claude_hooks
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
 from src.api.auth import router as auth_router, limiter as auth_limiter
@@ -90,6 +92,9 @@ async def lifespan(app: FastAPI):
     auth_cfg = settings.load_auth_config()
     notif_cfg = auth_cfg.notifications
     await ntfy_backend.init(notif_cfg.ntfy_base_url, notif_cfg.ntfy_topic)
+    # v0.7.0 Part 4 — Slack incoming-webhook channel. Empty URL = silently
+    # disabled (slack.init logs once and returns without building a client).
+    await slack_backend.init(getattr(notif_cfg, "slack_webhook_url", ""))
     notification_router = NotificationRouter(
         notif_cfg, asyncio.get_running_loop()
     )
@@ -98,6 +103,19 @@ async def lifespan(app: FastAPI):
     # Item 7: inject the live router into SessionManager so IdleWatcher
     # instances created via create_session have a valid emit target.
     session_manager.attach_notification_router(notification_router)
+
+    # v0.7.0 Part 3 — idempotent-merge cloudecode's Claude Code lifecycle
+    # hooks into ~/.claude/settings.json. Best effort: a parse error /
+    # write error / disabled-by-config all return without raising, and a
+    # try/except guards against any genuinely unexpected throw so server
+    # boot is NEVER blocked by hook-settings glitches. The hook block
+    # only matters for sessions that spawn ``claude`` AFTER this point
+    # (env vars travel through tmux at spawn time), but the merge itself
+    # is idempotent and re-running is cheap.
+    try:
+        claude_hooks.ensure_hook_settings()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("claude_hooks_ensure_failed", error=str(exc))
 
     # Plan v3.2 — LocalServersTracker replaces the demolished tunnel
     # subsystem. Hooks into log_monitor pattern callbacks for detection
@@ -193,6 +211,7 @@ async def lifespan(app: FastAPI):
     if notification_router is not None:
         await notification_router.stop()
     await ntfy_backend.shutdown()
+    await slack_backend.shutdown()
 
     logger.info("application_shutdown_complete")
 

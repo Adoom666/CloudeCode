@@ -28,15 +28,28 @@ from src.models import (
     AdoptSessionResponse,
     ThemeManifest,
     UpdatePinnedThemeRequest,
+    UpdateThemeRequest,
     UploadImageResponse,
+    Toast,
+    ToastNewMessage,
+    ToastAckMessage,
+    CreateToastRequest,
 )
 from src.api.auth import require_auth
+from src.api.websocket import connection_manager
 from src.api.uploads import validate_image, save_to_session_dir
 from src.config import settings
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# v0.7.0 — one-shot deprecation log guard for the legacy
+# ``PATCH /sessions/{name}/pinned-theme`` alias. Flipped True on the first
+# hit per server process so we don't spam logs every PATCH while still
+# emitting a single audit line per uptime window. Removed when the alias
+# itself is dropped in v0.8.x.
+_PINNED_THEME_ALIAS_WARNED: bool = False
 
 
 @router.post("/sessions", response_model=Session, status_code=201, dependencies=[Depends(require_auth)])
@@ -341,40 +354,28 @@ async def destroy_external_session(request: Request, name: str):
     return SuccessResponse(message=msg)
 
 
-@router.patch(
-    "/sessions/{session_name}/pinned-theme",
-    response_model=SessionInfo,
-    dependencies=[Depends(require_auth)],
-)
-async def set_pinned_theme(
-    request: Request, session_name: str, body: UpdatePinnedThemeRequest
-):
-    """Pin (or clear) a theme on a session by tmux session name.
+async def _apply_session_theme(
+    session_manager, session_name: str, theme_id: Optional[str]
+) -> SessionInfo:
+    """Shared implementation for both ``/theme`` and the deprecated
+    ``/pinned-theme`` alias.
 
-    SESSION-IDENTITY-V2 — the pinned theme overrides the user's global
-    localStorage theme whenever the session is active. ``pinned_theme``
-    null/None clears the pin.
+    v0.7.0 behavior:
+      * Validates the tmux name against the known-sessions set (same
+        rules as the legacy route — owned ∪ active ∪ attachable probe).
+      * Writes ``<session.working_dir>/.cc.theme`` via
+        ``session_manager.set_project_theme`` (atomic tmp+rename).
+        Empty/None ``theme_id`` clears the dotfile.
+      * Mirrors onto the live ``Session.pinned_theme`` so a follow-up
+        ``get_session_info`` reflects the change without re-reading.
+      * Retains the ``pinned_themes.json`` mirror for ONE release so
+        downgrades to v0.6.x stay coherent. Removed when the alias
+        route itself is dropped in v0.8.x.
 
-    Persistence is keyed by tmux session name in a dedicated
-    ``pinned_themes.json`` map that survives detach + swap + re-adopt
-    cycles. The session does NOT need to be the currently-active one —
-    pinning a theme to a session is conceptually about the session, not
-    about the active backend slot. ``adopt_external_session`` reads the
-    map on re-entry to seed ``Session.pinned_theme``; the attachable-
-    sessions endpoint decorates rows from the same map so the launchpad
-    can paint the pin without entering the session first.
-
-    Validation: ``session_name`` must be either the currently-active
-    backend's tmux name OR a tmux session known to our socket (live
-    name in ``list_attachable_sessions`` or owned name on file). This
-    keeps the endpoint from becoming an arbitrary KV store while still
-    accepting pins for detached-but-alive sessions.
+    Raises HTTPException for the route layer to surface verbatim.
     """
-    session_manager = request.app.state.session_manager
-
     # Defense in depth: strip the "adopted:" prefix if a stale frontend
     # ever sends it (Session.id is "adopted:<name>" for adopted rows).
-    # The pinned_themes map is keyed on bare tmux names.
     if session_name.startswith("adopted:"):
         session_name = session_name[len("adopted:"):]
 
@@ -393,15 +394,11 @@ async def set_pinned_theme(
             if n:
                 known_names.add(n)
     except Exception as exc:
-        # Probe failure shouldn't 500 a pin update; fall back to the
-        # owned/active set we already have.
-        logger.warning("pinned_theme_attachable_probe_failed", error=str(exc))
+        logger.warning("session_theme_attachable_probe_failed", error=str(exc))
 
     if session_name not in known_names:
-        # Diagnostic so a future "pin doesn't stick" report can be debugged
-        # by reading one log line instead of stepping through 5 layers.
         logger.info(
-            "pinned_theme_set_404",
+            "session_theme_set_404",
             session_name=session_name,
             known_names=sorted(known_names),
         )
@@ -410,42 +407,77 @@ async def set_pinned_theme(
             detail=f"Unknown session {session_name!r}",
         )
 
-    session_manager.set_pinned_theme(session_name, body.pinned_theme)
-
-    logger.info(
-        "api_set_pinned_theme",
-        session_name=session_name,
-        pinned_theme=body.pinned_theme,
-        all_pin_keys=sorted(session_manager.pinned_themes.keys()),
-    )
-
-    # Return the SessionInfo of whichever live session carries this tmux
-    # name (the most useful response shape for the live caller). When the
-    # pin targets a non-live session, synthesize a minimal echo so the
-    # route's response_model contract still holds.
+    # Resolve the working_dir for this tmux name. Live backend's session
+    # record wins; otherwise we don't have a path to write to.
     matched_sid: Optional[str] = None
+    matched_working_dir: Optional[str] = None
     backends_map = getattr(session_manager, "backends", None)
     if backends_map is not None:
         for sid, b in backends_map.items():
             if getattr(b, "tmux_session", None) == session_name:
                 matched_sid = sid
+                sess_obj = session_manager.sessions.get(sid)
+                if sess_obj is not None:
+                    matched_working_dir = sess_obj.working_dir
                 break
+
+    # v0.7.0 — write the project-scoped dotfile. When no live session
+    # carries this name we still update the legacy JSON map below so
+    # downgrades + non-live pins remain functional (this is the one
+    # path where pinned_themes.json is still the source of truth).
+    if matched_working_dir:
+        try:
+            session_manager.set_project_theme(matched_working_dir, theme_id)
+        except FileNotFoundError as exc:
+            logger.warning(
+                "session_theme_working_dir_missing",
+                session_name=session_name,
+                working_dir=matched_working_dir,
+                error=str(exc),
+            )
+            # working_dir gone (project deleted on disk) — don't crash;
+            # fall through to the JSON mirror so the in-memory + map
+            # update still happens. Caller will see a 200 with the pin
+            # reflected even though the dotfile couldn't be written.
+        except (OSError, ValueError, NotADirectoryError) as exc:
+            logger.error(
+                "session_theme_write_failed",
+                session_name=session_name,
+                working_dir=matched_working_dir,
+                error=str(exc),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to persist project theme: {exc}",
+            )
+
+    # Mirror onto the legacy JSON map + the live Session.pinned_theme.
+    # ``set_pinned_theme`` handles BOTH (map write + in-memory mirror) so
+    # we don't have to duplicate the live-backend lookup.
+    session_manager.set_pinned_theme(session_name, theme_id)
+
+    logger.info(
+        "api_set_session_theme",
+        session_name=session_name,
+        theme_id=theme_id,
+        working_dir=matched_working_dir,
+    )
+
     if matched_sid is not None:
         info = await session_manager.get_session_info(session_id=matched_sid)
         if info is not None:
-            # set_pinned_theme already mirrored onto session.pinned_theme.
             return info
-    # Non-active pin update — return a minimal SessionInfo-shaped echo
-    # that carries the pin (the client only consumes pinned_theme on this
-    # path; the rest is filler to satisfy the pydantic contract).
+
+    # Non-active pin update — synthesize a minimal SessionInfo-shaped
+    # echo that carries the pin so the pydantic contract still holds.
     placeholder_session = Session(
         id=f"pinned:{session_name}",
         pty_pid=None,
-        working_dir="",
+        working_dir=matched_working_dir or "",
         status=SessionStatus.STOPPED,
         created_at=datetime.utcnow(),
         last_activity=datetime.utcnow(),
-        pinned_theme=body.pinned_theme,
+        pinned_theme=theme_id,
     )
     return SessionInfo(
         session=placeholder_session,
@@ -457,7 +489,75 @@ async def set_pinned_theme(
         session_backend="none",
         tmux_session=session_name,
         agent_type=None,
-        pinned_theme=body.pinned_theme,
+        pinned_theme=theme_id,
+    )
+
+
+@router.patch(
+    "/sessions/{session_name}/theme",
+    response_model=SessionInfo,
+    dependencies=[Depends(require_auth)],
+)
+async def set_session_theme(
+    request: Request, session_name: str, body: UpdateThemeRequest
+):
+    """Set (or clear) the project-scoped theme for a session.
+
+    v0.7.0 — supersedes ``PATCH /sessions/{name}/pinned-theme``. The
+    theme id is written to ``<session.working_dir>/.cc.theme`` so two
+    browsers / two machines pointed at the same project converge on
+    the same theme without round-tripping a per-machine cache.
+
+    Body shape: ``{"theme_id": "<id>"}`` or ``{"theme_id": null}`` (or
+    empty string) to clear. The session is validated against the same
+    known-tmux-names set used by the legacy route — owned ∪ active ∪
+    attachable probe — so this endpoint can't become an arbitrary KV
+    store while still accepting pins for detached-but-alive sessions.
+
+    The response is the live ``SessionInfo`` when the named session is
+    active; otherwise a minimal echo whose ``pinned_theme`` field
+    carries the new value.
+    """
+    session_manager = request.app.state.session_manager
+    return await _apply_session_theme(
+        session_manager, session_name, body.theme_id
+    )
+
+
+@router.patch(
+    "/sessions/{session_name}/pinned-theme",
+    response_model=SessionInfo,
+    dependencies=[Depends(require_auth)],
+    deprecated=True,
+)
+async def set_pinned_theme(
+    request: Request, session_name: str, body: UpdatePinnedThemeRequest
+):
+    """DEPRECATED v0.7.0 — use ``PATCH /sessions/{session_name}/theme``.
+
+    Kept as a routing alias for ONE release so v0.6.x clients keep
+    working through an upgrade window. Internally forwards to the same
+    code path as the new endpoint — the theme id is written to
+    ``<session.working_dir>/.cc.theme`` regardless of which route the
+    client hits. The response shape is unchanged.
+
+    Will be REMOVED in v0.8.x. New clients MUST use ``/theme``.
+    """
+    global _PINNED_THEME_ALIAS_WARNED
+    if not _PINNED_THEME_ALIAS_WARNED:
+        # One-shot per-process warning so logs aren't spammed by chatty
+        # clients while still surfacing a single audit line per uptime
+        # window. Reset on server restart by design.
+        _PINNED_THEME_ALIAS_WARNED = True
+        logger.warning(
+            "route_deprecated_pinned_theme",
+            session_name=session_name,
+            replacement="PATCH /sessions/{session_name}/theme",
+            removal_version="v0.8.x",
+        )
+    session_manager = request.app.state.session_manager
+    return await _apply_session_theme(
+        session_manager, session_name, body.pinned_theme
     )
 
 
@@ -563,6 +663,316 @@ async def upload_image(
         filename=target_path.name,
         size=len(validated_bytes),
     )
+
+
+# ---------------------------------------------------------------------------
+# Toast notifications (v0.7.0 Part 2)
+# ---------------------------------------------------------------------------
+# Three endpoints:
+#   GET  /sessions/{session_id}/toasts?unacked=true  → list (backfill on attach)
+#   POST /sessions/{session_id}/toasts               → record + broadcast
+#       (SYNTHETIC — Part 3 will add a hook-driven endpoint; this one is
+#        intentionally kept for client/manual testing)
+#   POST /toasts/{toast_id}/ack?session_id=<id>      → mark acked + broadcast
+#
+# Storage + theme-accent resolution lives in SessionManager. The WS fanout
+# uses ``connection_manager.broadcast_to_session`` which targets only the
+# sockets bound to the named session, so toasts for session A never leak
+# into a tab attached to session B.
+
+
+@router.get(
+    "/sessions/{session_id}/toasts",
+    response_model=List[Toast],
+    dependencies=[Depends(require_auth)],
+)
+async def list_session_toasts(
+    request: Request, session_id: str, unacked: bool = False
+):
+    """List toasts for a session, optionally filtered to unacked-only.
+
+    Used by the client on (re)attach to backfill any toast that fired
+    while the browser was disconnected. Newest-first. Returns an empty
+    list (NOT 404) when the session has no toasts — the launchpad polls
+    speculatively and an empty array is the right success shape.
+    """
+    session_manager = request.app.state.session_manager
+    if hasattr(session_manager, "get_toasts"):
+        return session_manager.get_toasts(session_id, unacked_only=unacked)
+    return []
+
+
+@router.post(
+    "/sessions/{session_id}/toasts",
+    response_model=Toast,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def create_session_toast(
+    request: Request, session_id: str, body: CreateToastRequest
+):
+    """Synthetic toast creation — record + broadcast to the session.
+
+    INTENTIONALLY TEMPORARY for v0.7.0 Part 2: lets the client and storage
+    layer be exercised end-to-end without a real Claude Code hook. Part 3
+    will add a hook-driven endpoint with different auth semantics; THIS
+    surface remains useful for manual testing and is the canonical entry
+    point for synthetic-load tests.
+
+    Returns 404 when the session id is unknown.
+    """
+    session_manager = request.app.state.session_manager
+    try:
+        toast = session_manager.record_toast(
+            session_id=session_id,
+            kind=body.kind,
+            title=body.title,
+            body=body.body,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # Fan out the toast to every browser bound to this session. Includes
+    # the originating tab so the creator's UI updates without a separate
+    # round-trip (the synthetic POST endpoint isn't typically the same
+    # process as the displaying browser, but treating it uniformly keeps
+    # the future hook path symmetric).
+    try:
+        await connection_manager.broadcast_to_session(
+            session_id,
+            ToastNewMessage(toast=toast).model_dump_json(),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("toast_broadcast_failed", session_id=session_id, error=str(exc))
+
+    return toast
+
+
+@router.post(
+    "/toasts/{toast_id}/ack",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def ack_toast(request: Request, toast_id: str, session_id: str):
+    """Mark a toast acknowledged and broadcast the ack to the session.
+
+    ``session_id`` is a required query parameter (not body) so this is a
+    cleanly bookmarkable / curlable URL. The broadcast lets OTHER browsers
+    attached to the same session dismiss the toast in lockstep — no
+    localStorage cross-tab sync needed.
+
+    Idempotent at the storage layer: a double-click won't re-broadcast.
+    Returns 404 only when the toast id is unknown FOR THIS SESSION; an
+    already-acked toast returns 200 with ``success=true`` and no broadcast.
+    """
+    session_manager = request.app.state.session_manager
+    changed = session_manager.ack_toast(session_id, toast_id)
+    if not changed:
+        # Either not found OR already acked. We can't distinguish without
+        # an extra get_toasts walk; the storage layer treats both as
+        # "no state change". Tests use get_toasts to assert post-state;
+        # the client doesn't care which it was.
+        return SuccessResponse(success=True, message="No-op")
+
+    try:
+        await connection_manager.broadcast_to_session(
+            session_id,
+            ToastAckMessage(toast_id=toast_id).model_dump_json(),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "toast_ack_broadcast_failed",
+            session_id=session_id,
+            toast_id=toast_id,
+            error=str(exc),
+        )
+
+    return SuccessResponse(success=True, message="Toast acknowledged")
+
+
+# ---------------------------------------------------------------------------
+# Claude Code lifecycle hooks (v0.7.0 Part 3)
+# ---------------------------------------------------------------------------
+# Single endpoint:
+#   POST /hooks/claude-event
+#
+# Auth model:
+#   This endpoint INTENTIONALLY does NOT use Depends(require_auth). The hook
+#   subprocess is spawned by Claude Code from inside a tmux pane that runs
+#   on the same machine as cloudecode — there's no place for a JWT. Instead
+#   we authenticate via TWO orthogonal layers:
+#
+#     1. Loopback-only — client_host must be 127.0.0.1 (or ::1/localhost).
+#        Anything else is rejected with 403.
+#     2. HMAC bearer token — a per-session URL-safe token (32 bytes,
+#        secrets.token_urlsafe) minted at session-create and injected into
+#        the spawned agent's env as CLOUDECODE_HOOK_TOKEN. The hook
+#        forwards it via the X-Cloudecode-Token header. We validate via
+#        SessionManager.validate_hook_token() which uses hmac.compare_digest.
+#
+# Both layers must pass. The token is dropped from memory when the session
+# is destroyed; the loopback check protects against LAN attackers who
+# somehow learn a token (e.g. via a /proc dump on a multi-user box).
+
+
+_VALID_HOOK_EVENTS = ("Stop", "PermissionRequest", "Notification")
+_LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[str]]:
+    """Map a hook event + payload into (title, body) for the toast.
+
+    Defensive ``.get()`` everywhere — Claude Code's payload shape is not
+    a formally-stable contract across versions, and a malformed payload
+    must NEVER raise here (it just yields a generic toast).
+
+    Body strings are truncated to 200 chars so a rogue payload can't
+    blow out the toast UI; the goal is "you have something to attend to",
+    not a full transcript replay.
+    """
+    body: Optional[str] = None
+
+    if kind == "Stop":
+        # Documented base fields don't include the model's last message
+        # directly, but several Claude Code releases surface
+        # ``stop_reason`` or a ``transcript``-shaped field. Treat all as
+        # optional. Fall through to a generic body when nothing useful
+        # is present.
+        title = "Your turn"
+        transcript = payload.get("transcript") or payload.get("last_model_message")
+        if isinstance(transcript, str) and transcript.strip():
+            body = transcript.strip()[-200:]
+        else:
+            stop_reason = payload.get("stop_reason")
+            if isinstance(stop_reason, str) and stop_reason.strip():
+                body = f"stop_reason: {stop_reason.strip()[:180]}"
+
+    elif kind == "PermissionRequest":
+        title = "Permission needed"
+        # Prefer the tool-shape (tool_name + tool_input) since that's the
+        # most useful single line for the user. Fall back to a `prompt`
+        # field if Claude Code's payload uses that shape instead.
+        tool_name = payload.get("tool_name")
+        tool_input = payload.get("tool_input")
+        if isinstance(tool_name, str) and tool_name:
+            # Surface the most recognizable bit of tool_input — Bash =>
+            # command, Edit/Write => file_path, else the tool name alone.
+            detail = ""
+            if isinstance(tool_input, dict):
+                detail = (
+                    tool_input.get("command")
+                    or tool_input.get("file_path")
+                    or ""
+                )
+            body = f"{tool_name}: {detail}".strip(": ").strip()[:200] or tool_name[:200]
+        else:
+            prompt = payload.get("prompt") or payload.get("message")
+            if isinstance(prompt, str) and prompt.strip():
+                body = prompt.strip()[:200]
+        if not body:
+            body = "Claude is asking for permission to act."
+    elif kind == "Notification":
+        title = "Claude is waiting"
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            body = message.strip()[:200]
+    else:  # pragma: no cover — guarded upstream
+        title = "Claude event"
+
+    return title, body
+
+
+@router.post("/hooks/claude-event", include_in_schema=False)
+async def claude_event_hook(request: Request):
+    """Receive a Claude Code lifecycle hook POST.
+
+    NO JWT. Auth = loopback + HMAC token in the ``X-Cloudecode-Token``
+    header. See the section header above for the full security model.
+
+    Required headers:
+        X-Cloudecode-Session: cloudecode session id
+        X-Cloudecode-Token:   the HMAC bearer minted at session create
+        X-Cloudecode-Event:   one of "Stop" / "PermissionRequest" / "Notification"
+
+    Body: the raw JSON Claude Code's hook would normally pipe to a
+    shell command's stdin (we just forward stdin → curl --data-binary @-).
+    Schema is per-event and tolerated defensively — see
+    ``_hook_event_presentation``.
+
+    On success: records a toast (via the existing Part 2 storage) and
+    broadcasts ``toast.new`` to the session's WS subscribers.
+    """
+    # Layer 1 — loopback only. Even a token leak shouldn't let a LAN
+    # attacker fire toasts at someone else's cloudecode.
+    client_host = request.client.host if request.client else ""
+    if client_host not in _LOOPBACK_HOSTS:
+        logger.warning("hook_post_rejected_non_loopback", client_host=client_host)
+        raise HTTPException(status_code=403, detail="loopback only")
+
+    # Header extraction (FastAPI normalizes header keys to canonical
+    # case but the .get is case-insensitive on starlette's Headers).
+    session_id = request.headers.get("X-Cloudecode-Session", "")
+    token = request.headers.get("X-Cloudecode-Token", "")
+    event_kind = request.headers.get("X-Cloudecode-Event", "")
+    if not (session_id and token and event_kind):
+        raise HTTPException(status_code=400, detail="missing required headers")
+
+    if event_kind not in _VALID_HOOK_EVENTS:
+        raise HTTPException(status_code=400, detail="unknown event kind")
+
+    session_manager = request.app.state.session_manager
+
+    # Layer 2 — HMAC token validation, constant time.
+    if not session_manager.validate_hook_token(session_id, token):
+        # NEVER log the token value. We log session_id + event_kind so
+        # operators can spot brute-force attempts without leaking the secret.
+        logger.warning(
+            "hook_post_rejected_invalid_token",
+            session_id=session_id,
+            event_kind=event_kind,
+        )
+        raise HTTPException(status_code=403, detail="invalid token")
+
+    # Tolerate empty / malformed body — the title/body resolver is
+    # defensive and falls through to generic copy when fields are absent.
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    title, body = _hook_event_presentation(event_kind, payload)
+
+    try:
+        toast = session_manager.record_toast(
+            session_id=session_id,
+            kind=event_kind,
+            title=title,
+            body=body,
+        )
+    except ValueError as exc:
+        # Race: session got destroyed between the token mint and now.
+        # 410 Gone signals "this session is no longer accepting hooks"
+        # so the hook subprocess (which can't retry sensibly) just exits.
+        raise HTTPException(status_code=410, detail=str(exc))
+
+    # Fan out to every browser bound to this session — matches the
+    # Part 2 POST /sessions/{id}/toasts behavior so hook-originated and
+    # synthetic toasts present identically.
+    try:
+        await connection_manager.broadcast_to_session(
+            session_id,
+            ToastNewMessage(toast=toast).model_dump_json(),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "hook_toast_broadcast_failed",
+            session_id=session_id,
+            error=str(exc),
+        )
+
+    return {"ok": True, "toast_id": toast.id}
 
 
 @router.get("/sessions/logs", response_model=List[LogEntry], dependencies=[Depends(require_auth)])

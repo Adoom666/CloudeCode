@@ -195,10 +195,30 @@ class UpdatePinnedThemeRequest(BaseModel):
     SESSION-IDENTITY-V2: pin a theme id to a specific tmux session, or
     clear the pin by sending ``null``. The pinned theme overrides the
     user's global localStorage theme whenever the session is active.
+
+    DEPRECATED in v0.7.0: superseded by ``UpdateThemeRequest`` (project-
+    scoped via ``<working_dir>/.cc.theme``). This shape is kept for one
+    release; the deprecated alias route forwards through to the new code
+    path. Will be removed in v0.8.x.
     """
     pinned_theme: Optional[str] = Field(
         None,
         description="Theme id to pin to this session (None/null clears the pin)",
+    )
+
+
+class UpdateThemeRequest(BaseModel):
+    """Request body for ``PATCH /sessions/{session_name}/theme`` (v0.7.0+).
+
+    Project-scoped theme persistence: the theme id is written to
+    ``<session.working_dir>/.cc.theme`` so two browsers / two machines
+    pointed at the same project see the same theme without round-tripping
+    a per-machine cache. ``theme_id=None`` or empty deletes the dotfile
+    (clears the pin).
+    """
+    theme_id: Optional[str] = Field(
+        None,
+        description="Theme id to pin to this project's working dir (None/empty clears)",
     )
 
 
@@ -452,6 +472,77 @@ class WSMessageType(str, Enum):
     # drawn at the PREVIOUS size — causing visible corruption whenever
     # the reconnecting client had different dims than the stored session.
     REQUEST_DIMS = "request_dims"
+    # v0.7.0 Part 2 — toast notifications. Server -> client when a toast is
+    # recorded (via the synthetic POST endpoint in v0.7.0 Part 2; via the
+    # Claude Code hook endpoint in Part 3). Server -> client when a toast is
+    # acked so OTHER browsers attached to the same session dismiss in sync.
+    # Dot notation matches the convention used by ``local_server_*``
+    # (underscore) — we use a dot here intentionally so the namespace is
+    # visually distinct in client switch statements and log greps.
+    TOAST_NEW = "toast.new"
+    TOAST_ACK = "toast.ack"
+
+
+class Toast(BaseModel):
+    """A toast notification recorded for a session.
+
+    Storage shape: each session keeps a list of these, newest-first, capped
+    at ``unacked + last 50 acked``. Created via
+    ``SessionManager.record_toast``; acked via ``SessionManager.ack_toast``.
+    The ``color`` field is precomputed at record time from the session's
+    project theme (``--color-accent`` in the theme manifest's ``cssVars``)
+    so the client can paint a per-session-colored left border without an
+    extra theme lookup.
+    """
+    id: str = Field(..., description="UUID4 string")
+    session_id: str = Field(..., description="Session this toast belongs to")
+    kind: str = Field(
+        ...,
+        description="Toast kind: 'Stop' | 'PermissionRequest' | 'Notification'",
+    )
+    title: str = Field(..., description="Short bold headline")
+    body: Optional[str] = Field(None, description="Optional longer body text")
+    color: Optional[str] = Field(
+        None,
+        description="Hex accent color resolved from the session's project theme",
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    acknowledged: bool = Field(
+        False, description="True once the toast has been dismissed"
+    )
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class ToastNewMessage(BaseModel):
+    """WS server -> client: a new toast was recorded for this session."""
+    type: WSMessageType = WSMessageType.TOAST_NEW
+    toast: Toast
+
+
+class ToastAckMessage(BaseModel):
+    """WS server -> client: a toast was acked; other tabs should dismiss it."""
+    type: WSMessageType = WSMessageType.TOAST_ACK
+    toast_id: str
+
+
+class CreateToastRequest(BaseModel):
+    """Request body for ``POST /api/v1/sessions/{session_id}/toasts``.
+
+    Synthetic creation endpoint used by v0.7.0 Part 2 testing. Part 3 will
+    add a hook-driven endpoint with different auth semantics; this surface
+    is INTENTIONALLY kept around so the client and the storage layer have a
+    way to be exercised end-to-end without a real Claude Code hook.
+    """
+    kind: str = Field(
+        ...,
+        description="Toast kind: 'Stop' | 'PermissionRequest' | 'Notification'",
+    )
+    title: str = Field(..., description="Short bold headline")
+    body: Optional[str] = Field(None, description="Optional longer body text")
 
 
 class WSLogMessage(BaseModel):

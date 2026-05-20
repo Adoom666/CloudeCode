@@ -444,7 +444,8 @@
      * SESSION-IDENTITY-V2 — set / clear the active-session name. Called by
      * app.js on screen transitions (showTerminal sets, showLaunchpad/Auth
      * clears). When set, applyGlobal() routes persistence to the server
-     * via PATCH /api/v1/sessions/<name>/pinned-theme INSTEAD of localStorage.
+     * via PATCH /api/v1/sessions/<name>/theme INSTEAD of localStorage
+     * (v0.7.0+ — project-scoped via <working_dir>/.cc.theme).
      */
     function setActiveSession(name) {
         activeSessionName = name || null;
@@ -517,22 +518,30 @@
     }
 
     /**
-     * SESSION-IDENTITY-V2 — POST the pinned theme for an active session.
-     * Best-effort: failures are logged but never throw to the caller — the
-     * DOM paint already succeeded; persistence is recoverable. Server returns
-     * the updated SessionInfo; we don't consume it (the local DOM is already
-     * the source of truth for this paint).
+     * v0.7.0 — PATCH the project-scoped theme for an active session.
+     *
+     * Hits ``PATCH /api/v1/sessions/{name}/theme`` with body
+     * ``{theme_id}``; the server persists to ``<working_dir>/.cc.theme``
+     * so two browsers / two machines see the same theme.
+     *
+     * Best-effort: failures are logged but never throw to the caller —
+     * the DOM paint already succeeded; persistence is recoverable.
+     * Server returns the updated SessionInfo; we don't consume it
+     * (the local DOM is already the source of truth for this paint).
+     *
+     * Signature kept identical to the v0.6.x shape so existing callers
+     * (applyGlobal) don't break.
      */
     function pinThemeForSession(sessionName, themeId) {
         try {
-            var url = '/api/v1/sessions/' + encodeURIComponent(sessionName) + '/pinned-theme';
+            var url = '/api/v1/sessions/' + encodeURIComponent(sessionName) + '/theme';
             var headers = authHeaders();
             headers['Content-Type'] = 'application/json';
             fetch(url, {
                 method: 'PATCH',
                 headers: headers,
                 credentials: 'same-origin',
-                body: JSON.stringify({ pinned_theme: themeId })
+                body: JSON.stringify({ theme_id: themeId })
             }).then(function (res) {
                 if (!res.ok) {
                     console.warn('Themes.pinThemeForSession: HTTP ' + res.status + ' for ' + sessionName);

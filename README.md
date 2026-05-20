@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.6.1-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.6.1/Cloude.Code-0.6.1-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.7.0-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.0/Cloude.Code-0.7.0-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.6.1-arm64.dmg"
-# expected: 466ff38454bc0e51a791fec8347bc813fd51a7ed8d25223b7d0f106870bd9999
+shasum -a 256 "Cloude.Code-0.7.0-arm64.dmg"
+# expected: f328081ab8f18fa2ed7de67e9033a9f5a6de7a3633804e17eeaef81da7a5961e
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -311,7 +311,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.6.1-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.7.0-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1062,7 +1062,36 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.6.1 (current — `weekend-mvp-v3.1`)
+### v0.7.0 (current — `weekend-mvp-v3.1`)
+
+- **Project-scoped themes.** Theme is now keyed by PROJECT (the session's
+  `working_dir`), not by tmux session. Canonical store: `<working_dir>/.cc.theme`
+  — a one-line file containing the theme id. Server reads on attach, writes on
+  theme change, atomic. Same project on two laptops → same theme. Old
+  `pinned_themes.json` is kept as fallback for one release with auto-migration
+  on first attach; will be removed in v0.8.x. New endpoint `PATCH
+  /sessions/{name}/theme`; the old `/pinned-theme` route still works as a
+  deprecated alias.
+- **Toast notifications in-browser.** Claude Code lifecycle events (`Stop`,
+  `PermissionRequest`, `Notification`) now surface as toast popups in every
+  browser attached to that session. Toasts stay open until acknowledged. Acking
+  on one tab dismisses on every other tab attached to the same session (WS
+  broadcast). Toast color comes from the project's theme accent so you can tell
+  at a glance which session needs you.
+- **Claude Code hook integration.** Cloude Code now writes a managed hook block
+  into `~/.claude/settings.json` on startup (marker-tagged so it won't clobber
+  your own hooks). Each spawned session gets a per-session HMAC token
+  (`CLOUDECODE_HOOK_TOKEN`) and id (`CLOUDECODE_SESSION_ID`) injected as env
+  vars; hooks `curl` back to a new loopback-only `/hooks/claude-event` endpoint
+  that validates the token and creates a toast. Opt-out:
+  `notifications.disable_claude_hooks: true` in config.
+- **Slack incoming-webhook fanout.** Every Claude Code lifecycle event also
+  POSTs to a Slack incoming webhook URL configured at
+  `notifications.slack_webhook_url`. Single channel, no OAuth, fire-and-forget.
+  Disabled silently when the URL is empty. Rides the existing notification
+  router rate-limiter.
+
+### v0.6.1 (`weekend-mvp-v3.1`)
 
 - **Browser scrollback replay no longer jumbled.** When resuming a session
   in the browser, the replayed history would paint as a misaligned mess —

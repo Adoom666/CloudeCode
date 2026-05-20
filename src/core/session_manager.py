@@ -16,10 +16,12 @@ callers in ``src/api`` keep working unchanged.
 """
 
 import asyncio
+import hmac
 import json
 import os
 import re
 import base64
+import secrets
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -28,7 +30,14 @@ from fastapi import HTTPException
 import structlog
 
 from src.config import settings
-from src.models import Session, SessionStatus, SessionInfo, SessionStats, LogEntry
+from src.models import (
+    Session,
+    SessionStatus,
+    SessionInfo,
+    SessionStats,
+    LogEntry,
+    Toast,
+)
 from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.notifications.idle_watcher import IdleWatcher
@@ -156,6 +165,24 @@ class SessionManager:
         # against stranding in-flight sessions on upgrade.
         self._legacy_metadata_needs_backfill: bool = False
 
+        # v0.7.0 Part 2 — per-session toast notifications. Newest-first list
+        # per session id; pruning keeps ALL unacked + last 50 acked (see
+        # ``_prune_toasts``). Cleared on ``_wipe_session_state``. The
+        # ``_theme_accent_cache`` memoizes theme manifest accent-color reads
+        # keyed by theme id (manifest files are effectively static across
+        # the server's lifetime — no invalidation needed).
+        self._pending_toasts: dict[str, list[Toast]] = {}
+        self._theme_accent_cache: dict[str, Optional[str]] = {}
+
+        # v0.7.0 Part 3 — per-session HMAC tokens. Minted on
+        # ``create_session`` / ``adopt_external_session``, injected as
+        # ``CLOUDECODE_HOOK_TOKEN`` into the spawned agent's tmux env, and
+        # forwarded back by Claude Code's lifecycle hooks via the
+        # ``X-Cloudecode-Token`` header so the loopback hook endpoint can
+        # authenticate the originating session. Dropped on
+        # ``_wipe_session_state``. NEVER logged.
+        self._hook_tokens: dict[str, str] = {}
+
         # SESSION-IDENTITY-V2 — durable per-tmux-name pinned-theme map.
         # Lives in its own file (``pinned_themes.json``) so it survives
         # detach + swap + re-adopt cycles; ``session_metadata.json`` is
@@ -279,6 +306,13 @@ class SessionManager:
         self.command_counts.pop(session_id, None)
         self.idle_watchers.pop(session_id, None)
         self.adopt_fifo_offsets.pop(session_id, None)
+        # v0.7.0 Part 2 — drop pending toasts for this session. Other
+        # sessions' toast lists are untouched.
+        self._pending_toasts.pop(session_id, None)
+        # v0.7.0 Part 3 — drop the HMAC hook token. After this point any
+        # incoming hook POST for this session_id rejects with 403 (unknown
+        # session → ``validate_hook_token`` returns False).
+        self._hook_tokens.pop(session_id, None)
         if self._last_session_id == session_id:
             self._last_session_id = (
                 next(reversed(self.sessions)) if self.sessions else None
@@ -296,6 +330,84 @@ class SessionManager:
         must be usable for pre-router operations like ``lifespan_startup``).
         """
         self._notification_router = router
+
+    # ---- v0.7.0 Part 3 — Claude Code hook authentication -----------------
+    #
+    # Each live session has a unique per-process HMAC-bearer token that is
+    # injected into the spawned agent's tmux env as ``CLOUDECODE_HOOK_TOKEN``.
+    # Claude Code's lifecycle hooks (Stop / Notification / PermissionRequest)
+    # POST to ``/api/v1/hooks/claude-event`` with the token in an
+    # ``X-Cloudecode-Token`` header; the route validates via
+    # ``validate_hook_token`` before recording a toast. The endpoint is also
+    # loopback-only — this is a defense-in-depth pair, not a single layer.
+
+    def _mint_hook_token(self, session_id: str) -> str:
+        """Mint and store a fresh URL-safe token for ``session_id``.
+
+        Replaces any existing token for the same id (e.g. a re-adopt of a
+        session whose backend was wiped). Returns the new token. The value
+        is NEVER logged.
+        """
+        token = secrets.token_urlsafe(32)
+        self._hook_tokens[session_id] = token
+        return token
+
+    def get_hook_token(self, session_id: str) -> Optional[str]:
+        """Return the active hook token for ``session_id``, or None."""
+        return self._hook_tokens.get(session_id)
+
+    def validate_hook_token(self, session_id: str, token: str) -> bool:
+        """Constant-time compare a presented token against the stored one.
+
+        Returns False when the session is unknown, no token has been
+        minted, or the value mismatches. Implemented via
+        ``hmac.compare_digest`` so timing-leak attacks can't enumerate
+        tokens via response-time deltas.
+        """
+        if not session_id or not token:
+            return False
+        expected = self._hook_tokens.get(session_id)
+        if expected is None:
+            return False
+        # ``compare_digest`` requires equal-length byte/str inputs. The
+        # length check itself is short-circuit, but since token_urlsafe(32)
+        # always yields a 43-char string, length-mismatch from a forged
+        # input is an unconditional False anyway.
+        try:
+            return hmac.compare_digest(expected, token)
+        except (TypeError, ValueError):
+            return False
+
+    def get_env_for_spawn(self, session_id: str) -> dict[str, str]:
+        """Return the env-var trio injected into the spawned agent's tmux env.
+
+        Minted lazily on first call so backends that ``start()`` BEFORE the
+        session is fully registered (we don't — see ``create_session``) can
+        still ask. Empty dict when the configured port can't be read.
+
+        Variables:
+            CLOUDECODE_SESSION_ID — used as the ``X-Cloudecode-Session``
+                header so the hook endpoint can route the POST to the right
+                session's toast bucket.
+            CLOUDECODE_HOOK_TOKEN — bearer credential for the same hook
+                endpoint. Validated via ``validate_hook_token``.
+            CLOUDECODE_HOOK_URL — full loopback URL the hook curl POSTs to.
+                Built from ``settings.port`` so port overrides (e.g.
+                cloudecode running on 5001 vs the default 8000) flow
+                through automatically.
+        """
+        token = self._hook_tokens.get(session_id) or self._mint_hook_token(session_id)
+        try:
+            port = settings.port
+        except Exception:  # pragma: no cover — defensive
+            return {}
+        return {
+            "CLOUDECODE_SESSION_ID": session_id,
+            "CLOUDECODE_HOOK_TOKEN": token,
+            "CLOUDECODE_HOOK_URL": (
+                f"http://127.0.0.1:{port}/api/v1/hooks/claude-event"
+            ),
+        }
 
     # ---- backend type introspection --------------------------------------
 
@@ -810,6 +922,471 @@ class SessionManager:
             self.pinned_themes.pop(tmux_name, None)
             self._save_pinned_themes()
 
+    # ---- project-scoped theme (v0.7.0 — .cc.theme dotfile) -------------
+    #
+    # The source of truth for a project's theme is ``<working_dir>/.cc.theme``
+    # (a single-line file containing the theme id + trailing newline). This
+    # supersedes the per-tmux-name ``pinned_themes.json`` map for the
+    # multi-machine use case: two browsers / two machines pointed at the
+    # same checkout converge on the same theme without round-tripping a
+    # per-machine cache.
+    #
+    # ``pinned_themes.json`` is RETAINED as a back-compat fallback for one
+    # release so sessions pinned under v0.6.x still paint correctly.
+    # ``migrate_pinned_theme_to_dotfile`` is best-effort and runs on
+    # attach/adopt to ferry old entries into the new format. The old map
+    # is not deleted by migration — it decays naturally as users re-pin.
+
+    @staticmethod
+    def _project_theme_path(working_dir) -> Optional[Path]:
+        """Resolve the dotfile path under ``working_dir``.
+
+        Returns None when ``working_dir`` is empty / unresolvable so callers
+        can short-circuit without try/except gymnastics. Tilde-expansion
+        and absolute resolution happen here so caller paths stay simple.
+        """
+        if not working_dir:
+            return None
+        try:
+            return Path(str(working_dir)).expanduser().resolve() / ".cc.theme"
+        except (OSError, RuntimeError):
+            return None
+
+    def get_project_theme(self, working_dir) -> Optional[str]:
+        """Read ``<working_dir>/.cc.theme``; fall back to pinned_themes.json.
+
+        Resolution order:
+          1. ``<working_dir>/.cc.theme`` (v0.7.0+ project-scoped source of truth)
+          2. ``pinned_themes.json`` keyed by the bare tmux name — but ONLY
+             when a caller already supplied ``working_dir`` *and* no
+             dotfile exists. This branch is the read-time back-compat
+             fallback for sessions pinned under v0.6.x.
+
+        Step 2 cannot be performed here without a tmux name; this method
+        only does the dotfile read. Callers that need the JSON fallback
+        should call ``get_pinned_theme(tmux_name)`` themselves and prefer
+        whichever they receive. Returns None when nothing is pinned.
+        """
+        path = self._project_theme_path(working_dir)
+        if path is None or not path.exists():
+            return None
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logger.warning(
+                "project_theme_read_failed",
+                path=str(path),
+                error=str(exc),
+            )
+            return None
+        return content or None
+
+    def set_project_theme(self, working_dir, theme_id: Optional[str]) -> None:
+        """Atomically write/clear ``<working_dir>/.cc.theme``.
+
+        Empty/None ``theme_id`` deletes the dotfile (clears the pin).
+        Otherwise writes ``<theme_id>\\n`` with mode 0o644 via
+        ``tmp + os.replace`` so a crash mid-write can never leave a
+        half-written file at the canonical path.
+
+        Raises:
+            FileNotFoundError: ``working_dir`` does not exist.
+            OSError: ``working_dir`` is not writable.
+            ValueError: ``working_dir`` resolves to None (caller bug).
+        """
+        path = self._project_theme_path(working_dir)
+        if path is None:
+            raise ValueError(f"Invalid working_dir: {working_dir!r}")
+
+        parent = path.parent
+        if not parent.exists():
+            raise FileNotFoundError(
+                f"working_dir does not exist: {parent}"
+            )
+        if not parent.is_dir():
+            raise NotADirectoryError(
+                f"working_dir is not a directory: {parent}"
+            )
+
+        # Clear branch — delete the dotfile if present.
+        if not theme_id:
+            if path.exists():
+                try:
+                    path.unlink()
+                    logger.info("project_theme_cleared", path=str(path))
+                except OSError as exc:
+                    logger.error(
+                        "project_theme_clear_failed",
+                        path=str(path),
+                        error=str(exc),
+                    )
+                    raise
+            return
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                f.write(f"{theme_id}\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            try:
+                os.chmod(str(tmp), 0o644)
+            except OSError:
+                # chmod failure on the tmp shouldn't abort the write —
+                # the final replace will still publish the file. Log only.
+                logger.debug("project_theme_chmod_failed", path=str(tmp))
+            os.replace(str(tmp), str(path))
+            logger.info(
+                "project_theme_set",
+                path=str(path),
+                theme_id=theme_id,
+            )
+        except OSError:
+            # Best-effort cleanup of the tmp on failure so we don't leave
+            # turds in user projects.
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+    def migrate_pinned_theme_to_dotfile(self, session) -> bool:
+        """Ferry a v0.6.x pinned_themes.json entry into ``.cc.theme``.
+
+        Runs on attach/adopt when:
+          - ``<session.working_dir>/.cc.theme`` does NOT exist, AND
+          - ``pinned_themes.json`` has an entry for ``session.tmux_session``
+            (or the trailing component of ``session.id`` for owned sessions).
+
+        Best-effort: any exception is logged and swallowed so the
+        attach/adopt path is never broken by a failed migration. The
+        legacy map entry is intentionally NOT deleted — let it decay
+        naturally; this release keeps it as a read-time fallback.
+
+        Returns True on successful migration, False otherwise.
+        """
+        if session is None:
+            return False
+        working_dir = getattr(session, "working_dir", None)
+        if not working_dir:
+            return False
+        try:
+            path = self._project_theme_path(working_dir)
+            if path is None:
+                return False
+            # If the dotfile already exists, the new format wins — nothing
+            # to migrate.
+            if path.exists():
+                return False
+            # Working dir must actually exist on disk before we'd write to it.
+            if not path.parent.is_dir():
+                logger.debug(
+                    "migrate_pinned_theme_skipped_no_dir",
+                    working_dir=str(working_dir),
+                )
+                return False
+            # Resolve the legacy key. Prefer the explicit ``tmux_session``
+            # field (canonical pin handle); fall back to the trailing
+            # component of ``session.id`` for adopted rows pre-PIN-FIX.
+            tmux_name = getattr(session, "tmux_session", None)
+            if not tmux_name:
+                sid = getattr(session, "id", "") or ""
+                if sid.startswith("adopted:"):
+                    tmux_name = sid[len("adopted:"):]
+                else:
+                    tmux_name = sid
+            if not tmux_name:
+                return False
+            legacy_pin = self.pinned_themes.get(tmux_name)
+            if not legacy_pin:
+                return False
+            self.set_project_theme(working_dir, legacy_pin)
+            logger.info(
+                "theme_migrated_to_dotfile",
+                session_id=getattr(session, "id", None),
+                working_dir=str(working_dir),
+                tmux_name=tmux_name,
+                theme_id=legacy_pin,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "theme_migration_failed",
+                session_id=getattr(session, "id", None),
+                working_dir=str(working_dir),
+                error=str(exc),
+            )
+            return False
+
+    def resolve_project_theme(
+        self, working_dir, tmux_name: Optional[str] = None
+    ) -> Optional[str]:
+        """Combined lookup: dotfile first, then JSON fallback by tmux name.
+
+        Convenience wrapper for callers (create_session / adopt) that want
+        a single call returning the effective pin without writing migration
+        glue at every call site.
+        """
+        dotfile = self.get_project_theme(working_dir)
+        if dotfile is not None:
+            return dotfile
+        if tmux_name:
+            return self.get_pinned_theme(tmux_name)
+        return None
+
+    # ---- toast notifications (v0.7.0 Part 2) ----------------------------
+    #
+    # Per-session list of ``Toast`` records, newest-first. Pruning rule:
+    # keep ALL unacked + at most the LAST 50 acked (acked beyond that cap
+    # fall off the tail). This bounds storage growth while preserving any
+    # pending UX (every unacked toast is still surfaceable to a re-attaching
+    # browser via ``get_toasts(..., unacked_only=True)``).
+    #
+    # Color resolution: when a toast is recorded, we read the session's
+    # project theme (via ``resolve_project_theme``), then read the theme
+    # manifest at ``client/css/themes/<id>/theme.json`` to extract the
+    # ``--color-accent`` CSS var. The lookup is memoized per theme id —
+    # theme manifests are static files that don't change during a server's
+    # uptime, so no invalidation is needed. ``--color-accent`` was chosen
+    # because (a) every theme.json sampled defines it, and (b) it's the
+    # value already used elsewhere in the client as the session-identity
+    # accent. Fall back to None when the theme isn't found or the var is
+    # missing — the client CSS has its own ``var(... fallback)`` chain.
+
+    _TOAST_ACKED_CAP = 50
+
+    @staticmethod
+    def _themes_dir() -> Path:
+        """Return the bundled themes root (``client/css/themes/``).
+
+        Computed from this file's location: session_manager.py lives at
+        ``src/core/session_manager.py``, so two ``parent`` hops reach
+        the repo root. Mirrors the resolver used in
+        ``routes._bundled_themes_root`` — kept duplicated rather than
+        cross-imported to avoid a routes <-> session_manager cycle.
+        """
+        return (
+            Path(__file__).resolve().parent.parent.parent
+            / "client"
+            / "css"
+            / "themes"
+        )
+
+    def _get_theme_accent_color(self, theme_id: Optional[str]) -> Optional[str]:
+        """Resolve the ``--color-accent`` hex/rgba string for a theme id.
+
+        Memoized in ``self._theme_accent_cache`` so repeated toast records
+        for the same theme don't pay the JSON parse cost every time.
+        Returns None when ``theme_id`` is falsy, the manifest is missing,
+        the manifest is malformed, or ``cssVars`` lacks ``--color-accent``.
+        """
+        if not theme_id:
+            return None
+        # ``None`` is a valid cached value (theme exists but has no
+        # accent var) — distinguish via ``in`` check rather than truthiness.
+        if theme_id in self._theme_accent_cache:
+            return self._theme_accent_cache[theme_id]
+
+        manifest_path = self._themes_dir() / theme_id / "theme.json"
+        accent: Optional[str] = None
+        try:
+            with manifest_path.open("r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            css_vars = raw.get("cssVars") if isinstance(raw, dict) else None
+            if isinstance(css_vars, dict):
+                val = css_vars.get("--color-accent")
+                if isinstance(val, str) and val.strip():
+                    accent = val.strip()
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            logger.debug(
+                "toast_theme_accent_read_failed",
+                theme_id=theme_id,
+                path=str(manifest_path),
+                error=str(exc),
+            )
+            accent = None
+
+        self._theme_accent_cache[theme_id] = accent
+        return accent
+
+    def _get_session_accent_color(
+        self, session: Optional[Session]
+    ) -> Optional[str]:
+        """Resolve the per-session accent color via the project theme.
+
+        Returns None when the session is unknown, has no working dir, or
+        has no resolvable theme. The hot path is two dict reads + a
+        cached lookup once the theme is known — cheap enough to call on
+        every ``record_toast`` without batching.
+        """
+        if session is None:
+            return None
+        working_dir = getattr(session, "working_dir", None)
+        tmux_name = getattr(session, "tmux_session", None)
+        theme_id = self.resolve_project_theme(working_dir, tmux_name)
+        return self._get_theme_accent_color(theme_id)
+
+    def _prune_toasts(self, session_id: str) -> None:
+        """Trim the acked-toasts tail past ``_TOAST_ACKED_CAP``.
+
+        Unacked toasts are preserved unconditionally (every unacked toast
+        is potentially surfaceable to a re-attaching browser). Acked
+        toasts beyond the cap are dropped from the END of the list
+        (newest-first ordering means the tail is the OLDEST acked).
+        """
+        toasts = self._pending_toasts.get(session_id)
+        if not toasts:
+            return
+        acked_count = 0
+        keep: list[Toast] = []
+        for t in toasts:
+            if t.acknowledged:
+                if acked_count < self._TOAST_ACKED_CAP:
+                    keep.append(t)
+                    acked_count += 1
+                # else: drop — past the cap
+            else:
+                keep.append(t)
+        self._pending_toasts[session_id] = keep
+
+    # v0.7.0 Part 4 — Map the WS toast ``kind`` string (the wire-level
+    # vocabulary used by the Claude hook endpoint) to a typed EventType
+    # so the notification router can fan out to ntfy + Slack. Unmapped
+    # kinds (e.g. a future toast kind that doesn't need a push) skip
+    # the router emit silently.
+    _TOAST_KIND_TO_EVENT_TYPE = {
+        "Stop": "CLAUDE_STOP",
+        "PermissionRequest": "CLAUDE_PERMISSION_REQUEST",
+        "Notification": "CLAUDE_NOTIFICATION",
+    }
+
+    def record_toast(
+        self,
+        session_id: str,
+        kind: str,
+        title: str,
+        body: Optional[str] = None,
+    ) -> Toast:
+        """Record a new toast for ``session_id`` and return the Toast.
+
+        Prepends to the per-session list (newest-first). Resolves the
+        session's project-theme accent color and bakes it onto the Toast
+        so the client can paint a session-colored left border without an
+        extra theme lookup on the wire. Caller is responsible for the
+        WS broadcast (the route layer does this after calling this method
+        — keeps storage and fanout decoupled).
+
+        v0.7.0 Part 4 — also emits a ``NotificationEvent`` into the
+        attached router (if any) so ntfy + Slack channels fan out from
+        the same call site. Emit is best-effort: router missing, kind
+        unmapped, or import error all skip the emit without raising.
+
+        Raises:
+            ValueError: when ``session_id`` is unknown (we won't record
+                toasts for sessions that don't exist — the client would
+                have no live WS to receive them on).
+        """
+        import uuid as _uuid
+
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Unknown session_id: {session_id!r}")
+
+        color = self._get_session_accent_color(session)
+        toast = Toast(
+            id=_uuid.uuid4().hex,
+            session_id=session_id,
+            kind=kind,
+            title=title,
+            body=body,
+            color=color,
+            created_at=datetime.utcnow(),
+            acknowledged=False,
+        )
+        bucket = self._pending_toasts.setdefault(session_id, [])
+        bucket.insert(0, toast)  # newest-first
+        self._prune_toasts(session_id)
+
+        logger.info(
+            "toast_recorded",
+            session_id=session_id,
+            toast_id=toast.id,
+            kind=kind,
+            color=color,
+        )
+
+        # v0.7.0 Part 4 — fan out to the notification router (ntfy + Slack).
+        # Lazy import to keep the (already-circular-prone) notifications
+        # package off the session_manager import chain. Any failure here
+        # is best-effort — the toast is already recorded and the WS
+        # broadcast happens regardless.
+        try:
+            if self._notification_router is not None:
+                event_type_name = self._TOAST_KIND_TO_EVENT_TYPE.get(kind)
+                if event_type_name is not None:
+                    import time as _time
+                    from src.core.notifications.events import (
+                        EventType,
+                        NotificationEvent,
+                    )
+                    event = NotificationEvent(
+                        kind=EventType[event_type_name],
+                        session_slug=session_id,
+                        timestamp=_time.monotonic(),
+                        snippet=body or title or "",
+                    )
+                    self._notification_router.emit(event)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "toast_router_emit_failed",
+                session_id=session_id,
+                kind=kind,
+                error=str(exc),
+            )
+
+        return toast
+
+    def ack_toast(self, session_id: str, toast_id: str) -> bool:
+        """Mark a toast acknowledged. Idempotent.
+
+        Returns True when the toast was found AND state actually changed
+        (i.e. wasn't already acked). Returns False when not found OR
+        already acked — useful for the route layer to skip the WS
+        broadcast on a no-op double-click.
+        """
+        bucket = self._pending_toasts.get(session_id)
+        if not bucket:
+            return False
+        for t in bucket:
+            if t.id == toast_id:
+                if t.acknowledged:
+                    return False
+                t.acknowledged = True
+                self._prune_toasts(session_id)
+                logger.info(
+                    "toast_acked",
+                    session_id=session_id,
+                    toast_id=toast_id,
+                )
+                return True
+        return False
+
+    def get_toasts(
+        self, session_id: str, unacked_only: bool = False
+    ) -> list[Toast]:
+        """Return toasts for a session, optionally filtered to unacked.
+
+        Newest-first. Returns an empty list (NOT None) when the session
+        has no recorded toasts — callers can iterate without a None check.
+        """
+        bucket = self._pending_toasts.get(session_id, [])
+        if unacked_only:
+            return [t for t in bucket if not t.acknowledged]
+        return list(bucket)
+
     # ---- output fan-out (per session) -----------------------------------
 
     def subscribe_output(self, session_id: Optional[str] = None) -> asyncio.Queue:
@@ -1002,6 +1579,16 @@ class SessionManager:
                 session_name=tmux_session_name,
             )
 
+            # v0.7.0 Part 3 — mint the per-session hook token BEFORE the
+            # tmux spawn so we can inject CLOUDECODE_* env vars into the
+            # new-session call. TmuxBackend merges ``env`` into the tmux
+            # process's environment, which the spawned agent inherits.
+            # PTYBackend's start() signature also accepts ``env`` (or
+            # ignores extra kwargs — see backend) so this is safe across
+            # backend types.
+            self._mint_hook_token(session_id)
+            spawn_env = self.get_env_for_spawn(session_id)
+
             if auto_start_claude:
                 # Phase 6 — resolve via the agents map. For claude with
                 # default config this yields the same string the old
@@ -1010,11 +1597,13 @@ class SessionManager:
                 command = settings.get_agent_command(resolved_agent_type)
                 await backend.start(
                     command=command,
+                    env=spawn_env,
                     initial_cols=initial_cols,
                     initial_rows=initial_rows,
                 )
             else:
                 await backend.start(
+                    env=spawn_env,
                     initial_cols=initial_cols,
                     initial_rows=initial_rows,
                 )
@@ -1023,6 +1612,11 @@ class SessionManager:
             # pid, PTYBackend exposes one via `.pid`.
             pid = getattr(backend, "pid", None)
 
+            # v0.7.0 — seed pinned_theme from ``<work_path>/.cc.theme`` (or
+            # legacy ``pinned_themes.json`` for the tmux name when no
+            # dotfile exists). New projects without a pin yield None,
+            # which is the original behavior.
+            prior_pin = self.resolve_project_theme(work_path, tmux_session_name)
             new_session = Session(
                 id=session_id,
                 pty_pid=pid,
@@ -1031,6 +1625,7 @@ class SessionManager:
                 created_at=datetime.utcnow(),
                 last_activity=datetime.utcnow(),
                 agent_type=resolved_agent_type,
+                pinned_theme=prior_pin,
                 # PIN-FIX-EXECUTE — carry the bare tmux name on the inner
                 # Session so frontend can use it as the pin-key handle
                 # without falling back to session.id.
@@ -1038,6 +1633,16 @@ class SessionManager:
             )
 
             self._register_session(new_session, backend)
+            # Best-effort: ferry any legacy pinned_themes.json entry into
+            # the dotfile so subsequent restarts read from the new source
+            # of truth. Read-then-migrate ordering keeps the read above
+            # deterministic when both exist.
+            try:
+                self.migrate_pinned_theme_to_dotfile(new_session)
+            except Exception as exc:  # pragma: no cover — helper swallows
+                logger.debug(
+                    "post_create_migrate_unexpected_throw", error=str(exc)
+                )
 
             # Track 1: record tmux-backend ownership so a post-create crash
             # still leaves the name recoverable from ``session_metadata.json``
@@ -1678,9 +2283,11 @@ class SessionManager:
         )
 
         # Step 5 — register.
-        # SESSION-IDENTITY-V2 — restore any previously-pinned theme for
-        # this tmux name (durable in pinned_themes.json across detach/swap).
-        prior_pin = self.get_pinned_theme(name)
+        # v0.7.0 — project-scoped theme lookup: ``<working_dir>/.cc.theme``
+        # is the source of truth. ``pinned_themes.json`` is read as a
+        # back-compat fallback only when no dotfile exists; the
+        # migration helper below ferries old entries into the new format.
+        prior_pin = self.resolve_project_theme(working_dir, name)
         adopted_session = Session(
             id=adopted_id,
             pty_pid=None,
@@ -1695,6 +2302,36 @@ class SessionManager:
             tmux_session=name,
         )
         self._register_session(adopted_session, backend)
+        # Best-effort migration AFTER the read so the read remains
+        # deterministic (dotfile beats JSON when both exist post-migration).
+        # Failures here are logged + swallowed; never block adopt.
+        try:
+            self.migrate_pinned_theme_to_dotfile(adopted_session)
+        except Exception as exc:  # pragma: no cover — helper already swallows
+            logger.debug("post_adopt_migrate_unexpected_throw", error=str(exc))
+
+        # v0.7.0 Part 3 — mint a hook token for the adopted session and
+        # best-effort push the env into the live tmux session via
+        # ``set-environment``. CAVEAT: tmux's session env propagates to NEW
+        # processes spawned in panes; the already-running ``claude`` (the
+        # whole reason we're adopting) won't see it. So Stop / Notification
+        # / PermissionRequest hooks will only fire for adopted sessions
+        # IFF the user re-launches ``claude`` inside the pane after we
+        # adopt. The token is registered regardless so any such re-launch
+        # works without extra plumbing.
+        self._mint_hook_token(adopted_id)
+        spawn_env = self.get_env_for_spawn(adopted_id)
+        try:
+            for var, val in spawn_env.items():
+                await backend._run_tmux(
+                    "set-environment", "-t", name, var, val, check=False
+                )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug(
+                "adopt_set_environment_failed",
+                session=name,
+                error=str(exc),
+            )
         # External sessions are intentionally NOT added to
         # ``owned_tmux_sessions`` — we don't own them; we adopted them.
         self._save_session_metadata(adopted_session)

@@ -10,6 +10,10 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/styles.css" />
+    <!-- v0.7.0 Part 2: toast notification styles. Loaded after styles.css so
+         theme CSS custom properties (--color-accent, etc.) are available
+         as fallbacks for the per-toast accent border. -->
+    <link rel="stylesheet" href="/static/css/toast.css" />
 
     <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
          Phase 3 will populate this when the user picks a non-Claude theme. -->
@@ -79,6 +83,10 @@
     <!-- Application modules -->
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
+    <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
+         is defined before terminal.js's WS message handler dispatches
+         toast.new / toast.ack frames. -->
+    <script src="/static/js/toast.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <script src="/static/js/terminal.js"></script>
     <script src="/static/js/dpad.js"></script>
@@ -94,6 +102,12 @@
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>
+
+    <!-- v0.7.0 Part 2 — toast notifications container. Fixed top-right via
+         CSS (toast.css). aria-live=polite so screen readers announce new
+         toasts without interrupting current UI focus. Toast cards are
+         appended here by client/js/toast.js (ToastManager). -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
     <!-- IMG-PASTE — image attach controls. The hidden file input is
          triggered programmatically by the 📎 button in terminal.js

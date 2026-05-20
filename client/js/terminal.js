@@ -976,6 +976,23 @@ class Terminal {
                 this.term.writeln('\x1b[1;32m[Connected to PTY terminal]\x1b[0m\n');
             }
 
+            // v0.7.0 Part 2 — backfill any unacked toasts for THIS session
+            // that fired while this browser was disconnected. Fire-and-forget;
+            // failure here is logged but doesn't block the terminal coming up.
+            const sidForToasts = this._sessionId();
+            if (sidForToasts && window.API && window.ToastManager &&
+                typeof window.API.getSessionToasts === 'function') {
+                window.API.getSessionToasts(sidForToasts, { unackedOnly: true })
+                    .then((toasts) => {
+                        if (Array.isArray(toasts) && toasts.length) {
+                            window.ToastManager.backfill(toasts);
+                        }
+                    })
+                    .catch((err) => {
+                        console.warn('[Toast] backfill failed', err && err.message);
+                    });
+            }
+
             // Send initial resize (legacy fallback path — the server's
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
@@ -1080,6 +1097,19 @@ class Terminal {
             }
         } else if (type === 'pong') {
             console.log('Terminal: Received pong');
+        } else if (type === 'toast.new') {
+            // v0.7.0 Part 2 — new toast fired for this session. Hand to
+            // ToastManager which dedupes by id, animates entry, and
+            // applies the per-session accent color from message.toast.color.
+            if (window.ToastManager && message && message.toast) {
+                window.ToastManager.add(message.toast);
+            }
+        } else if (type === 'toast.ack') {
+            // Another browser (or this one's POST) acked a toast. Dismiss
+            // the local card without re-syncing to the server.
+            if (window.ToastManager && message && message.toast_id) {
+                window.ToastManager.dismiss(message.toast_id, { syncToServer: false });
+            }
         } else if (type === 'request_dims') {
             // Server-driven resize handshake. Fit and reply IMMEDIATELY —
             // bypass the 100ms debounce because the server is waiting in
@@ -1235,6 +1265,14 @@ class Terminal {
             // sessions are untouched.
             const sessionId = this._sessionId();
             await window.API.destroySession(sessionId);
+
+            // v0.7.0 Part 2 — drop any ghost toasts for the destroyed
+            // session. Server-side state is already gone with the session,
+            // so we don't sync; just clear our local UI.
+            if (sessionId && window.ToastManager &&
+                typeof window.ToastManager.dismissBySession === 'function') {
+                window.ToastManager.dismissBySession(sessionId);
+            }
 
             this.sessionActive = false;
             this.stopReconnecting();

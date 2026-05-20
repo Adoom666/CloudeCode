@@ -26,6 +26,13 @@ class EventType(str, Enum):
     ERROR = "error"
     BUILD_COMPLETE = "build_complete"
     TEST_RESULT = "test_result"
+    # v0.7.0 Part 3/4 — Claude Code lifecycle hook kinds, sourced from the
+    # hook endpoint via ``session_manager.record_toast``. Distinct from the
+    # IdleWatcher's pattern-derived kinds so a Slack/ntfy presentation
+    # table can render them with hook-specific copy.
+    CLAUDE_STOP = "claude_stop"
+    CLAUDE_NOTIFICATION = "claude_notification"
+    CLAUDE_PERMISSION_REQUEST = "claude_permission_request"
 
 
 @dataclass

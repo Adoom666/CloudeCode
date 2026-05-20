@@ -1,0 +1,125 @@
+/*
+ * Toast notifications (v0.7.0 Part 2)
+ * ------------------------------------------------------------------
+ * Per-toast accent border colored from the session's project theme.
+ * The server bakes a hex color onto each Toast.color field; the client
+ * sets it inline as `style="--toast-accent: <color>"`. Falls back to
+ * the global theme's --color-accent var, then a hard-coded orange.
+ *
+ * Kind-specific tint (Stop / PermissionRequest / Notification) layered
+ * via data-kind selector. Mobile-responsive: full width on narrow
+ * viewports, otherwise fixed-width column top-right.
+ */
+
+.toast-container {
+  /* Pinned top-right above terminal but below modals. Site modal z-index
+     is in the 1000-range; pick 900 so toasts sit just under them. */
+  position: fixed;
+  top: 60px; /* clear of the header bar */
+  right: 16px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none; /* the container itself doesn't catch clicks */
+}
+
+.toast {
+  /* Each toast catches its own clicks (dismiss button etc.) */
+  pointer-events: auto;
+
+  /* The per-session accent. Set inline by ToastManager from toast.color;
+     falls back to the active theme's --color-accent, then a sane default. */
+  --toast-accent: var(--color-accent, #ff8800);
+
+  background: var(--color-bg-card, #252526);
+  color: var(--color-fg, #d4d4d4);
+  border: 1px solid var(--color-border, #3e3e42);
+  border-left: 5px solid var(--toast-accent);
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5));
+  padding: 12px 36px 12px 14px; /* extra right padding for the × */
+  position: relative;
+  font-family: var(--font-mono, 'SF Mono', monospace);
+  font-size: 13px;
+  line-height: 1.4;
+
+  /* Slide-in animation. Replaced with .toast--dismissing for fade-out. */
+  transform: translateX(0);
+  opacity: 1;
+  transition: transform 200ms ease-out, opacity 200ms ease-out;
+}
+
+/* Entry animation — start off-screen right, slide to rest. */
+.toast--entering {
+  transform: translateX(110%);
+  opacity: 0;
+}
+
+/* Exit animation — fade + slide. */
+.toast--dismissing {
+  transform: translateX(20%);
+  opacity: 0;
+}
+
+.toast__title {
+  font-weight: bold;
+  margin: 0 0 4px 0;
+  color: var(--toast-accent);
+}
+
+.toast__body {
+  margin: 0;
+  color: var(--color-fg-muted, #858585);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.toast__dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--color-fg-muted, #858585);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: var(--radius-sm, 3px);
+}
+
+.toast__dismiss:hover {
+  background: var(--color-bg-hover, #323235);
+  color: var(--color-fg, #d4d4d4);
+}
+
+/* Kind-specific subtle tint on the title row + a small leading glyph. */
+.toast[data-kind="Stop"] .toast__title::before {
+  content: "■ ";
+  color: var(--color-success, #4ade80);
+}
+
+.toast[data-kind="PermissionRequest"] .toast__title::before {
+  content: "⚠ ";
+  color: var(--color-warning, #fbbf24);
+}
+
+.toast[data-kind="Notification"] .toast__title::before {
+  content: "ⓘ ";
+  color: var(--color-info, #4fc1ff);
+}
+
+/* Mobile responsive: full-width, anchored just under the header. */
+@media (max-width: 640px) {
+  .toast-container {
+    top: 56px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+  }
+}

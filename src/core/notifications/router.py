@@ -23,7 +23,7 @@ from typing import Optional
 
 import structlog
 
-from src.core.notifications import ntfy
+from src.core.notifications import ntfy, slack
 from src.core.notifications.events import NotificationEvent
 from src.core.notifications.rate_limit import RateLimiter
 
@@ -144,8 +144,16 @@ class NotificationRouter:
         if not getattr(self._config, "enabled", False):
             return
 
-        # Topic missing → drop silently (we already warned at start()).
-        if not getattr(self._config, "ntfy_topic", "") or self._stopped:
+        if self._stopped:
+            return
+
+        # v0.7.0 Part 4 — at least one channel must be configured for an
+        # emit to be worth queueing. ntfy needs a topic; slack needs a
+        # webhook URL. If BOTH are empty, drop silently (we already
+        # warned at start()).
+        has_ntfy = bool(getattr(self._config, "ntfy_topic", ""))
+        has_slack = bool(getattr(self._config, "slack_webhook_url", ""))
+        if not (has_ntfy or has_slack):
             return
 
         try:
@@ -202,6 +210,19 @@ class NotificationRouter:
                         "notifications.worker_dispatch_error",
                         error=str(e),
                         kind=event.kind.value,
+                    )
+                # v0.7.0 Part 4 — Slack fanout. Always called after ntfy
+                # so a slow Slack request never delays the (typically
+                # snappier) ntfy push. ``slack.send`` already swallows
+                # its own exceptions, but we wrap defensively for symmetry.
+                try:
+                    await slack.send(event)
+                except Exception as e:  # pragma: no cover - slack already catches
+                    logger.warning(
+                        "notifications.worker_dispatch_error",
+                        error=str(e),
+                        kind=event.kind.value,
+                        channel="slack",
                     )
                 finally:
                     # Always mark done so queue.join() in tests resolves.

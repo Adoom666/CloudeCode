@@ -117,6 +117,19 @@ class NotificationsConfig(BaseModel):
     rate_limit_global_cap: int = Field(default=10, ge=1)
     rate_limit_window_seconds: float = Field(default=60.0, ge=1.0)
     rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
+    # v0.7.0 Part 3 — opt out of the Claude Code lifecycle hook merger.
+    # When True, ``ensure_hook_settings()`` is a no-op and ~/.claude/settings.json
+    # is left entirely alone (no Stop/Notification/PermissionRequest hooks
+    # are injected). Users who curate their own hook block can set this to
+    # avoid surprise merges. Default False = hooks managed.
+    disable_claude_hooks: bool = False
+    # v0.7.0 Part 4 — Slack incoming-webhook fanout. When non-empty, every
+    # NotificationEvent dispatched by the router also POSTs a chat message
+    # to this webhook URL. Single-channel, no OAuth. Empty default = the
+    # Slack channel is silently disabled.
+    # Format: ``https://hooks.slack.com/services/T.../B.../...`` — treat
+    # as a credential.
+    slack_webhook_url: str = Field(default="")
 
 
 class UploadsConfig(BaseModel):

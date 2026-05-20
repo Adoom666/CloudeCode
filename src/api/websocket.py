@@ -25,11 +25,25 @@ router = APIRouter()
 
 
 class ConnectionManager:
-    """Manages WebSocket connections."""
+    """Manages WebSocket connections.
+
+    v0.7.0 Part 2: tracks a session_id -> {WebSocket} reverse map alongside
+    the flat set, so ``broadcast_to_session`` can target only the sockets
+    bound to a specific session. The existing ``broadcast`` (fanout-to-all)
+    is preserved for the legacy session-status / log paths that genuinely
+    want every client.
+    """
 
     def __init__(self):
         """Initialize connection manager."""
         self.active_connections: Set[WebSocket] = set()
+        # session_id -> set of WS connections currently bound to that
+        # session. Populated by ``connect_to_session`` on the WS handshake;
+        # pruned by ``disconnect``. A connection can only ever be bound to
+        # ONE session (the WS endpoint is session-scoped), so we don't
+        # also need a reverse WS->session map — we walk the dict on
+        # disconnect, which is O(N_sessions) and dwarfed by the WS RTT.
+        self._session_connections: dict[str, Set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket):
         """
@@ -47,14 +61,35 @@ class ConnectionManager:
         self.active_connections.add(websocket)
         logger.info("websocket_connected", total_connections=len(self.active_connections))
 
+    def bind_session(self, websocket: WebSocket, session_id: Optional[str]) -> None:
+        """Record that ``websocket`` is bound to ``session_id``.
+
+        Idempotent. ``session_id`` of None is a no-op (legacy/orphan WS
+        sockets that never resolved to a session — e.g. the auth-only
+        test path — don't enter the per-session map).
+        """
+        if not session_id:
+            return
+        self._session_connections.setdefault(session_id, set()).add(websocket)
+
     def disconnect(self, websocket: WebSocket):
         """
         Unregister a WebSocket connection.
+
+        Also prunes the per-session reverse map so ``broadcast_to_session``
+        never tries to send through a torn-down socket. We walk the dict
+        rather than tracking a reverse pointer — the per-session set
+        cardinality is low (one tab per session typically) so the cost
+        is negligible.
 
         Args:
             websocket: WebSocket connection to unregister
         """
         self.active_connections.discard(websocket)
+        for sid, conns in list(self._session_connections.items()):
+            conns.discard(websocket)
+            if not conns:
+                self._session_connections.pop(sid, None)
         logger.info("websocket_disconnected", total_connections=len(self.active_connections))
 
     async def broadcast(self, message: str):
@@ -70,6 +105,42 @@ class ConnectionManager:
             except Exception as e:
                 logger.error("broadcast_failed", error=str(e))
                 self.active_connections.discard(connection)
+
+    async def broadcast_to_session(self, session_id: str, message: str) -> int:
+        """Broadcast a message to every WS connection bound to ``session_id``.
+
+        Used by the toast routes (v0.7.0 Part 2) to fan a ``toast.new`` or
+        ``toast.ack`` payload out to every browser tab attached to the
+        session — including the tab that triggered the action, so the
+        creator's own UI gets the new toast without a special-case round
+        trip. Failures on a single socket are logged + the socket is
+        removed from BOTH the per-session map and the flat active set;
+        other sockets in the session still receive the message.
+
+        Returns:
+            The count of sockets the message was successfully sent to.
+            0 when no socket is bound to the session (e.g. the toast
+            fires before any browser has attached).
+        """
+        sent = 0
+        conns = self._session_connections.get(session_id)
+        if not conns:
+            return 0
+        for connection in list(conns):
+            try:
+                await connection.send_text(message)
+                sent += 1
+            except Exception as e:
+                logger.error(
+                    "broadcast_to_session_failed",
+                    session_id=session_id,
+                    error=str(e),
+                )
+                conns.discard(connection)
+                self.active_connections.discard(connection)
+        if not conns:
+            self._session_connections.pop(session_id, None)
+        return sent
 
 
 # Global connection manager
@@ -155,6 +226,11 @@ async def websocket_terminal(websocket: WebSocket):
         target_sid = cur.id if cur is not None else None
 
     await connection_manager.connect(websocket)
+    # v0.7.0 Part 2 — register the WS in the per-session reverse map so
+    # ``broadcast_to_session`` can target it for toast fanout. Bind AFTER
+    # the validated session id has been resolved so the map never holds
+    # entries for sessions that don't exist.
+    connection_manager.bind_session(websocket, target_sid)
 
     # Subscribe to THIS session's PTY output only.
     pty_output_queue = session_manager.subscribe_output(target_sid)

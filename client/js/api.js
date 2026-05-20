@@ -626,6 +626,60 @@ class API {
     }
 
     /**
+     * Toasts (v0.7.0 Part 2): list unacked toasts for a session.
+     * Used by the client to backfill toasts that fired while the
+     * browser was disconnected. Newest-first.
+     *
+     * @param {string} sessionId
+     * @param {object} [opts]
+     * @param {boolean} [opts.unackedOnly=true] - filter to unacked only.
+     * @returns {Promise<Array<object>>}
+     */
+    async getSessionToasts(sessionId, { unackedOnly = true } = {}) {
+        const q = unackedOnly ? '?unacked=true' : '';
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionId)}/toasts${q}`
+        );
+    }
+
+    /**
+     * Toasts: mark a toast acknowledged. The server broadcasts the ack
+     * to every other browser bound to the same session so they dismiss
+     * in lockstep.
+     *
+     * @param {string} toastId
+     * @param {string} sessionId
+     * @returns {Promise<object>}
+     */
+    async ackToast(toastId, sessionId) {
+        const q = `?session_id=${encodeURIComponent(sessionId)}`;
+        return await this.call(`/toasts/${encodeURIComponent(toastId)}/ack${q}`, {
+            method: 'POST',
+        });
+    }
+
+    /**
+     * Toasts: synthetic creation — record a toast on the server and
+     * fan it out to every browser bound to the session. INTENTIONALLY
+     * temporary for v0.7.0 Part 2; Part 3 will add a hook-driven
+     * endpoint. Kept as an explicit method so devs can curl-trigger
+     * a test toast from the browser console.
+     *
+     * @param {string} sessionId
+     * @param {object} body - { kind, title, body? }
+     * @returns {Promise<object>}
+     */
+    async postSessionToast(sessionId, { kind, title, body } = {}) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionId)}/toasts`,
+            {
+                method: 'POST',
+                body: { kind, title, body: body || null },
+            }
+        );
+    }
+
+    /**
      * Server: Reset server
      * @returns {Promise<object>}
      */
