@@ -31,6 +31,10 @@
             <span class="version">v0.5</span>
         </h1>
         <div class="controls">
+            <!-- v0.7.0+ — per-theme background music toggle. Muted by default.
+                 Click is the required user-gesture that grants the AudioContext
+                 autoplay permission for the rest of the page lifetime. -->
+            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" data-tooltip="Enable theme music">🔇</button>
             <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" data-tooltip="Destroy Session">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M8 3L12 9H4L8 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -99,6 +103,11 @@
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
     <script src="/static/js/themes/registry.js"></script>
     <script src="/static/js/themes/themeSelector.js"></script>
+
+    <!-- v0.7.0+ — per-theme background music plumbing. Must load BEFORE
+         app.js so window.ThemeAudio is defined when the app wires the
+         header toggle button + calls ThemeAudio.init(). -->
+    <script src="/static/js/themeAudio.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>

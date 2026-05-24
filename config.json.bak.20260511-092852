@@ -1,0 +1,82 @@
+{
+  "jwt_expiry_minutes": 30,
+  "template_path": "claude-template",
+  "common_slash_commands": [
+    "/agents",
+    "/clear",
+    "/compact",
+    "/context",
+    "/hooks",
+    "/mcp",
+    "/resume",
+    "/rewind",
+    "/usage"
+  ],
+  "projects": [
+    {
+      "name": "cloude_cloude_InsidersApp",
+      "path": "/Users/Adam/Dropbox/HighTails/code/thcbev_lambdas/thcbev_createB2BOrder",
+      "description": ""
+    },
+    {
+      "name": "cloude_InsidersApp",
+      "path": "/Users/Adam/Dropbox/HighTails/code/thcbev_lambdas/thcbev_createB2BOrder",
+      "description": ""
+    },
+    {
+      "name": "cloude_cloude_Cloude Code Dev",
+      "path": "/Users/Adam/Dropbox/My Projects/Cloude Code Repos/Dev/cloudecode",
+      "description": ""
+    },
+    {
+      "name": "cloude_Cloude Code Dev",
+      "path": "/Users/Adam/Dropbox/My Projects/Cloude Code Repos/Dev/cloudecode",
+      "description": ""
+    },
+    {
+      "name": "InsidersApp",
+      "path": "/Users/Adam/Dropbox/HighTails/code/thcbev_lambdas/thcbev_createB2BOrder",
+      "description": ""
+    },
+    {
+      "name": "cloude_emailRouting",
+      "path": "/Users/Adam/Dropbox/HighTails/code/Agents/NewClientOnboarding",
+      "description": ""
+    },
+    {
+      "name": "emailRouting",
+      "path": "/Users/Adam/Dropbox/HighTails/code/Agents/NewClientOnboarding",
+      "description": ""
+    },
+    {
+      "name": "Shopify",
+      "path": "/Users/Adam/Dropbox/HighTails/code/Shopify",
+      "description": ""
+    },
+    {
+      "name": "hightailsAgents",
+      "path": "/Users/Adam/Dropbox/HighTails/code/Agents/NewClientOnboarding",
+      "description": ""
+    },
+    {
+      "name": "\u26a1 NeuralMesh3000",
+      "path": "~/projects/neural-mesh",
+      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression"
+    },
+    {
+      "name": "\ud83d\udd25 AGI-SaaS Disruptor",
+      "path": "~/projects/agi-saas",
+      "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
+    },
+    {
+      "name": "\u269b\ufe0f ReactHook Nirvana",
+      "path": "~/projects/react-nirvana",
+      "description": "Component library that transcends the virtual DOM and enters the astral plane"
+    },
+    {
+      "name": "\u2601\ufe0f Cloude Code",
+      "path": "~/projects/cloude-code",
+      "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
+    }
+  ]
+}

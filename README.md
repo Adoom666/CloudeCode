@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.7.1-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.1/Cloude.Code-0.7.1-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.7.2-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.2/Cloude.Code-0.7.2-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.7.1-arm64.dmg"
-# expected: d62775ccf3d5d7de28b5310bda9181f380f4935f8a1f35d9b4cbaa9ba541ae4a
+shasum -a 256 "Cloude.Code-0.7.2-arm64.dmg"
+# expected: 4f6638acf63645e6a631572b120119e6ea1b804337bbea68e2180d4b4422c3d7
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -82,6 +82,54 @@ because the app has been hardened for hostile traffic.
 - **ntfy push notifications** — opt-in. IdleWatcher FSM detects permission
   prompts and task completion from the byte stream. Rate-limited, privacy-
   preserving (no project names in ntfy payloads).
+- **Slack incoming-webhook fanout** *(v0.7.0)* — opt-in additional notification
+  channel. Set `notifications.slack_webhook_url` to a Slack incoming-webhook
+  URL and the same events that fire ntfy POSTs ALSO drop into your Slack
+  channel with a per-event emoji + title + 200-char snippet. Fire-and-forget
+  — network errors are logged at WARN and never propagate. Empty URL = channel
+  silently disabled.
+- **Project themes** *(v0.7.0)* — 23 bundled themes
+  (`acid_trip`, `alien`, `black_market`, `blade_runner`, `calming`,
+  `cannabis`, `claude`, `claw`, `codex`, `corporate_v2`, `dracula`,
+  `gameboy`, `green_crt`, `hermes`, `jagermeister`, `legacy_apple`,
+  `legacy_windows`, `lovecraft`, `matrix`, `metal`, `pokemon`, `snes`,
+  `terminal`) plus a pluggable `~/Library/Application Support/cloude-code-menubar/themes/`
+  directory for user-authored themes. A theme is a `theme.json` manifest of
+  CSS custom properties + xterm.js palette, optionally backed by `theme.css`
+  overrides and an `effects.js` script (effects scripts are gated through a
+  3-state allowlist in `localStorage`). Themes apply at three scopes:
+  **global** (`<html data-theme>` + `:root` vars + xterm palette, persisted
+  to `localStorage`), **per-session pinned** (PATCH on the server, survives
+  reloads), and **per-agent default** (e.g. Codex sessions auto-pin
+  `codex`). The Matrix and Blade Runner themes ship with optional ambient
+  audio effects (see `client/js/themeAudio.js`).
+- **Toast notifications (in-app)** *(v0.7.0)* — server-side toast records
+  flow over WebSocket (`toast.new` / `toast.ack` frames) AND backfill via
+  REST on session attach. Each toast carries the active project theme's
+  accent color, applied as `--toast-accent` for a colored left border.
+  Cross-tab dismiss is server-driven (no `localStorage` sync), so acking a
+  toast in one browser dismisses it in lockstep everywhere the same
+  session is open.
+- **Claude Code lifecycle hooks** *(v0.7.0)* — at FastAPI startup,
+  `claude_hooks.ensure_hook_settings()` idempotently merges three managed
+  entries (`Stop`, `Notification`, `PermissionRequest`) into
+  `~/.claude/settings.json`. Each hook is a backgrounded `curl` that POSTs
+  the JSON payload (read from stdin) to the loopback-only
+  `POST /api/v1/hooks/claude-event` route. Auth: HMAC bearer token
+  (`CLOUDECODE_HOOK_TOKEN`) injected at tmux spawn time into the `claude`
+  process's env. Idempotency: each managed hook embeds the literal
+  `# cloudecode-managed` marker so re-merges replace cloudecode's entries
+  in place and never touch the user's own hooks. Opt-out:
+  `notifications.disable_claude_hooks: true`. Parse errors / write errors
+  log and bail — server boot is never blocked.
+- **Inline session rename** *(v0.7.0)* — the launchpad's running-session
+  rows show a pencil (✎) icon next to the session name. Clicking it
+  swaps the row into an inline edit input; submit hits
+  `PATCH /api/v1/sessions/{session_id}/rename`, which broadcasts a
+  `session.renamed` WS frame to every attached browser so the new name
+  paints in lockstep across tabs. Only sessions with a known
+  `session_id` get the pencil — pre-adoption external sessions don't
+  (adopt first, then rename from the in-session header).
 - **Pluggable tunnel backend** — `local_only` (default), `quick_cloudflare`,
   `named_cloudflare`. Double-flag guard: you have to pick a Cloudflare backend
   *and* flip `enable_cloudflare=true` to actually go public.
@@ -311,7 +359,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.7.1-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.7.2-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -449,16 +497,18 @@ loaded by `src/config.py::Settings.load_auth_config()`:
 
 **`notifications` (`NotificationsConfig`)**
 
-| Key                                      | Type  | Default             | Purpose                                                            |
-| ---------------------------------------- | ----- | ------------------- | ------------------------------------------------------------------ |
-| `enabled`                                | bool  | `false`             | Master switch — when false, emit is a no-op                        |
-| `ntfy_base_url`                          | str   | `"https://ntfy.sh"` | ntfy server (override for self-hosted)                             |
-| `ntfy_topic`                             | str   | `""`                | Treat as a credential — 32 hex bytes from `setup_auth.py`          |
-| `public_base_url`                        | str   | `""`                | Used in the ntfy `Click` header for deep-link                      |
-| `idle_threshold_seconds`                 | float | `30.0`              | Silence before IdleWatcher fires `TASK_COMPLETE`                   |
-| `rate_limit_global_cap`                  | int   | `10`                | Notifications per `rate_limit_window_seconds`                      |
-| `rate_limit_window_seconds`              | float | `60.0`              | Rolling-window duration                                            |
-| `rate_limit_per_kind_cooldown_seconds`   | float | `10.0`              | Minimum seconds between two emits of the same EventType            |
+| Key                                      | Type  | Default             | Purpose                                                                                 |
+| ---------------------------------------- | ----- | ------------------- | --------------------------------------------------------------------------------------- |
+| `enabled`                                | bool  | `false`             | Master switch — when false, emit is a no-op                                             |
+| `ntfy_base_url`                          | str   | `"https://ntfy.sh"` | ntfy server (override for self-hosted)                                                  |
+| `ntfy_topic`                             | str   | `""`                | Treat as a credential — 32 hex bytes from `setup_auth.py`                               |
+| `slack_webhook_url`                      | str   | `""`                | *(v0.7.0)* Slack incoming-webhook URL. Empty = channel silently disabled                |
+| `disable_claude_hooks`                   | bool  | `false`             | *(v0.7.0)* Opt out of injecting cloudecode's managed entries into `~/.claude/settings.json` |
+| `public_base_url`                        | str   | `""`                | Used in the ntfy `Click` header for deep-link                                           |
+| `idle_threshold_seconds`                 | float | `30.0`              | Silence before IdleWatcher fires `TASK_COMPLETE`                                        |
+| `rate_limit_global_cap`                  | int   | `10`                | Notifications per `rate_limit_window_seconds`                                           |
+| `rate_limit_window_seconds`              | float | `60.0`              | Rolling-window duration                                                                 |
+| `rate_limit_per_kind_cooldown_seconds`   | float | `10.0`              | Minimum seconds between two emits of the same EventType                                 |
 
 **Top-level (`AuthConfig`)**
 
@@ -668,7 +718,16 @@ Base URL: `http://<host>:8000` · REST prefix: `/api/v1`
 | `DELETE` | `/api/v1/tunnels/{id}`               | —                        | `SuccessResponse`          |
 | `GET`    | `/api/v1/projects`                   | —                        | `List[ProjectResponse]`    |
 | `POST`   | `/api/v1/projects`                   | `CreateProjectRequest`   | `ProjectResponse`          |
+| `PATCH`  | `/api/v1/projects/{name}`            | `UpdateProjectRequest`   | `ProjectResponse`          |
+| `PATCH`  | `/api/v1/projects/{name}/theme`      | `{ theme_id }`           | `SuccessResponse` *(v0.7.0)* |
 | `DELETE` | `/api/v1/projects/{name}`            | —                        | `SuccessResponse`          |
+| `PATCH`  | `/api/v1/sessions/{session_id}`      | `{ pinned_theme }`       | `Session` *(v0.7.0)* — per-session theme pin |
+| `PATCH`  | `/api/v1/sessions/{session_id}/rename` | `{ name }`             | `Session` *(v0.7.0)* — fires `session.renamed` WS broadcast |
+| `GET`    | `/api/v1/sessions/{session_id}/toasts?unacked=true` | —         | `List[Toast]` *(v0.7.0)* — backfill on attach |
+| `POST`   | `/api/v1/sessions/{session_id}/toasts` | `CreateToastRequest`   | `Toast` *(v0.7.0)* — record + WS fanout |
+| `POST`   | `/api/v1/toasts/{toast_id}/ack?session_id=...` | —              | `SuccessResponse` *(v0.7.0)* — ack + WS fanout |
+| `GET`    | `/api/v1/themes`                     | —                        | `List[ThemeManifest]` *(v0.7.0)* — built-ins + user themes |
+| `POST`   | `/api/v1/hooks/claude-event`         | Claude hook JSON (stdin) | *(v0.7.0)* loopback-only; HMAC-bearer via env vars |
 | `GET`    | `/api/v1/filesystem/browse?path=...` | —                        | `BrowseResponse`           |
 | `GET`    | `/api/v1/auth/status`                | —                        | `SuccessResponse`          |
 | `GET`    | `/api/v1/config/common-commands`     | —                        | `{ commands: [...] }`      |
@@ -701,6 +760,9 @@ SIGWINCH to propagate, and writes Ctrl+L (0x0c) to force a clean redraw.
 - `{"type": "log", ...}` — system messages
 - `{"type": "tunnel_created", "tunnel": Tunnel}` — auto-tunnel event
 - `{"type": "session_status", ...}` — session state change
+- `{"type": "session.renamed", "session_id": "...", "name": "..."}` — *(v0.7.0)* session rename broadcast
+- `{"type": "toast.new", "toast": Toast}` — *(v0.7.0)* new toast
+- `{"type": "toast.ack", "toast_id": "..."}` — *(v0.7.0)* cross-tab dismiss
 - `{"type": "pong"}` — keepalive reply
 
 **Message types (client → server)**
@@ -942,8 +1004,15 @@ These hold across the whole design. Violating any of them is a bug.
 
 ## Notifications
 
-Opt-in. Off by default (`notifications.enabled = false`). Single backend:
-ntfy.sh.
+Opt-in. Off by default (`notifications.enabled = false`). Three channels
+all fan out from the same `NotificationRouter`: **ntfy.sh** (mobile push),
+**Slack incoming webhook** *(v0.7.0)*, and **in-app toasts** *(v0.7.0)*.
+
+The router additionally subscribes to **Claude Code lifecycle hooks** *(v0.7.0)*:
+`Stop`, `Notification`, and `PermissionRequest` events are POSTed from the
+spawned `claude` process back to the loopback-only
+`POST /api/v1/hooks/claude-event` route and become first-class events in
+the same pipeline (rate limit, fanout, toast).
 
 ### Event kinds
 
@@ -999,6 +1068,56 @@ python3 setup_auth.py          # prompts for ntfy config, mints a 32-hex topic
 The topic IS the credential. Anyone who knows the topic name can read your
 notifications. Treat it like a secret. Self-host ntfy if you don't trust
 sh.ntfy.sh.
+
+### Slack channel *(v0.7.0)*
+
+Create an incoming webhook in your Slack workspace
+(https://api.slack.com/messaging/webhooks) — Slack binds it to a single
+channel at creation. Set:
+
+```jsonc
+// config.json
+"notifications": {
+  "enabled": true,
+  "slack_webhook_url": "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+}
+```
+
+The webhook URL IS the credential. Treat it like an API key — anyone with
+it can post into the bound channel. Empty string disables the channel
+silently. Slack messages render an emoji + title + 200-char snippet; no
+project names or session slugs leak (same privacy contract as ntfy).
+
+### Claude Code hooks *(v0.7.0)*
+
+`claude_hooks.ensure_hook_settings()` runs at FastAPI startup and merges
+this block into `~/.claude/settings.json`:
+
+```jsonc
+"hooks": {
+  "Stop": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "...# cloudecode-managed" }] }],
+  "Notification": [...],
+  "PermissionRequest": [...]
+}
+```
+
+Each managed command embeds the literal `# cloudecode-managed` marker so
+re-runs replace cloudecode's entries in place without touching user-added
+hooks. The hooks `curl`-POST the JSON payload (read from stdin) to the
+loopback-only `/api/v1/hooks/claude-event` route, authenticated by an
+HMAC bearer token (`CLOUDECODE_HOOK_TOKEN`) that cloudecode injects into
+the spawned `claude` process's env at tmux session birth. Disable with
+`notifications.disable_claude_hooks: true`.
+
+### Toasts *(v0.7.0)*
+
+Toasts are server-recorded notifications surfaced in the web UI. The
+NotificationRouter records every event as a toast on the relevant session,
+then broadcasts `toast.new` over WebSocket. On `(re)attach`, the client
+backfills via `GET /sessions/{id}/toasts?unacked=true`. Dismiss flow is
+cross-tab via server `toast.ack` broadcast (no `localStorage` sync, no
+`POST → POST` echo). Per-toast accent color comes from the active project
+theme.
 
 ---
 
@@ -1062,7 +1181,28 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.7.1 (current — `weekend-mvp-v3.1`)
+### v0.7.2 (current — `weekend-mvp-v3.1`)
+
+- **Terminal viewport snap-to-bottom on session rejoin.** Reattaching to an
+  active session now reliably scrolls the xterm.js viewport to the latest
+  output instead of stranding the user mid-history. Frontend fix in
+  `client/js/terminal.js` lands as a binary in this release.
+- **Theme audio plumbing.** New `client/js/themeAudio.js` formalizes the
+  optional ambient-audio hook used by Matrix / Blade Runner themes — same
+  3-state allowlist gate as `effects.js`, no autoplay surprises.
+- **Backend scrollback capture endpoint.** New tmux-backend route lets the
+  client request a pane scrollback snapshot on rejoin so the terminal can
+  paint history before live bytes start streaming.
+- **Scrollback rejoin regression tests.** `tests/test_session_rejoin_scrollback.py`
+  pins the rejoin-snap behavior. Manual QA notes for the theme-audio path
+  live in `tests/manual_audio_check.md`.
+- **README regenerated** against the new DMG SHA-256.
+
+This is a polish patch on top of v0.7.1 — no behavior changes to themes,
+toasts, Claude hooks, Slack fanout, or session rename. Same upgrade story:
+drag the new DMG into Applications.
+
+### v0.7.1 (`weekend-mvp-v3.1`)
 
 - **Native tmux scroll actually works now** — v0.6.1 added `set-option -s mouse on` on the cloude socket, but tmux's `mouse` option is session-scope, not server-scope. The `-s` call silently no-op'd (the `check=False` flag swallowed the error). Bindings were correctly installed but never reached because mouse mode itself stayed off. Fix is a one-character change: `-s` → `-g`. Verified live: `tmux -L cloude show-options -gv mouse` now returns `on`.
 

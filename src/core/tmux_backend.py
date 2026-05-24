@@ -1098,6 +1098,60 @@ class TmuxBackend(SessionBackend):
         )
         return rc == 0
 
+    async def rename_session(self, new_name: str) -> None:
+        """Rename this tmux session in-place via ``rename-session``.
+
+        Atomic from the tmux server's perspective — the session keeps its
+        windows, panes, history, pipe-pane hooks, and remain-on-exit setting.
+        Caller is responsible for upstream state re-keying (the SessionManager
+        layer handles ``owned_tmux_sessions`` + ``pinned_themes`` + the
+        per-session ``Session.tmux_session`` field).
+
+        Args:
+            new_name: New tmux session name. MUST be pre-validated by the
+                caller (route layer enforces ``^[A-Za-z0-9_-]{1,64}$``). We
+                still fail loudly via ``_safe_target`` if the value contains
+                a target separator — defense in depth, never trust upstream.
+
+        Raises:
+            ValueError: ``new_name`` contains tmux target separators (``:``
+                or ``.``).
+            RuntimeError: tmux ``rename-session`` returned non-zero.
+        """
+        # Defense-in-depth: validate the new name as a tmux target. The
+        # route layer enforces a stricter regex; this catches any code
+        # path that bypasses it (test fixtures, future internal callers).
+        _safe_target(new_name)
+
+        if not self.tmux_session:
+            raise RuntimeError("rename_session: backend has no tmux session name")
+
+        if new_name == self.tmux_session:
+            # No-op rename. Treat as success — the user's intent ("the
+            # session should be named X") is already satisfied.
+            return
+
+        rc, _, err = await self._run_tmux(
+            "rename-session",
+            "-t",
+            self.tmux_session,
+            new_name,
+            check=False,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"tmux rename-session failed: "
+                f"{err.decode('utf-8', errors='replace').strip()}"
+            )
+
+        logger.info(
+            "tmux_backend_renamed",
+            old=self.tmux_session,
+            new=new_name,
+            socket=self.socket_name,
+        )
+        self.tmux_session = new_name
+
     def discover_existing(self) -> List[str]:
         """List all ``cloude_*`` sessions on our dedicated socket."""
         if not shutil.which("tmux"):
@@ -1121,6 +1175,11 @@ class TmuxBackend(SessionBackend):
         ``capture-pane -p`` writes to stdout. ``-S -<N>`` sets start line N
         lines above the cursor. ``-e`` preserves ANSI escape sequences
         so xterm.js can replay colors/positioning faithfully.
+        ``-J`` joins hardware-wrapped lines back into logical lines, so xterm.js
+        can re-wrap them cleanly at the browser viewport width. Without ``-J``,
+        tmux emits each pane-width-wrapped visual line as a separate output line,
+        and xterm's re-wrap conflicts with tmux's pane-width wraps, producing
+        visually jumbled scrollback when the user scrolls above the live viewport.
         """
         if lines <= 0:
             lines = self.scrollback_lines
@@ -1131,6 +1190,7 @@ class TmuxBackend(SessionBackend):
                 "capture-pane",
                 "-p",
                 "-e",
+                "-J",
                 "-S",
                 f"-{lines}",
                 "-t",

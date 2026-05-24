@@ -464,6 +464,16 @@
      *   localStorage as the new global default. Server-side per-session
      *   pinning is handled by applyGlobal() which calls this internally;
      *   this primitive intentionally does NOT touch the server.
+     * @param {boolean} [opts.forXterm] — three-state xterm-repaint override:
+     *   - true       → ALWAYS fire fireXtermChange regardless of activeSessionAgent.
+     *                  Use when the caller is the authoritative source for the
+     *                  session's terminal palette (session theme picker, session
+     *                  attach with pinned_theme).
+     *   - false      → NEVER fire fireXtermChange. Use when the caller knows a
+     *                  subsequent call (e.g. applySession) will paint the
+     *                  terminal and wants to avoid an intermediate flash.
+     *   - undefined  → preserve legacy gate (fire iff !activeSessionAgent).
+     *                  This keeps every pre-existing caller's behavior intact.
      */
     function applyTheme(themeId, opts) {
         var m = manifests.get(themeId);
@@ -499,10 +509,22 @@
             try { localStorage.setItem(STORAGE_KEY, themeId); } catch (_) { /* ignore */ }
         }
 
-        // Fire xterm listeners only when no session scope is active. When a
-        // session theme IS active it owns the terminal palette; switching the
-        // global shouldn't repaint it mid-session.
-        if (!activeSessionAgent) {
+        // Xterm repaint policy (three-state, opt-in override):
+        //   opts.forXterm === true   → always fire (session theme picker /
+        //                              session-attach with pinned_theme).
+        //   opts.forXterm === false  → never fire (caller will paint via
+        //                              applySession in a follow-up step).
+        //   opts.forXterm undefined  → legacy gate: fire only when no session
+        //                              scope is active. When a session theme
+        //                              IS active it owns the terminal palette;
+        //                              switching the global default shouldn't
+        //                              repaint it mid-session.
+        var forXterm = opts && Object.prototype.hasOwnProperty.call(opts, 'forXterm')
+            ? opts.forXterm
+            : undefined;
+        var shouldFireXterm = forXterm === true
+            || (forXterm === undefined && !activeSessionAgent);
+        if (shouldFireXterm) {
             fireXtermChange(m.xterm || {});
         }
 
@@ -513,6 +535,18 @@
             maybeLoadEffects(m).catch(function (e) {
                 console.warn('Themes: maybeLoadEffects rejected', e);
             });
+        }
+
+        // v0.7.0+ — per-theme background audio plumbing.
+        // Optional `audio` manifest field; null = silence current track.
+        // ThemeAudio gracefully no-ops when the field is absent or the
+        // referenced asset fails to load (404 / CORS / codec).
+        if (window.ThemeAudio && typeof window.ThemeAudio.setTheme === 'function') {
+            try {
+                window.ThemeAudio.setTheme(m.audio || null);
+            } catch (e) {
+                console.warn('Themes: ThemeAudio.setTheme threw', e);
+            }
         }
         return true;
     }
@@ -569,7 +603,17 @@
      * UNLESS a session-scoped theme is active (then the session palette wins).
      */
     function applyGlobal(themeId) {
-        var ok = applyTheme(themeId, { persist: !activeSessionName });
+        // When the user picks a theme while inside a session, the pick IS
+        // for this session — force the xterm repaint so the terminal pane
+        // restyles immediately (otherwise only the page chrome would repaint
+        // because the legacy gate blocks xterm whenever activeSessionAgent
+        // is set, which is exactly when we're in a session). Outside a
+        // session (launchpad/auth), leave the flag undefined so the legacy
+        // gate fires xterm normally.
+        var ok = applyTheme(themeId, {
+            persist: !activeSessionName,
+            forXterm: activeSessionName ? true : undefined
+        });
         if (!ok) return false;
         if (activeSessionName) {
             pinThemeForSession(activeSessionName, themeId);

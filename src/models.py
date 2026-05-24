@@ -134,6 +134,22 @@ class SessionInfo(BaseModel):
         default=None,
         description="Theme id pinned to this session (mirrors Session.pinned_theme)",
     )
+    # v0.7.0 — launchpad rejoin scrollback replay. Populated ONLY when
+    # ``GET /sessions?session_id=<id>&include_scrollback=1`` is requested
+    # by the launchpad's "return to running session" path. Mirrors the
+    # adopt-path's ``AdoptSessionResponse.initial_scrollback_b64`` — the
+    # client base64-decodes and paints these bytes into xterm BEFORE the
+    # WS opens so the rejoined terminal shows the same pre-existing
+    # history the adopt path shows. None for every other caller (default-
+    # off; existing GET /sessions consumers see no change on the wire).
+    initial_scrollback_b64: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base64-encoded captured tmux scrollback bytes. Only populated "
+            "when GET /sessions/{id}?include_scrollback=1, to support the "
+            "launchpad rejoin path painting history before the WS opens."
+        ),
+    )
 
 
 # API Request Models
@@ -481,6 +497,12 @@ class WSMessageType(str, Enum):
     # visually distinct in client switch statements and log greps.
     TOAST_NEW = "toast.new"
     TOAST_ACK = "toast.ack"
+    # Session rename — server -> client. Broadcast to every WS bound to a
+    # session id after a successful ``PATCH /sessions/{id}/name``. The client
+    # uses it to update the in-session header text, the launchpad row label,
+    # and ``document.title``. Dot notation matches ``toast.*`` for namespace
+    # consistency in client switch statements.
+    SESSION_RENAMED = "session.renamed"
 
 
 class Toast(BaseModel):
@@ -527,6 +549,30 @@ class ToastAckMessage(BaseModel):
     """WS server -> client: a toast was acked; other tabs should dismiss it."""
     type: WSMessageType = WSMessageType.TOAST_ACK
     toast_id: str
+
+
+class SessionRenamedMessage(BaseModel):
+    """WS server -> client: a session was renamed; clients should update
+    their displayed name, the launchpad row label, and ``document.title``.
+
+    Broadcast by ``PATCH /sessions/{session_id}/name`` after the underlying
+    ``tmux rename-session`` succeeds and in-memory state has been re-keyed.
+    """
+    type: WSMessageType = WSMessageType.SESSION_RENAMED
+    session_id: str = Field(..., description="Session id whose name changed")
+    new_name: str = Field(..., description="New tmux session name")
+
+
+class RenameSessionRequest(BaseModel):
+    """Request body for ``PATCH /api/v1/sessions/{session_id}/name``.
+
+    ``new_name`` is validated at the route layer against a strict charset
+    (``^[A-Za-z0-9_-]{1,64}$``) before being passed to
+    ``tmux rename-session``. The strict regex sidesteps tmux's own target-
+    separator pitfalls (``.`` / ``:``), filesystem path quirks, and shell
+    metacharacters all in one shot.
+    """
+    new_name: str = Field(..., description="New session name (1-64 chars, [A-Za-z0-9_-])")
 
 
 class CreateToastRequest(BaseModel):

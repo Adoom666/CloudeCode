@@ -1930,6 +1930,132 @@ class SessionManager:
             logger.error("session_destruction_failed", error=str(e))
             raise
 
+    async def rename_session(
+        self, session_id: str, new_name: str
+    ) -> "SessionInfo":
+        """Rename a live session's tmux backend AND re-key in-memory state.
+
+        Validates uniqueness against every live backend's tmux name
+        (``active_tmux_names()``) AND the persisted ``owned_tmux_sessions``
+        set — a name collision against either is a conflict.
+
+        On success the following state is updated atomically (from the
+        caller's perspective; we hold no async lock since SessionManager
+        is single-threaded under the asyncio event loop):
+
+          * ``TmuxBackend.tmux_session`` -> new_name (via ``backend.rename_session``)
+          * ``Session.tmux_session`` -> new_name
+          * ``owned_tmux_sessions`` re-keyed (drop old, add new) for owned
+            sessions. Adopted sessions keep their ``adopted:<old_name>`` id
+            but the in-memory ``Session.tmux_session`` carries the new name.
+          * ``pinned_themes`` map re-keyed (drop old, add new) so a v0.6.x
+            downgrade still finds the pin under the new name. v0.7.0 themes
+            live in ``<working_dir>/.cc.theme`` keyed by cwd, so the
+            authoritative project theme is unaffected by the rename.
+          * ``session_metadata.json`` re-persisted so a restart rehydrate
+            sees the new name.
+
+        Args:
+            session_id: Session id (NOT tmux name). Returns ValueError if
+                unknown / not running.
+            new_name: Already-validated tmux name (route layer enforces the
+                charset). We re-validate against the live tmux landscape
+                here for uniqueness.
+
+        Returns:
+            Updated ``SessionInfo`` reflecting the new name.
+
+        Raises:
+            ValueError: Unknown session id, or session not running.
+            FileExistsError: ``new_name`` collides with another live tmux
+                name or an owned-but-detached session name.
+            RuntimeError: ``tmux rename-session`` failed at the backend.
+        """
+        sess = self.sessions.get(session_id)
+        backend = self.backends.get(session_id)
+        if sess is None or backend is None:
+            raise ValueError(f"Unknown session id: {session_id!r}")
+
+        old_name = getattr(backend, "tmux_session", None)
+        if not old_name:
+            raise ValueError(
+                f"Session {session_id!r} has no tmux name to rename"
+            )
+
+        # No-op rename (idempotent contract): treat as success without
+        # touching tmux or persisting anything.
+        if new_name == old_name:
+            info = self._session_info_for(session_id)
+            if info is None:
+                raise ValueError(f"Session {session_id!r} not running")
+            return info
+
+        # Uniqueness: collision against ANY live backend's tmux name OR an
+        # owned name persisted from a prior session (e.g. detached but
+        # not destroyed). The persisted set is the durable source of
+        # truth for "names we've taken"; live ``active_tmux_names`` is
+        # the runtime source for "names we're holding right now".
+        active = self.active_tmux_names()
+        if new_name in active or new_name in self.owned_tmux_sessions:
+            raise FileExistsError(
+                f"Tmux session name {new_name!r} is already in use"
+            )
+
+        # Backend handles the actual ``tmux rename-session`` + updates its
+        # own ``self.tmux_session``. We re-key in-memory state after.
+        await backend.rename_session(new_name)
+
+        # Re-key owned set (idempotent ``discard`` + ``add``). Adopted
+        # sessions aren't in this set — only owned ones are persisted —
+        # so this is a no-op for adopt rows. We still ALWAYS add ``new_name``
+        # only when the OLD name was in the set, so an adopt-then-rename
+        # doesn't accidentally promote an external session into the owned
+        # registry.
+        if old_name in self.owned_tmux_sessions:
+            self.owned_tmux_sessions.discard(old_name)
+            self.owned_tmux_sessions.add(new_name)
+
+        # Re-key the deprecated pinned-themes map. v0.7.0's project theme
+        # ``.cc.theme`` is keyed by working_dir (unaffected by rename), but
+        # the legacy per-tmux-name JSON map needs to follow the name so a
+        # downgrade-to-v0.6.x doesn't lose the pin. ``self.pinned_themes``
+        # is the in-memory mirror of that file.
+        if old_name in self.pinned_themes:
+            theme_id = self.pinned_themes.pop(old_name)
+            self.pinned_themes[new_name] = theme_id
+            self._save_pinned_themes()
+
+        # Mirror the new tmux name onto the Session record so SessionInfo
+        # serialization picks it up immediately (and so a restart-rehydrate
+        # path sees the right name in session_metadata.json).
+        sess.tmux_session = new_name
+
+        # Persist. Best-effort — a write failure logs but doesn't roll the
+        # tmux rename back, since the tmux side already succeeded and the
+        # in-memory state is authoritative until the next restart anyway.
+        try:
+            self._save_session_metadata(sess)
+        except Exception as exc:
+            logger.warning(
+                "rename_session_metadata_persist_failed",
+                session_id=session_id,
+                old=old_name,
+                new=new_name,
+                error=str(exc),
+            )
+
+        logger.info(
+            "session_renamed",
+            session_id=session_id,
+            old=old_name,
+            new=new_name,
+        )
+
+        info = self._session_info_for(session_id)
+        if info is None:
+            raise ValueError(f"Session {session_id!r} not running")
+        return info
+
     # ---- I/O (per session) ----------------------------------------------
 
     def _require_running(self, session_id: Optional[str]):

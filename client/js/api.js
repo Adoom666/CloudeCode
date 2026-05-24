@@ -346,10 +346,39 @@ class API {
      * Sessions: Get session info.
      * @param {string|null} sessionId - specific session id, or null for the
      *   current (most-recently-created) one (back-compat).
+     * @param {object} [opts]
+     * @param {boolean} [opts.includeScrollback=false] - when true, asks the
+     *   server to populate ``initial_scrollback_b64`` on the response. Used
+     *   by the launchpad rejoin path so the client can paint pre-existing
+     *   history into xterm BEFORE the WS opens (mirrors the adopt path).
+     *   Default false keeps every existing caller wire-identical.
+     * @param {number|null} [opts.cols=null] - client's current xterm cols;
+     *   forwarded ONLY when includeScrollback is true so the server can
+     *   pre-resize the pane to this width before capture-pane snapshots
+     *   it. Without this, a width-mismatched rejoin (e.g. mobile rejoining
+     *   a desktop-width session) gets scrollback bytes emitted at the
+     *   pane's last-attached width and xterm renders them at the mobile
+     *   width — older history reflows into garbled rows.
+     * @param {number|null} [opts.rows=null] - client's current xterm rows;
+     *   paired with ``cols`` for the pre-capture resize. Both must be
+     *   positive ints for the server to act.
      * @returns {Promise<object>} - SessionInfo
      */
-    async getSession(sessionId = null) {
-        const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    async getSession(sessionId = null, { includeScrollback = false, cols = null, rows = null } = {}) {
+        const params = [];
+        if (sessionId) {
+            params.push(`session_id=${encodeURIComponent(sessionId)}`);
+        }
+        if (includeScrollback) {
+            params.push('include_scrollback=1');
+        }
+        if (cols && cols > 0) {
+            params.push(`cols=${encodeURIComponent(String(cols))}`);
+        }
+        if (rows && rows > 0) {
+            params.push(`rows=${encodeURIComponent(String(rows))}`);
+        }
+        const q = params.length ? `?${params.join('&')}` : '';
         return await this.call(`/sessions${q}`);
     }
 
@@ -488,6 +517,33 @@ class API {
         return await this.call(
             `/sessions/external/${encodeURIComponent(sessionName)}`,
             { method: 'DELETE' }
+        );
+    }
+
+    /**
+     * Sessions: Rename a live session's tmux backend in place.
+     *
+     * PATCH /api/v1/sessions/{id}/name. Server validates the name against
+     * ``^[A-Za-z0-9_-]{1,64}$`` and uniqueness against every live + owned
+     * tmux name. On success the server broadcasts ``session.renamed`` over
+     * every WS bound to this session id — the caller does NOT need to
+     * manually mutate displayed state, just await success and rely on the
+     * WS handler in terminal.js to update header text + document.title.
+     *
+     * @param {string} sessionId - Session id (NOT tmux name).
+     * @param {string} newName - Proposed new tmux name. Caller may
+     *   pre-validate but server is authoritative.
+     * @returns {Promise<object>} Updated SessionInfo payload.
+     * @throws on 400 (invalid name), 404 (unknown id), 409 (name collision),
+     *   500 (tmux command failed).
+     */
+    async renameSession(sessionId, newName) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionId)}/name`,
+            {
+                method: 'PATCH',
+                body: { new_name: newName },
+            }
         );
     }
 

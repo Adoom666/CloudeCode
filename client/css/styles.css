@@ -126,6 +126,7 @@ body {
     display: flex;
     flex-direction: column;
     margin: 0;
+    overflow-x: hidden;
 }
 
 /* Header */
@@ -181,10 +182,131 @@ h1:hover {
     display: block;
 }
 
+/* v0.7.2 — inline rename affordance in the page header. A small pencil
+ * button sits next to the title text and triggers inline edit mode.
+ * Styled to match the launchpad's .running-session-rename for visual consistency. */
+.header-rename-pencil {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-left: 0.5em;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+    vertical-align: middle;
+}
+
+.header-rename-pencil:hover {
+    color: var(--color-accent);
+    transform: scale(1.15);
+    background: var(--color-accent-bg-soft);
+}
+
+.header-rename-input {
+    background: var(--color-bg-elevated, #1a1a1a);
+    color: var(--color-fg-strong, #fff);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 0.9em;
+    margin-left: 4px;
+    min-width: 120px;
+    max-width: 320px;
+}
+
+.header-rename-error {
+    color: var(--color-danger-strong, #e64);
+    font-size: 0.75em;
+    margin-left: 8px;
+}
+
+/* v0.7.2 — inline rename affordance on the launchpad's running-sessions
+ * rows. The pencil button triggers inline-edit mode (swaps the name span
+ * for an input). Only rows with a known session_id render the pencil
+ * (toggled in renderRunningSessions); external adopt-target rows get no
+ * pencil — the user can adopt first, then rename from the in-session header. */
+.running-session-rename {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+    font-size: 14px;
+}
+
+.running-session-rename:hover {
+    color: var(--color-accent);
+    transform: scale(1.15);
+    background: var(--color-accent-bg-soft);
+}
+
+.running-session-rename-input {
+    flex: 1;
+    background: var(--color-bg-elevated, #1a1a1a);
+    color: var(--color-fg-strong, #fff);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font: inherit;
+    font-weight: bold;
+    min-width: 0;
+}
+
+.running-session-rename-error {
+    color: var(--color-danger-strong, #e64);
+    font-size: 0.75em;
+    margin-left: 6px;
+    align-self: center;
+}
+
 .controls {
     display: flex;
     gap: 8px;
     align-items: center;
+    overflow: hidden;
+}
+
+/* v0.7.0+ — header background-music toggle. Muted by default; click is the
+ * required user-gesture that grants AudioContext autoplay for the page
+ * lifetime. Styled to match `.header-rename-pencil` so the header chrome
+ * reads as one visual family. */
+.header-audio-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.header-audio-toggle:hover {
+    color: var(--color-accent);
+    transform: scale(1.15);
+    background: var(--color-accent-bg-soft);
+}
+
+.header-audio-toggle[aria-pressed="true"] {
+    color: var(--color-accent);
 }
 
 /* Header control icons. Inline SVG paths use stroke="currentColor" so a
@@ -270,20 +392,20 @@ button[data-tooltip]:hover::after {
     border-radius: var(--radius-full);
     background: var(--color-status-pending);
     display: inline-block;
-    box-shadow: 0 0 8px var(--color-status-pending-glow);
+    box-shadow: 0 0 4px var(--color-status-pending-glow);
     transition: all 0.3s ease;
     position: relative;
 }
 
 .status.connected {
     background: var(--color-status-connected);
-    box-shadow: 0 0 12px var(--color-status-connected-glow);
+    box-shadow: 0 0 6px var(--color-status-connected-glow);
     animation: pulse 2s infinite;
 }
 
 .status.error {
     background: var(--color-status-error);
-    box-shadow: 0 0 12px var(--color-status-error-glow);
+    box-shadow: 0 0 6px var(--color-status-error-glow);
 }
 
 @keyframes pulse {
@@ -2039,6 +2161,13 @@ button[data-tooltip]:hover::after {
 @media (pointer: coarse) {
     .cloude-image-attach-button {
         display: flex;
+    }
+    /* Hide the attach FAB on the launchpad — it's terminal-only.
+     * `#launchpad-screen.active` is set by app.js#showLaunchpad and
+     * cleared by hideAllScreens() before any other screen is activated,
+     * so this reliably scopes the FAB to live sessions only. */
+    body:has(#launchpad-screen.active) .cloude-image-attach-button {
+        display: none !important;
     }
 }
 
