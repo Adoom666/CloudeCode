@@ -261,17 +261,22 @@ class Auth {
     /**
      * Exchange the stored refresh token for a new access+refresh pair.
      *
-     * Returns true on success (tokens rotated in localStorage), false on
-     * any failure (401, network error, no stored refresh). The API layer's
-     * 401 interceptor uses this to transparently recover from expired
-     * access tokens.
+     * Returns:
+     *   - true on success (tokens rotated in localStorage)
+     *   - false on a server-side auth failure (401/403 on /auth/refresh):
+     *     the refresh token is genuinely dead and the caller MUST clear
+     *     state and re-prompt for TOTP.
+     *   - 'network-error' when fetch threw (no HTTP response received):
+     *     the refresh token MIGHT still be valid; caller should preserve
+     *     it, clear only the access token, and surface a recoverable
+     *     error rather than re-prompting.
      *
      * NOTE: callers MUST funnel through the single-flight mutex in
      * `api.js` — calling this in parallel from multiple in-flight requests
      * will race and burn the refresh-token chain via server-side reuse
      * detection.
      *
-     * @returns {Promise<boolean>}
+     * @returns {Promise<true|false|'network-error'>}
      */
     async refresh() {
         const refreshToken = this.getRefreshToken();
@@ -280,21 +285,37 @@ class Auth {
             return false;
         }
 
+        let response;
         try {
-            const response = await fetch(`${window.API.baseURL}/auth/refresh`, {
+            response = await fetch(`${window.API.baseURL}/auth/refresh`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ refresh_token: refreshToken })
             });
+        } catch (e) {
+            // fetch threw — no HTTP response was ever received. This is a
+            // network-layer failure (DNS, offline, TLS, connection refused,
+            // Wi-Fi re-associating after laptop wake, etc.). Refresh token
+            // status is UNKNOWN — do NOT report this as an auth failure or
+            // the caller will nuke a still-valid refresh token and force
+            // a TOTP re-prompt for what was actually a transient blip.
+            console.warn('Auth: refresh network error (preserving refresh token)', e);
+            return 'network-error';
+        }
 
-            if (!response.ok) {
-                // 401 = refresh rejected (expired, revoked, reuse-detected).
-                // Any other non-2xx means the server is sick — treat it as
-                // a refresh failure so the caller can fall back to login.
-                console.warn('Auth: refresh failed with status', response.status);
-                return false;
-            }
+        if (!response.ok) {
+            // We got an HTTP response but it wasn't 2xx. 401/403 means the
+            // server explicitly rejected the refresh token — it's dead and
+            // the caller must reauth via TOTP. Other non-2xx (500, 503,
+            // etc.) are server-side faults that also surface as "refresh
+            // failed" since we can't safely proceed without a fresh access
+            // token; clearing tokens is the safe default for an unknown
+            // server failure mode.
+            console.warn('Auth: refresh failed with status', response.status);
+            return false;
+        }
 
+        try {
             const data = await response.json();
             const access = data.access_token || data.token;
             if (!access) {
@@ -308,7 +329,7 @@ class Auth {
             console.log('Auth: refreshed tokens');
             return true;
         } catch (e) {
-            console.error('Auth: refresh threw', e);
+            console.error('Auth: refresh response parse failed', e);
             return false;
         }
     }

@@ -12,15 +12,15 @@ reachable from the browser on your phone, laptop, or any LAN-connected device.
 
 ## Download
 
-**macOS (Apple Silicon):** [Cloude.Code-0.7.2-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.2/Cloude.Code-0.7.2-arm64.dmg) (93 MB)
+**macOS (Apple Silicon):** [Cloude.Code-0.7.3-arm64.dmg](https://github.com/Adoom666/CloudeCode/releases/download/v0.7.3/Cloude.Code-0.7.3-arm64.dmg) (93 MB)
 
 Drag the app into Applications, double-click. First launch auto-provisions a Python venv, installs dependencies, generates TOTP + JWT secrets, and pops a QR for you to scan with any authenticator app. Requires Python 3.12+ (install via `brew install python@3.12` if missing — the app detects and guides you).
 
 **Verify the download** (optional):
 
 ```bash
-shasum -a 256 "Cloude.Code-0.7.2-arm64.dmg"
-# expected: 4f6638acf63645e6a631572b120119e6ea1b804337bbea68e2180d4b4422c3d7
+shasum -a 256 "Cloude.Code-0.7.3-arm64.dmg"
+# expected: 204c171661f71bd0762158d0bac0569797436b3ce91b616c8986e442b6283107
 ```
 
 **Other versions:** see [Releases](https://github.com/Adoom666/CloudeCode/releases).
@@ -359,7 +359,7 @@ with full access to:
 
 **End-user install (DMG):**
 
-1. Grab `Cloude.Code-0.7.2-arm64.dmg` from releases (or build from source — see below).
+1. Grab `Cloude.Code-0.7.3-arm64.dmg` from releases (or build from source — see below).
 2. Open the DMG, drag to `/Applications`, launch.
 3. **First-run auto-bootstrap** kicks in (zero terminal interaction):
    - Locates a Python 3.12+ binary (`/opt/homebrew`, `/usr/local`, pyenv shims).
@@ -1181,7 +1181,25 @@ npm run build                      # produces dist/Cloude Code.dmg
 
 ## Recent changes
 
-### v0.7.2 (current — `weekend-mvp-v3.1`)
+### v0.7.3 (current — `weekend-mvp-v3.1`)
+
+- **fix(auth): stop OTP re-prompt after short laptop sleeps.** Access token
+  TTL bumped from 15 minutes to 4 hours (refresh token unchanged at 7 days)
+  so typical sleep durations no longer expire the access token mid-session.
+  The refresh path is hardened against transient post-wake Wi-Fi glitches
+  that previously nuked the refresh token and forced a fresh OTP:
+  `Auth.refresh()` now distinguishes network errors from auth errors and
+  preserves the refresh token on network-only failures. WebSocket `onclose`
+  with code `4401` now refresh-first via the existing single-flight mutex
+  before reconnecting, avoiding stale-token reconnect storms on wake.
+  Refresh token TTL, signing, storage, and validation strictness are all
+  unchanged — same security posture, fewer false-positive OTP prompts.
+
+This is a single-fix patch on top of v0.7.2. No behavior changes to
+terminal, themes, toasts, Claude hooks, Slack fanout, or session rename.
+Drag the new DMG into Applications.
+
+### v0.7.2 (`weekend-mvp-v3.1`)
 
 - **Terminal viewport snap-to-bottom on session rejoin.** Reattaching to an
   active session now reliably scrolls the xterm.js viewport to the latest

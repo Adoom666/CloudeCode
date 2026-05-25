@@ -134,7 +134,7 @@ _totp_seen_lock = asyncio.Lock()
 def _get_ttls() -> tuple[int, int, int]:
     """Pull (access_ttl, refresh_ttl, grace) from AuthConfig with defaults."""
     auth_config = settings.load_auth_config()
-    access_ttl = int(getattr(auth_config, "access_token_ttl_seconds", 900))
+    access_ttl = int(getattr(auth_config, "access_token_ttl_seconds", 14400))
     refresh_ttl = int(getattr(auth_config, "refresh_token_ttl_seconds", 604800))
     grace = int(getattr(auth_config, "refresh_grace_seconds", 10))
     return access_ttl, refresh_ttl, grace

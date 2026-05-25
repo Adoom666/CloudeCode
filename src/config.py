@@ -182,7 +182,7 @@ class AuthConfig(BaseModel):
     # Item 5: access/refresh token pair. Access is short-lived (15m default)
     # so a leaked token has a tight blast radius; refresh is long-lived
     # (7d default) but stored server-side with rotation + reuse detection.
-    access_token_ttl_seconds: int = 900       # 15 minutes
+    access_token_ttl_seconds: int = 14400     # 4 hours
     refresh_token_ttl_seconds: int = 604800   # 7 days
     # Grace window during which a just-rotated refresh token can still be
     # used. Tolerates near-simultaneous requests (client fires two refreshes
@@ -546,7 +546,7 @@ class Settings(BaseSettings):
                 # single-user LAN MVP; expose them so operators can tune
                 # without editing source.
                 access_token_ttl_seconds=int(
-                    data.get("access_token_ttl_seconds", 900)
+                    data.get("access_token_ttl_seconds", 14400)
                 ),
                 refresh_token_ttl_seconds=int(
                     data.get("refresh_token_ttl_seconds", 604800)

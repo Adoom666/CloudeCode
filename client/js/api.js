@@ -89,14 +89,38 @@ class API {
             // see constructor comment). If refresh wins, replay the
             // original request once with the new access token.
             //
-            // Second 401 (or refresh failure): give up, clear tokens,
-            // fire auth-required so the shell re-prompts for TOTP.
+            // Refresh returns:
+            //   true            -> rotated; retry original request once.
+            //   'network-error' -> refresh request itself failed at the
+            //                      network layer (post-wake Wi-Fi blip,
+            //                      offline, etc.). Refresh token MIGHT
+            //                      still be valid — preserve it, drop
+            //                      only the access token, surface a
+            //                      recoverable NetworkUnavailable error
+            //                      to the caller. The NEXT user action
+            //                      will retry refresh.
+            //   false           -> server explicitly rejected the refresh
+            //                      (or no refresh stored / bad response).
+            //                      Clear both tokens and re-prompt TOTP.
+            //
+            // Second 401 (after a successful refresh) skips the refresh
+            // attempt entirely and falls through to the hard re-auth path.
             if (response.status === 401) {
                 if (!_meta._retrying && window.Auth && window.Auth.getRefreshToken()) {
                     const refreshed = await this._singleFlightRefresh();
-                    if (refreshed) {
+                    if (refreshed === true) {
                         console.log('API: 401 recovered via refresh, retrying original request');
                         return this.call(endpoint, options, { _retrying: true });
+                    }
+                    if (refreshed === 'network-error') {
+                        console.warn('API: 401 + refresh hit network error — preserving refresh token');
+                        if (window.Auth) {
+                            window.Auth.clearToken({ accessOnly: true });
+                        }
+                        const err = new Error('Network unavailable; please retry');
+                        err.code = 'NetworkUnavailable';
+                        err.status = 0;
+                        throw err;
                     }
                 }
                 console.log('API: 401 Unauthorized - triggering re-auth');
@@ -476,9 +500,19 @@ class API {
             if (response.status === 401) {
                 if (!_meta._retrying && window.Auth && window.Auth.getRefreshToken()) {
                     const refreshed = await this._singleFlightRefresh();
-                    if (refreshed) {
+                    if (refreshed === true) {
                         console.log('API: 401 recovered via refresh, retrying uploadImage');
                         return this.uploadImage(blob, mimeType, sessionId, { _retrying: true });
+                    }
+                    if (refreshed === 'network-error') {
+                        console.warn('API: 401 + refresh hit network error on uploadImage — preserving refresh token');
+                        if (window.Auth) {
+                            window.Auth.clearToken({ accessOnly: true });
+                        }
+                        const err = new Error('Network unavailable; please retry');
+                        err.code = 'NetworkUnavailable';
+                        err.status = 0;
+                        throw err;
                     }
                 }
                 console.log('API: 401 Unauthorized on uploadImage - triggering re-auth');

@@ -1318,8 +1318,9 @@ class Terminal {
             this.updateStatus('WebSocket error', 'error');
         };
 
-        this.ws.onclose = () => {
-            console.log('Terminal: WebSocket closed');
+        this.ws.onclose = (event) => {
+            const closeCode = (event && typeof event.code === 'number') ? event.code : null;
+            console.log('Terminal: WebSocket closed', { code: closeCode });
             this.ws = null;
 
             // Stop keepalive
@@ -1339,6 +1340,18 @@ class Terminal {
 
             if (this.term) {
                 this.term.writeln('\n\x1b[1;31m[Disconnected from terminal]\x1b[0m');
+            }
+
+            // Auth-fail close from server (src/api/websocket.py — code 4401
+            // is emitted when JWT verification fails on the WS handshake or
+            // when the access token expires mid-stream). Don't reconnect
+            // with the same stale token — that would spin the close/4401
+            // loop until we exhaust maxReconnectAttempts. Instead, proactively
+            // refresh first so the next openWebSocket() picks up a fresh
+            // token via getToken().
+            if (closeCode === 4401 && this.sessionActive && !this.isReconnecting) {
+                this._handleAuthFailedClose();
+                return;
             }
 
             // Attempt auto-reconnect if session still active
@@ -1491,6 +1504,60 @@ class Terminal {
         }
         this.isReconnecting = false;
         this.reconnectAttempts = 0;
+    }
+
+    /**
+     * Handle a WS close caused by server-side auth failure (code 4401).
+     * Refresh the access token BEFORE the next reconnect attempt so the
+     * fresh WS handshake carries a valid JWT — otherwise reconnects would
+     * loop on 4401 until maxReconnectAttempts and force a TOTP re-prompt.
+     *
+     * Uses API._singleFlightRefresh when available so a concurrent HTTP
+     * 401 path that's already rotating doesn't burn the refresh chain.
+     */
+    async _handleAuthFailedClose() {
+        if (this.isReconnecting) return;
+        this.isReconnecting = true;
+        this.updateStatus('Refreshing auth...');
+
+        let refreshed = false;
+        try {
+            const api = window.API;
+            if (api && typeof api._singleFlightRefresh === 'function') {
+                refreshed = await api._singleFlightRefresh();
+            } else if (window.Auth && typeof window.Auth.refresh === 'function') {
+                refreshed = await window.Auth.refresh();
+            }
+        } catch (e) {
+            console.warn('Terminal: refresh during 4401 reconnect threw', e);
+            refreshed = false;
+        }
+
+        this.isReconnecting = false;
+
+        if (refreshed === true) {
+            console.log('Terminal: refresh ok after 4401, reconnecting');
+            this.attemptReconnect();
+            return;
+        }
+        if (refreshed === 'network-error') {
+            console.warn('Terminal: refresh network error after 4401, short-delay retry');
+            if (this.term) {
+                this.term.writeln('\x1b[1;33m[Network blip — retrying in 4s]\x1b[0m');
+            }
+            if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = setTimeout(() => {
+                this.reconnectTimeout = null;
+                if (this.sessionActive) this._handleAuthFailedClose();
+            }, 4000);
+            return;
+        }
+        console.warn('Terminal: refresh failed after 4401, escalating to re-auth');
+        if (window.API && typeof window.API.handleUnauthorized === 'function') {
+            window.API.handleUnauthorized();
+        } else {
+            window.dispatchEvent(new CustomEvent('auth-required'));
+        }
     }
 
     /**
