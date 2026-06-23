@@ -1,6 +1,7 @@
 """Main FastAPI application for Cloude Code Controller."""
 
 import os
+import json
 import structlog
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -8,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -341,6 +342,64 @@ app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static
 
 
 # ---------------------------------------------------------------------------
+# App version injection (header chip)
+#
+# The web client's version chip is `{{VERSION}}` in client/index.html and is
+# stamped at serve time so it NEVER drifts from the real release in
+# macOS/package.json. Two sources, in priority order:
+#   1. CLOUDE_APP_VERSION env var — set by the Electron menu-bar app
+#      (server-manager.js injects `app.getVersion()` at spawn). This is the
+#      ONLY reliable source inside the packaged .app, because package.json
+#      ships inside app.asar and is NOT on the filesystem the Python server
+#      sees (it runs from a copied serverDir with just src/ + client/).
+#   2. macOS/package.json on disk — found by walking up parent dirs from
+#      this file. Covers the dev repo layout (and any non-Electron run).
+# On any failure we fall back to "" so the chip renders blank rather than a
+# wrong/stale literal. Resolved once at import time (the value is immutable
+# for the life of the process).
+# ---------------------------------------------------------------------------
+_VERSION_PLACEHOLDER = "{{VERSION}}"
+
+
+def _resolve_app_version() -> str:
+    """Resolve the app version, preferring the Electron-injected env var and
+    falling back to macOS/package.json on disk. Returns "" on any failure."""
+    env_version = os.environ.get("CLOUDE_APP_VERSION", "").strip()
+    if env_version:
+        return env_version
+
+    # Walk up from this file looking for macOS/package.json (dev layout).
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "macOS" / "package.json"
+        if candidate.is_file():
+            try:
+                with candidate.open("r", encoding="utf-8") as f:
+                    return str(json.load(f).get("version", "")).strip()
+            except (OSError, ValueError):
+                # Unreadable / malformed — fall through to the empty default
+                # rather than crash the route that serves the SPA shell.
+                return ""
+    return ""
+
+
+# Cached at import time — version is fixed for the process lifetime.
+APP_VERSION = _resolve_app_version()
+
+
+def _render_index_html() -> str:
+    """Read the SPA shell and stamp the real version into the chip.
+
+    Shared by `/` and `/session/{project}` so the inject logic lives in ONE
+    place. The chip renders as `v<version>` (e.g. `v0.7.3`); if the version
+    is unknown the placeholder is replaced with an empty string so no raw
+    `{{VERSION}}` token ever reaches the browser.
+    """
+    html = (client_dir / "index.html").read_text(encoding="utf-8")
+    chip = f"v{APP_VERSION}" if APP_VERSION else ""
+    return html.replace(_VERSION_PLACEHOLDER, chip)
+
+
+# ---------------------------------------------------------------------------
 # User themes mount (Phase 9 — pluggability surface)
 # ---------------------------------------------------------------------------
 # Serves user-authored theme assets from
@@ -386,12 +445,12 @@ else:
 @app.get("/")
 async def root():
     """Serve the web interface."""
-    index_path = client_dir / "index.html"
     # See NoCacheStaticFiles docstring — the HTML shell served from "/"
     # bypasses StaticFiles, so stamp the no-cache header here too or the
     # phone will keep booting a stale shell that references old JS URLs.
-    return FileResponse(
-        index_path,
+    # _render_index_html() also stamps the live app version into the chip.
+    return HTMLResponse(
+        content=_render_index_html(),
         headers={"Cache-Control": "no-cache, must-revalidate"},
     )
 
@@ -418,12 +477,12 @@ async def session_deep_link(project: str):
     The ``project`` path parameter is consumed by the client-side router
     after the SPA boots; this handler does not inspect or validate it.
     """
-    index_path = client_dir / "index.html"
     # Same no-cache rationale as root(): force the HTML shell to
     # revalidate on every load so a stale cached shell doesn't pin
-    # the phone to an old JS bundle.
-    return FileResponse(
-        index_path,
+    # the phone to an old JS bundle. Shares _render_index_html() with
+    # root() so the version chip is stamped identically on both routes.
+    return HTMLResponse(
+        content=_render_index_html(),
         headers={"Cache-Control": "no-cache, must-revalidate"},
     )
 

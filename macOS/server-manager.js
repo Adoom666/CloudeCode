@@ -594,6 +594,18 @@ class ServerManager {
     env.HOST = this.getBindHost();
     console.log(`[spawn] HOST=${env.HOST}`);
 
+    // Inject the app version so the Python server can stamp the web-client
+    // header chip ({{VERSION}} in client/index.html). app.getVersion() reads
+    // the bundle's package.json — the canonical release number. This is the
+    // ONLY reliable source inside the packaged .app: package.json ships in
+    // app.asar and is NOT on the filesystem the Python server runs from.
+    try {
+      env.CLOUDE_APP_VERSION = app.getVersion();
+      console.log(`[spawn] CLOUDE_APP_VERSION=${env.CLOUDE_APP_VERSION}`);
+    } catch (err) {
+      console.warn('[spawn] could not resolve app version:', err.message);
+    }
+
     this.process = spawn(this.pythonPath, ['-m', 'src.main'], {
       cwd: this.baseDir,
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -1271,15 +1271,23 @@ class Terminal {
             // handshake-tagged sendResize which dedupes if dims match).
             this.sendResize('ws.onopen');
 
-            // If replay just finished, send Ctrl+L to nudge app repaint after dims settle
-            if (this._needsReplayCtrlL) {
-                this._needsReplayCtrlL = false;
-                setTimeout(() => {
-                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                        this.ws.send(new Uint8Array([0x0c]));  // Ctrl+L — repaint after replay
-                    }
-                }, 50);
-            }
+            // DO NOT send Ctrl+L (0x0c) from the client here. The server's
+            // resize handshake already writes a single 0x0c to the PTY after
+            // SIGWINCH settles (src/api/websocket.py — success path ~:363,
+            // degraded fallback ~:381), and that is the authoritative redraw
+            // that repaints the live screen on top of our replayed scrollback
+            // at the correct post-resize geometry.
+            //
+            // Claude Code's TUI debounces Ctrl+L: a SINGLE 0x0c forces a safe
+            // redraw, but TWO within ~2s (in fullscreen/alt-screen rendering)
+            // are interpreted as the `/clear` chord gesture and WIPE THE
+            // CONTEXT. A client 0x0c here lands ~+50ms after WS open while the
+            // server's lands ~+200ms (post dims + 150ms SIGWINCH sleep) — two
+            // 0x0c <2s apart → accidental /clear on every launchpad rejoin.
+            // The viewport snap-to-bottom is a purely LOCAL xterm op handled
+            // below via _pendingPostConnectScroll/_forceScrollToBottom and
+            // needs no wire write, so dropping this send loses nothing.
+            this._needsReplayCtrlL = false;
 
             if (this._pendingPostConnectScroll) {
                 this._pendingPostConnectScroll = false;
