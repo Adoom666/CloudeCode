@@ -390,6 +390,17 @@ class BrowseResponse(BaseModel):
     entries: List[DirectoryEntry] = Field(default_factory=list, description="Subdirectories inside the listed path")
 
 
+class MkdirRequest(BaseModel):
+    """Request body for ``POST /filesystem/mkdir``.
+
+    ``path`` may contain ``~`` (expanded server-side). The directory is created
+    with ``mkdir -p`` semantics (parents created, idempotent if it already
+    exists), then listed back as a :class:`BrowseResponse` so the folder picker
+    can navigate into it in a single round-trip.
+    """
+    path: str = Field(..., description="Directory path to create (mkdir -p). '~' is expanded server-side.")
+
+
 class UploadImageResponse(BaseModel):
     """Response model for ``POST /sessions/upload-image``.
 

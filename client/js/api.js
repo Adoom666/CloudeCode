@@ -128,10 +128,15 @@ class API {
                 throw new Error('Authentication required. Please log in again.');
             }
 
-            // Handle other errors
+            // Handle other errors. Surface the HTTP status on the thrown
+            // Error so callers can branch on it (e.g. the folder picker
+            // treats a 404 from /filesystem/browse as "create this path").
+            // Mirrors the err.status pattern already used by verifyTOTP().
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.detail || errorData.message || `HTTP ${response.status}`);
+                const err = new Error(errorData.detail || errorData.message || `HTTP ${response.status}`);
+                err.status = response.status;
+                throw err;
             }
 
             // Return JSON response
@@ -352,6 +357,20 @@ class API {
     async browseDirectory(path = null) {
         const query = path ? `?path=${encodeURIComponent(path)}` : '';
         return await this.call(`/filesystem/browse${query}`);
+    }
+
+    /**
+     * Filesystem: Create a directory on the server (mkdir -p) and return the
+     * SAME shape as browseDirectory for the newly-created directory, so the
+     * caller can navigate straight into it in a single round-trip.
+     * @param {string} path - Absolute or ~-relative directory path to create.
+     * @returns {Promise<{path: string, parent: string|null, entries: Array<{name: string, path: string}>}>}
+     */
+    async makeDirectory(path) {
+        return await this.call('/filesystem/mkdir', {
+            method: 'POST',
+            body: { path }
+        });
     }
 
     /**

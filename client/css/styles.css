@@ -1552,7 +1552,11 @@ button[data-tooltip]:hover::after {
     max-width: 640px;
 }
 
+/* Editable path / address bar. Behaves like a browser address field:
+   single line, monospace, accent glow on focus, mkdir-on-Enter feedback
+   surfaced just below in .folder-picker-status. */
 .folder-picker-path {
+    width: 100%;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -1560,8 +1564,40 @@ button[data-tooltip]:hover::after {
     font-family: var(--font-mono);
     font-size: 0.85rem;
     padding: 10px 12px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
+    cursor: text;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.folder-picker-path:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-glow);
+}
+
+.folder-picker-path::placeholder {
+    color: var(--color-fg-subtle);
+}
+
+/* Inline feedback under the path bar (mkdir success / browse errors). */
+.folder-picker-status {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    margin-bottom: 10px;
     word-break: break-all;
+    color: var(--color-fg-muted);
+}
+
+.folder-picker-status:empty {
+    display: none;
+}
+
+.folder-picker-status--success {
+    color: var(--color-success);
+}
+
+.folder-picker-status--error {
+    color: var(--color-danger);
 }
 
 .folder-picker-toolbar {
@@ -1624,6 +1660,14 @@ button[data-tooltip]:hover::after {
 .folder-picker-item:hover {
     background: var(--color-bg-elevated);
     color: var(--color-accent);
+}
+
+/* Keyboard / type-ahead selection — stronger than hover, with an inset
+   accent bar so the active row reads clearly during arrow + type nav. */
+.folder-picker-item-active {
+    background: var(--color-accent-bg);
+    color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
 .folder-picker-icon {
