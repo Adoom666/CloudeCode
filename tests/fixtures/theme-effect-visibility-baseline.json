@@ -1,0 +1,227 @@
+{
+  "_comment": [
+    "Measured visibility baseline for the theme background effects.",
+    "",
+    "HOW THESE NUMBERS WERE PRODUCED. scripts/verify/measure-theme-effect-visibility.py",
+    "drives a real Chromium at 1280x800, device_scale_factor 1, applies each theme",
+    "through the real registry, waits for the effect to accumulate frames, then",
+    "screenshots the page twice: once with the effects canvas display:none and once",
+    "with it visible. measuredMaxDelta is the largest absolute per-channel RGB",
+    "difference between those two plates, in 0-255. It is what a human can see.",
+    "",
+    "noiseFloorMaxDelta is a control: two screenshots taken back to back with the",
+    "canvas hidden both times. It is 0 for every theme, which is what makes the",
+    "measured delta trustworthy rather than a reading of some other animation.",
+    "",
+    "decorativeAlpha is the dependency-free proxy computed by tests/helpers/ink-probe.mjs.",
+    "It is the MINIMUM peak over 24 independent inits, not a single sample. Effects",
+    "reseed from Math.random() on every init, and codex in particular ranges 0.0196",
+    "to 0.0307 run to run; recording one sample made the floor test flaky. For a",
+    "floor, the worst case the effect actually produces is the honest statistic.",
+    "It does NOT linearly predict measuredMaxDelta across themes - snes composites",
+    "It does NOT linearly predict measuredMaxDelta across themes - snes composites",
+    "13/255 from an alpha of 0.0104 while corporate_v2 needed 0.12 to reach 9/255,",
+    "because coverage, tint contrast and backdrop luminance all move the result.",
+    "That is exactly why the test asserts each theme against ITS OWN recorded",
+    "value instead of one global alpha floor: a single floor failed codex, hermes",
+    "and snes, all three of which are plainly visible in a browser.",
+    "",
+    "REGENERATE after changing any effect's intensity, and look at the screenshots",
+    "the script writes before committing the new numbers. A baseline nobody looked",
+    "at is just a number that agrees with itself."
+  ],
+  "measuredAt": "2026-08-18",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "deviceScaleFactor": 1
+  },
+  "screen": "launchpad-screen",
+  "visibleFloor": 8,
+  "themes": {
+    "acid_trip": {
+      "measuredMaxDelta": 25,
+      "measuredMeanDelta": 10.273,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 39
+    },
+    "alien": {
+      "measuredMaxDelta": 13,
+      "measuredMeanDelta": 2.635,
+      "changedPixelPct": 91.2,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.055,
+      "decorativeMarks": 78
+    },
+    "black_market": {
+      "measuredMaxDelta": 15,
+      "measuredMeanDelta": 1.308,
+      "changedPixelPct": 46.83,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.05,
+      "decorativeMarks": 117
+    },
+    "blade_runner": {
+      "measuredMaxDelta": 132,
+      "measuredMeanDelta": 2.503,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.5918,
+      "decorativeMarks": 4779
+    },
+    "calming": {
+      "measuredMaxDelta": 16,
+      "measuredMeanDelta": 3.945,
+      "changedPixelPct": 65.77,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 39
+    },
+    "cannabis": {
+      "measuredMaxDelta": 15,
+      "measuredMeanDelta": 9.527,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 78
+    },
+    "claude": {
+      "measuredMaxDelta": 20,
+      "measuredMeanDelta": 15.954,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0418,
+      "decorativeMarks": 39
+    },
+    "claw": {
+      "measuredMaxDelta": 12,
+      "measuredMeanDelta": 5.512,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.07,
+      "decorativeMarks": 5616
+    },
+    "codex": {
+      "measuredMaxDelta": 17,
+      "measuredMeanDelta": 9.143,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0208,
+      "decorativeMarks": 78
+    },
+    "corporate_v2": {
+      "measuredMaxDelta": 9,
+      "measuredMeanDelta": 0.024,
+      "changedPixelPct": 1.02,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.12,
+      "decorativeMarks": 39
+    },
+    "dracula": {
+      "measuredMaxDelta": 13,
+      "measuredMeanDelta": 9.856,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0419,
+      "decorativeMarks": 78
+    },
+    "gameboy": {
+      "measuredMaxDelta": 22,
+      "measuredMeanDelta": 2.316,
+      "changedPixelPct": 44.99,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.055,
+      "decorativeMarks": 39
+    },
+    "green_crt": {
+      "measuredMaxDelta": 14,
+      "measuredMeanDelta": 2.016,
+      "changedPixelPct": 91.53,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.075,
+      "decorativeMarks": 59
+    },
+    "hermes": {
+      "measuredMaxDelta": 10,
+      "measuredMeanDelta": 1.525,
+      "changedPixelPct": 47.9,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0357,
+      "decorativeMarks": 39
+    },
+    "jagermeister": {
+      "measuredMaxDelta": 18,
+      "measuredMeanDelta": 5.476,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 39
+    },
+    "legacy_apple": {
+      "measuredMaxDelta": 34,
+      "measuredMeanDelta": 18.238,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.05,
+      "decorativeMarks": 39
+    },
+    "legacy_windows": {
+      "measuredMaxDelta": 16,
+      "measuredMeanDelta": 2.098,
+      "changedPixelPct": 41.71,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.05,
+      "decorativeMarks": 78
+    },
+    "lovecraft": {
+      "measuredMaxDelta": 15,
+      "measuredMeanDelta": 3.58,
+      "changedPixelPct": 87.61,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 39
+    },
+    "matrix": {
+      "measuredMaxDelta": 255,
+      "measuredMeanDelta": 2.477,
+      "changedPixelPct": 12.2,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 1,
+      "decorativeMarks": 5369
+    },
+    "metal": {
+      "measuredMaxDelta": 14,
+      "measuredMeanDelta": 3.443,
+      "changedPixelPct": 86.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.06,
+      "decorativeMarks": 39
+    },
+    "pokemon": {
+      "measuredMaxDelta": 18,
+      "measuredMeanDelta": 8.888,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.05,
+      "decorativeMarks": 61
+    },
+    "snes": {
+      "measuredMaxDelta": 13,
+      "measuredMeanDelta": 8.124,
+      "changedPixelPct": 92.25,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0104,
+      "decorativeMarks": 46
+    },
+    "terminal": {
+      "measuredMaxDelta": 13,
+      "measuredMeanDelta": 1.624,
+      "changedPixelPct": 89.67,
+      "noiseFloorMaxDelta": 0,
+      "decorativeAlpha": 0.0562,
+      "decorativeMarks": 39
+    }
+  }
+}

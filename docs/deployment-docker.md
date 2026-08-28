@@ -12,7 +12,7 @@ If you're on macOS and want Claude Pro / Max OAuth or macOS-native MCPs, use [Mo
 |---|---|---|
 | Docker Desktop | 4.x+ | or Docker Engine 24+ on Linux |
 | Host shell | bash / zsh | `id -u` and `id -g` must resolve |
-| Free port | `8000` | published on the host side |
+| Free port | `8000` by default | published on the host side; override with `PORT=` in `.env` (same variable the app reads - see section 8) |
 | Disk | ~2 GB | image + logs + session state |
 
 Network MCP endpoints you plan to use (ntfy.sh, Postgres, custom HTTP) must be reachable from inside the container.
@@ -126,11 +126,12 @@ If you try to run `claude` inside the container with no `ANTHROPIC_API_KEY` and 
 
 ## 8. Networking
 
-The compose file publishes port 8000 on `${CLOUDE_BIND_IP:-127.0.0.1}`. Key points:
+The compose file publishes port `${PORT:-8000}` on `${CLOUDE_BIND_IP:-127.0.0.1}`. Key points:
 
 - **Default is loopback-only.** An unset or misspelled `CLOUDE_BIND_IP` falls back to `127.0.0.1`, not `0.0.0.0`. This is deliberate — LAN exposure is opt-in.
 - **LAN exposure:** set `CLOUDE_BIND_IP` to a specific host IP (e.g., `192.168.1.250`). Run the preflight script first.
-- **macOS firewall:** System Settings → Network → Firewall must allow incoming connections on port 8000 for phone/tablet access.
+- **Port:** set `PORT` in `.env` to change it from the default 8000. This is the SAME `.env` the app itself reads (`src/config.py`'s `Settings.port`), so one edit moves both the container's internal listener and the published host port together. Never edit the host-side port in `docker-compose.yml` directly - that desyncs the two.
+- **macOS firewall:** System Settings → Network → Firewall must allow incoming connections on the configured port for phone/tablet access.
 - **Remote access:** The Docker path does not auto-provision a Cloudflare tunnel — that's a Mode 1 feature. For remote access with Mode 2, front the container with Tailscale (recommended), Cloudflare Tunnel (manual sidecar), or a reverse proxy of your choice.
 
 ---
@@ -162,7 +163,7 @@ docker compose up -d
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Cannot connect to the Docker daemon` | Docker Desktop not running | Start Docker Desktop, wait for the whale icon to stop animating |
-| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Something else on port 8000 | `lsof -i :8000` on host, kill the squatter or change the host-side port in `docker-compose.yml` |
+| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Something else on port 8000 | `lsof -i :8000` on host, kill the squatter or set `PORT=` in `.env` to a free port (do not edit the port in `docker-compose.yml` directly - it now derives from `.env` so both sides of the mapping stay in sync) |
 | Container healthy but `http://<ip>:8000` times out | Stale `CLOUDE_BIND_IP` (vpnkit silent failure) | Re-run `scripts/preflight-bind-ip.sh`, update `.env`, `docker compose up -d` |
 | `Claude CLI: not authenticated` | Pro/Max OAuth attempt in Mode 2 | OAuth is not supported in Mode 2 — set `ANTHROPIC_API_KEY` in `.env` or switch to Mode 1 |
 | `Permission denied` on `~/.claude/*` or `/workspace` | Container UID doesn't match host UID | Rebuild with `UID=$(id -u) GID=$(id -g) docker compose build` |

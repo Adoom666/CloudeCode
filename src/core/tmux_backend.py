@@ -7,17 +7,17 @@ Key design points:
 
 - **Binary-safe writes** (three-path routing):
 
-  ``send-keys -l <text>`` for short, control-free UTF-8 — the fast path
+  ``send-keys -l <text>`` for short, control-free UTF-8 - the fast path
   for regular typing.
 
   ``send-keys -H <hex pairs>`` for short byte sequences that contain
-  control chars (arrow keys, Ctrl-X, Esc, Backspace — real keystrokes).
+  control chars (arrow keys, Ctrl-X, Esc, Backspace - real keystrokes).
   tmux treats each hex pair as a literal byte delivered via key event,
   which interactive TUIs interpret correctly.
 
   ``load-buffer`` + ``paste-buffer -d -p`` reserved for LARGE payloads
   (actual clipboard pastes). Bracketed-paste markers let Claude
-  distinguish paste from typed input — correct behavior for paste,
+  distinguish paste from typed input - correct behavior for paste,
   wrong behavior for keystrokes.
 
 - **Output streaming**: ``tmux pipe-pane -o 'cat >> <fifo>'`` streams every
@@ -27,7 +27,7 @@ Key design points:
 
 - **Single-active invariant**: the backend itself does NOT enforce
   one-at-a-time; `SessionManager` does. This backend DOES refuse to start
-  if a session with the same name already exists — callers must call
+  if a session with the same name already exists - callers must call
   ``discover_existing()`` first to re-attach.
 
 - **Restart survival**: `discover_existing()` lists ``cloude_*`` sessions on
@@ -49,14 +49,48 @@ from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core import debug_trace
+
+from src.core.pane_locale import apply_pane_locale
+from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
+from src.core.tmux_listing_parse import (
+    LISTING_FORMAT,
+    parse_listing_row,
+    resolve_ownership,
+    split_listing_rows,
+)
+from src.core.tmux_listing import (
+    REASON_PROBE_ERROR,
+    REASON_TIMEOUT,
+    REASON_TMUX_MISSING,
+    TmuxListing,
+    classify_listing_failure,
+    listing_env,
+)
+from src.core.scrollback_replay import normalize_replay_newlines
 from src.core.session_backend import SessionBackend
+from src.core.session_respawn import (
+    RESPAWN_PANE_FORMAT,
+    RespawnResult,
+    parse_respawn_probe,
+    resolve_respawn_plan,
+)
 
 logger = structlog.get_logger()
 
 # ---- Tunables ---------------------------------------------------------------
 # Module-scope constants (not in config.json) so they're easy to find in code.
-# If we ever want to expose these, wire through `AuthConfig.session` — for now
+# If we ever want to expose these, wire through `AuthConfig.session` - for now
 # the values below are battle-tested defaults.
+
+#: Wall-clock budget for a one-shot ENUMERATION call (list-sessions /
+#: list-panes). These three run on the request path - the launchpad polls
+#: them every few seconds - so a tmux server wedged on a stuck socket must
+#: not hold an HTTP worker open indefinitely. On expiry the probe reports
+#: ``ok=False, reason='timeout'`` rather than an empty list, per the
+#: THREE-OUTCOME RULE. Only the listing calls take it; write/attach paths
+#: are deliberately left unbounded because they are not poll-driven.
+LIST_TIMEOUT_SECONDS: float = 5.0
 
 #: Rotate the pipe-pane log once it passes 10 MiB.
 MAX_LOG_BYTES: int = 10 * 1024 * 1024
@@ -68,7 +102,7 @@ ROTATE_AGE_HOURS: int = 24
 #: Default starting window geometry for new tmux sessions. We never attach a
 #: client (output is streamed via pipe-pane), so tmux has no client dims to
 #: key off of. Without `-x/-y` + `window-size manual`, tmux clamps the
-#: window to its 80x24 birth size forever — making TUI apps like Claude CLI
+#: window to its 80x24 birth size forever - making TUI apps like Claude CLI
 #: render at 80x24 while xterm.js draws at the browser's actual size.
 #: These are reasonable defaults; the WS client's first `resize` request
 #: replaces them within milliseconds of connect.
@@ -83,7 +117,23 @@ PASTE_THRESHOLD_BYTES: int = 256
 #: Default socket name, overridable via ``AuthConfig.session.tmux_socket_name``.
 DEFAULT_SOCKET_NAME: str = "cloude"
 
-#: Session name prefix — ``cloude_<slug>``.
+#: Scrollback rows tmux keeps per pane on OUR socket.
+#:
+#: CloudeCode carries its own explicit tmux settings and deliberately does
+#: NOT source the user's ``~/.tmux.conf``: a personal config references
+#: plugins (tpm, resurrect, continuum) that will not exist on another
+#: machine, so inheriting it makes the app's behaviour depend on the box
+#: it runs on. The cost of owning the settings is that a default we never
+#: state is the default we get - the socket was silently running tmux's
+#: stock 2000, a quarter of what the same user configures for himself.
+#:
+#: Applied with ``set-option -g`` BEFORE ``new-session``. tmux resolves
+#: history-limit through the normal option lookup when it trims a pane's
+#: history, so a later change reaches existing panes too, but setting it
+#: first means a pane is never briefly born under the stock limit.
+HISTORY_LIMIT: int = 10000
+
+#: Session name prefix - ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
 
 #: FIFO + rotated log live under the log directory. File name is
@@ -123,12 +173,12 @@ def _has_control_chars(data: bytes) -> bool:
     return any((b < 0x20 and b not in safe) or b == 0x7f for b in data)
 
 
-def _safe_target(session_name: str, pane: str = "0.0") -> str:
-    """Compose a tmux target string (``<session>:<window>.<pane>``) safely.
+def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
+    """Compose a tmux target string safely.
 
     tmux parses ``:`` as the window/pane separator and ``.`` as the pane
     separator within a target. If either appears inside ``session_name``
-    the command tmux actually executes is NOT the one we meant to send —
+    the command tmux actually executes is NOT the one we meant to send -
     it selects a different (possibly wrong) target.
 
     We use list-form argv everywhere (``asyncio.create_subprocess_exec``,
@@ -137,23 +187,38 @@ def _safe_target(session_name: str, pane: str = "0.0") -> str:
     target-parsing semantics. We refuse to format a target that would be
     interpreted differently than intended.
 
+    WINDOW INDEX: this used to hardcode ``<session>:0.0``. That is wrong on
+    any machine whose tmux.conf sets ``base-index 1`` / ``pane-base-index 1``
+    (a very common setting): the first window is index 1, so every
+    ``send-keys -t <session>:0.0`` fails with ``can't find window: 0`` and
+    NOTHING typed in the browser ever reaches the pane. Targeting the bare
+    session name instead resolves to that session's CURRENT window and
+    pane, which is both base-index-agnostic and more correct - a session
+    with a second window should receive input where the user is looking,
+    not always in window 0.
+
     Args:
         session_name: tmux session name. MUST NOT contain ``:`` or ``.``.
-        pane: pane specifier within the session. Defaults to ``"0.0"``
-            (window 0, pane 0). Callers SHOULD keep this as a literal —
-            we don't validate it since it's never user-controlled.
+        pane: optional explicit ``<window>.<pane>`` specifier. Omit it (the
+            default) to target the session's current window/pane. Callers
+            SHOULD keep this a literal - it is never user-controlled and is
+            not validated.
 
     Returns:
         Formatted target string suitable for ``-t``.
 
     Raises:
         ValueError: if ``session_name`` contains ``:`` or ``.``.
+
+    Example: _safe_target("cloude_demo") -> "cloude_demo"
     """
     if ":" in session_name or "." in session_name:
         raise ValueError(
             f"unsafe tmux session name {session_name!r}: "
             f"contains ':' or '.' which tmux parses as target separators"
         )
+    if pane is None:
+        return session_name
     return f"{session_name}:{pane}"
 
 
@@ -206,14 +271,92 @@ class TmuxBackend(SessionBackend):
         # adoption. The tail loop seeks here on open so bytes that were
         # already captured in the initial scrollback (and painted
         # client-side before the WS opened) aren't streamed again. None
-        # means "seek to EOF" — the normal create/rehydrate behavior.
+        # means "seek to EOF" - the normal create/rehydrate behavior.
         self._adopt_tail_start_offset: Optional[int] = None
 
     # ---- internal helpers ------------------------------------------------
 
     def _tmux_base(self) -> List[str]:
-        """Common tmux argv prefix — always uses our dedicated socket."""
-        return ["tmux", "-L", self.socket_name]
+        """Common tmux argv prefix - always uses our dedicated socket.
+
+        Uses the ABSOLUTE path resolved by src.core.tmux_discovery, not the
+        bare name "tmux". A subprocess inherits this process's PATH, and a
+        GUI-launched app has no shell PATH, so a bare name resolves only
+        when whoever launched us happened to patch PATH first. Falls back to
+        the bare name when nothing resolved, so start()'s own missing-tmux
+        error is what the user sees.
+        """
+        return tmux_argv_prefix(self.socket_name)
+
+    async def _apply_history_limit(self) -> None:
+        """Set this socket's scrollback depth to :data:`HISTORY_LIMIT`.
+
+        Idempotent and cheap; tmux ignores a repeat set of the same value.
+        ``check=False`` because a socket that cannot take the option is not
+        a reason to refuse the session - the pane just keeps the stock
+        depth, which is what it had before this existed.
+
+        Returns:
+            None.
+        """
+        await self._run_tmux(
+            "set-option", "-g", "history-limit", str(HISTORY_LIMIT), check=False
+        )
+
+    async def _apply_remain_on_exit(self) -> None:
+        """Turn on ``remain-on-exit`` globally, BEFORE any window exists.
+
+        Inputs:
+            None.
+
+        Returns:
+            None.
+
+        ``remain-on-exit`` is a WINDOW option, so it has to be set with
+        ``-w``; ``-g`` alone writes the session table and the window is
+        born without it. Setting it globally before ``new-session`` is the
+        whole point: an agent that fails fast - binary not on PATH, auth
+        banner then a non-zero exit - can be gone before a post-creation
+        ``set-option`` lands, and then there is no window left to set the
+        option ON. Measured on tmux 3.7c: with this set first, a session
+        whose command is ``true`` leaves ``pane_dead=1``; without it, the
+        very next ``list-panes`` answers "can't find window".
+
+        Today the dead-on-arrival probe tears that corpse down anyway, so
+        the race is benign - but it is benign by accident, and it cost a
+        previous session five test failures to work out why. The pane is
+        now guaranteed to exist for the probe to read.
+
+        ``check=False`` for the same reason as the history limit: a socket
+        that will not take the option is not a reason to refuse a session.
+        """
+        await self._run_tmux(
+            "set-option", "-wg", "remain-on-exit", "on", check=False
+        )
+
+    async def read_history_limit(self) -> Optional[int]:
+        """Read the socket's current global ``history-limit``.
+
+        Verification seam: the point of the setting is the number tmux
+        actually holds, and ``show-options`` is the only thing that
+        reports it.
+
+        Returns:
+            The configured row count, or None when tmux could not be
+            asked or answered with something non-numeric. None is a real
+            third answer - "could not determine" - and callers must not
+            read it as the default.
+        """
+        rc, out, _ = await self._run_tmux(
+            "show-options", "-gv", "history-limit", check=False
+        )
+        if rc != 0:
+            return None
+        raw = out.decode("utf-8", errors="replace").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
 
     def _resolve_pipe_path(self) -> Path:
         if self._pipe_path is not None:
@@ -268,8 +411,34 @@ class TmuxBackend(SessionBackend):
         *args: str,
         stdin_bytes: Optional[bytes] = None,
         check: bool = True,
+        timeout: Optional[float] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> tuple[int, bytes, bytes]:
-        """Sync variant for use in `is_alive`, `discover_existing`, etc."""
+        """Sync variant for use in `is_alive`, `discover_existing`, etc.
+
+        Inputs:
+            *args: tmux arguments appended to ``self._tmux_base()``.
+            stdin_bytes: optional bytes to pipe to the process.
+            check: log a debug line on a non-zero exit.
+            timeout: wall-clock budget in seconds, or None for unbounded.
+                The three enumeration methods pass
+                ``LIST_TIMEOUT_SECONDS`` because they run on the polled
+                request path.
+            env: complete environment for the child, or None to inherit
+                this process's. Only the LISTING path passes one (see
+                :data:`LISTING_ENV_OVERRIDES`); commands that CREATE a
+                session must inherit, because the environment handed to
+                ``new-session`` becomes the user's shell environment and
+                forcing a locale there would break their rendering.
+
+        Output:
+            tuple[int, bytes, bytes]: returncode, stdout, stderr.
+
+        Raises:
+            subprocess.TimeoutExpired: when ``timeout`` elapses. Callers
+                on the listing path catch this and report
+                ``ok=False, reason='timeout'`` - never an empty list.
+        """
         import subprocess
 
         argv = self._tmux_base() + list(args)
@@ -278,6 +447,8 @@ class TmuxBackend(SessionBackend):
             input=stdin_bytes,
             capture_output=True,
             check=False,
+            timeout=timeout,
+            env=env,
         )
         if check and proc.returncode != 0:
             logger.debug(
@@ -301,7 +472,7 @@ class TmuxBackend(SessionBackend):
 
         ``initial_cols`` / ``initial_rows`` override the module-level
         INITIAL_COLS / INITIAL_ROWS when BOTH are supplied. One without the
-        other is treated as "not supplied" — we don't mix a client dim with
+        other is treated as "not supplied" - we don't mix a client dim with
         a default, because that would create an asymmetric starting pane
         (e.g. client gives cols=100, we'd pair with default rows=40 which
         is almost certainly wrong for that viewport).
@@ -309,8 +480,11 @@ class TmuxBackend(SessionBackend):
         if self._running:
             raise RuntimeError("TmuxBackend already running")
 
-        if not shutil.which("tmux"):
-            raise RuntimeError("tmux not found on PATH")
+        if resolve_tmux_path() is None:
+            raise RuntimeError(
+                "tmux was not found on PATH or at any well-known install "
+                "location (see src/core/tmux_discovery.WELL_KNOWN_PATHS)"
+            )
 
         self.working_dir.mkdir(parents=True, exist_ok=True)
 
@@ -327,15 +501,24 @@ class TmuxBackend(SessionBackend):
         use_cols = initial_cols if (initial_cols and initial_rows) else INITIAL_COLS
         use_rows = initial_rows if (initial_cols and initial_rows) else INITIAL_ROWS
 
+        # Scrollback depth BEFORE the pane exists - see HISTORY_LIMIT.
+        # ``set-option`` also starts the tmux server when none is running,
+        # which is exactly the ordering we want on a cold socket.
+        await self._apply_history_limit()
+
+        # remain-on-exit BEFORE the window exists - see the method's
+        # docstring. Set after creation it is a race the fast-failing agent
+        # wins.
+        await self._apply_remain_on_exit()
+
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
         # If a command is supplied, tmux runs that as pane 0's process; the
-        # shell exits when the command ends unless ``remain-on-exit`` is set.
-        # For our case (Claude CLI) we want the pane to stick around even if
-        # Claude exits, so we enable remain-on-exit after creation.
+        # shell exits when the command ends unless ``remain-on-exit`` is set,
+        # which is why it is set globally just above rather than here.
         #
         # ``-x`` / ``-y`` fix the window's birth geometry. Without them tmux
-        # uses 80x24 and — combined with default ``window-size latest`` and
-        # zero attached clients — stays there forever. We pair these with
+        # uses 80x24 and - combined with default ``window-size latest`` and
+        # zero attached clients - stays there forever. We pair these with
         # ``window-size manual`` below so `resize-window` is the ONLY thing
         # that can change the size (no client-sizing surprises).
         args = [
@@ -350,19 +533,98 @@ class TmuxBackend(SessionBackend):
             "-y",
             str(use_rows),
         ]
-        if command:
-            args.append(command)
-
-        # Merge env overlay into this tmux invocation's environment so the
-        # new session inherits it. tmux captures the environment of the
-        # `new-session` call.
+        # The env overlay. It goes into this invocation's environment AND,
+        # below, onto the command as ``-e`` pairs.
+        #
+        # THE COMMENT THAT USED TO BE HERE SAID "tmux captures the
+        # environment of the new-session call". That is true only when this
+        # call is what STARTS the server. When a server is already running
+        # on our socket - the normal case for every session after the first
+        # - the new session's environment comes from the SERVER's global
+        # table and the client's environment is discarded.
+        #
+        # The consequence was not a missing variable, which would have been
+        # obvious. It was a STALE one: every session after the first
+        # inherited the CLOUDECODE_SESSION_ID captured when the server
+        # started, so Claude's SessionStart hook POSTed a session id
+        # belonging to a DIFFERENT, long-dead session. The hook fired, the
+        # request succeeded, and the binding resolved UNRESOLVED - so
+        # claude_session_uuid was never written, and anything that needs it
+        # (resume, fork) could never work. Measured on a real install: a
+        # pane created today carried an id from six days earlier.
+        #
+        # The locale block below already knew this and used ``-e``. The
+        # lesson had been learned for LANG and not applied to these.
         tmux_env = os.environ.copy()
         tmux_env.setdefault("TERM", "xterm-256color")
         tmux_env.setdefault("COLORTERM", "truecolor")
         if env:
             tmux_env.update(env)
 
+        # ---- Pane locale ----------------------------------------------------
+        # A LaunchAgent-spawned server inherits no LANG at all, so the
+        # pane's shell lands in the 7-bit "C" locale and zsh prints
+        # "character not in range" once per line of any function that
+        # touches a multibyte character - on every session start, before
+        # the user has typed anything.
+        #
+        # It has to travel as ``new-session -e``, NOT merely in tmux_env.
+        # When a tmux SERVER is already running on our socket (the normal
+        # case after the first session), the new session's environment is
+        # taken from the SERVER's global environment, and the client's
+        # environment is discarded. So exporting LANG here would silently
+        # do nothing for every session but the first. ``-e`` sets the
+        # session environment explicitly, and it applies to pane 0 because
+        # it is part of the same command that creates it. ``set-environment``
+        # after the fact would be too late for pane 0, and
+        # ``update-environment`` only feeds attaching clients, which we
+        # never have - we stream via pipe-pane.
+        apply_pane_locale(tmux_env)
+        pane_lang = tmux_env.get("LANG")
+        if pane_lang:
+            args.extend(["-e", f"LANG={pane_lang}"])
+
+        # The caller's overlay, explicitly, for the reason spelled out
+        # above: without this the pane gets the SERVER's stale copy.
+        #
+        # Only the keys the caller actually passed - never os.environ - so
+        # this cannot leak the app's whole environment into a user's pane.
+        # A value carrying a newline is skipped rather than truncated: tmux
+        # takes one KEY=VALUE per -e, so a newline would make the remainder
+        # unparseable, and half an environment variable is worse than none.
+        for key, value in sorted((env or {}).items()):
+            if value is None:
+                continue
+            text = str(value)
+            if "\n" in text or "\r" in text or not key or "=" in key:
+                logger.warning(
+                    "tmux_env_pair_skipped",
+                    key=key,
+                    reason="key or value cannot be expressed as one -e pair",
+                )
+                continue
+            args.extend(["-e", f"{key}={text}"])
+
+        if command:
+            args.append(command)
+
         argv = self._tmux_base() + args
+        # DEBUG TRACE. The stale-environment bug lived exactly here and was
+        # invisible: the spawn succeeded, the variable was set, and its
+        # VALUE belonged to a different session. Recording the argv and the
+        # keys we passed makes that answerable in one grep instead of an
+        # hour. Values are scrubbed; the session id is not a secret and is
+        # the whole point of looking.
+        debug_trace.trace(
+            "tmux.new_session",
+            session=self.tmux_session,
+            cwd=str(self.working_dir),
+            env_keys_passed=sorted((env or {}).keys()),
+            cloudecode_session_id=(env or {}).get("CLOUDECODE_SESSION_ID"),
+            dash_e_pairs=[a for i, a in enumerate(args) if i and args[i - 1] == "-e"],
+            has_command=bool(command),
+            argv_head=argv[:6],
+        )
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.DEVNULL,
@@ -371,11 +633,21 @@ class TmuxBackend(SessionBackend):
             env=tmux_env,
         )
         _, stderr = await proc.communicate()
+        debug_trace.trace(
+            "tmux.new_session.result",
+            session=self.tmux_session,
+            returncode=proc.returncode,
+            stderr=stderr.decode("utf-8", errors="replace").strip()[:300],
+        )
         if proc.returncode != 0:
             msg = stderr.decode("utf-8", errors="replace")
             raise RuntimeError(f"tmux new-session failed: {msg.strip()}")
 
-        # Keep the pane alive even after child exits so scrollback persists.
+        # Belt and braces: re-assert it on THIS session explicitly, so the
+        # invariant does not depend on the socket's global table still
+        # saying what it said a moment ago. The global set above is what
+        # makes the window exist at all when the command exits instantly;
+        # this line is what keeps the setting readable per session.
         await self._run_tmux(
             "set-option", "-t", self.tmux_session, "remain-on-exit", "on", check=False
         )
@@ -396,7 +668,7 @@ class TmuxBackend(SessionBackend):
         # collision, and raise a RuntimeError that propagates up to the
         # API layer as a 502.
         #
-        # 250ms floor is the spec — empirically catches exec-not-found,
+        # 250ms floor is the spec - empirically catches exec-not-found,
         # missing-binary, and immediate-banner-and-exit cases on modern
         # hardware while staying well below user-perceived launch latency.
         await asyncio.sleep(0.25)
@@ -433,7 +705,7 @@ class TmuxBackend(SessionBackend):
                     for raw_line in out_cap.decode("utf-8", errors="replace").splitlines():
                         # Strip ANSI escape sequences so the surfaced message
                         # is human-readable (the launch banner often opens
-                        # with cursor/color escapes). Coarse CSI/OSC strip —
+                        # with cursor/color escapes). Coarse CSI/OSC strip -
                         # good enough for a one-line error surface.
                         cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line)
                         cleaned = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", cleaned)
@@ -475,7 +747,7 @@ class TmuxBackend(SessionBackend):
         # CLI's multi-line input prompt to recognize Shift+Enter as
         # "newline-insert" vs. CR=submit. Paired with the terminal-features
         # `extkeys` flag below which advertises extended-key support to the
-        # pane's $TERM — Claude reads the terminfo to decide whether to
+        # pane's $TERM - Claude reads the terminfo to decide whether to
         # emit CSI u or legacy keys.
         #
         # ``-s`` targets the tmux server (global, persists for the life of
@@ -534,13 +806,13 @@ class TmuxBackend(SessionBackend):
             "set-option", "-t", self.tmux_session, "window-size", "manual", check=False
         )
         # Prevent size clamping based on other windows in the session.
-        # (We only ever have window 0, but be defensive — future code that
+        # (We only ever have window 0, but be defensive - future code that
         # adds a second window shouldn't silently shrink pane 0.)
         await self._run_tmux(
             "set-option", "-t", self.tmux_session, "aggressive-resize", "off", check=False
         )
 
-        # Start pipe-pane — this streams pane output to our file.
+        # Start pipe-pane - this streams pane output to our file.
         # Using shell redirection so tmux appends (not truncates) on rotation.
         pipe_cmd = f"cat >> {shlex.quote(str(pipe_path))}"
         rc, _, err = await self._run_tmux(
@@ -580,19 +852,19 @@ class TmuxBackend(SessionBackend):
         appended to. We open it and tail from the END so we don't re-emit
         historical output as if it were new.
 
-        For EXTERNAL sessions (Track 1 "Adopt an external session" flow —
+        For EXTERNAL sessions (Track 1 "Adopt an external session" flow -
         user started it via ``tmux -L cloude new -s <name>``), there is
         likely NO pipe-pane active yet, so the caller passes
         ``needs_pipe_setup=True`` to trigger:
 
-        1. Refuse if ``#{pane_dead}`` is ``"1"`` — a dead pane can't be
+        1. Refuse if ``#{pane_dead}`` is ``"1"`` - a dead pane can't be
            usefully adopted.
-        2. ``ensure_pipe_pane()`` — query first, start only if not already
+        2. ``ensure_pipe_pane()`` - query first, start only if not already
            active (non-toggle).
         3. ``set-option remain-on-exit on`` defensively so an external
            child exiting doesn't silently collapse the pane while our
            adoption is live.
-        4. WARN if ``window-size`` isn't ``manual`` — ``resize-window``
+        4. WARN if ``window-size`` isn't ``manual`` - ``resize-window``
            may oscillate against tmux's auto-sizing.
 
         External mode is also auto-triggered when ``self._is_external`` is
@@ -607,7 +879,7 @@ class TmuxBackend(SessionBackend):
             return
 
         # Verify the session is actually alive on the socket. If it's not,
-        # caller made a mistake — raise loudly so the upstream rehydrate
+        # caller made a mistake - raise loudly so the upstream rehydrate
         # path can clean up stale metadata instead of entering a bogus state.
         if not self.is_alive():
             raise RuntimeError(
@@ -619,7 +891,7 @@ class TmuxBackend(SessionBackend):
         if do_external_setup:
             target = _safe_target(self.tmux_session)
 
-            # 1. Refuse dead panes — nothing to stream from, and our attempts
+            # 1. Refuse dead panes - nothing to stream from, and our attempts
             # to set options on them produce confusing errors further down.
             rc, out, err = await self._run_tmux(
                 "display-message", "-t", target, "-p", "#{pane_dead}",
@@ -639,7 +911,7 @@ class TmuxBackend(SessionBackend):
             # existing pipe-pane (e.g. personal logging).
             await self.ensure_pipe_pane()
 
-            # 2b. Record the FIFO offset NOW — immediately after
+            # 2b. Record the FIFO offset NOW - immediately after
             # pipe-pane is confirmed active. The tail loop will seek
             # here on open instead of EOF so nothing between "pipe-pane
             # started" and "tail loop actually opens fd" is lost. The
@@ -668,20 +940,27 @@ class TmuxBackend(SessionBackend):
                 check=False,
             )
 
-            # 4. Surface window-size divergence. ``show-option -sv``
-            # queries the server-level option; ``resize-window -x -y``
-            # may oscillate when this isn't ``manual``.
-            rc_ws, out_ws, _ = await self._run_tmux(
-                "show-option", "-sv", "window-size", check=False,
+            # 4. Make the adopted session RESIZABLE, rather than logging a
+            # warning that it is not.
+            #
+            # MEASURED 2026-08-17: an adopted session sat at 80x24 (tmux's
+            # birth default) while an app-created one on the same socket
+            # was 163x46. The difference was entirely here. A session
+            # created outside the app keeps ``window-size latest``, which
+            # sizes the window to the most recently attached CLIENT - and
+            # this app never attaches one, it streams with ``pipe-pane``.
+            # With zero clients tmux has nothing to size to, so the window
+            # stays at its birth geometry and every ``resize-window`` we
+            # issue is undone. Adoption is a supported feature, so an
+            # adopted session gets the same three settings a created one
+            # does and the WS resize handshake then sticks.
+            await self._run_tmux(
+                "set-option", "-t", target, "window-size", "manual", check=False,
             )
-            ws_val = out_ws.decode("utf-8", errors="replace").strip() if rc_ws == 0 else ""
-            if ws_val and ws_val != "manual":
-                logger.warning(
-                    "external_session_window_size_not_manual",
-                    session=self.tmux_session,
-                    window_size=ws_val,
-                    note="resize-window -x -y may oscillate with tmux auto-resize",
-                )
+            await self._run_tmux(
+                "set-option", "-t", target, "aggressive-resize", "off", check=False,
+            )
+            await self._apply_history_limit()
 
         # Recompute / re-resolve pipe file path. It was written to by the
         # old Python process; the tmux server kept pipe-pane running, so
@@ -690,7 +969,7 @@ class TmuxBackend(SessionBackend):
         if not pipe_path.exists():
             # Shouldn't happen if tmux's pipe-pane is alive, but handle gracefully
             # by re-running pipe-pane to re-establish the pipe. This is a
-            # defensive reconnect — the old pipe-pane process inside tmux
+            # defensive reconnect - the old pipe-pane process inside tmux
             # continues, we just make sure our file target exists.
             logger.warning(
                 "tmux_backend_pipe_missing_recreating",
@@ -715,20 +994,30 @@ class TmuxBackend(SessionBackend):
         )
 
     async def ensure_pipe_pane(self) -> None:
-        """Start ``pipe-pane`` on pane 0 iff no pipe is currently active.
+        """Start ``pipe-pane`` on pane 0, replacing any pipe already active.
 
         Why query-then-act instead of just calling ``pipe-pane``:
-        ``pipe-pane -o`` is explicitly a TOGGLE in tmux (since 1.8) — running
-        it on a pane that already has an active pipe STOPS piping. That's
-        catastrophic when the user has their own ``pipe-pane`` running
-        (e.g. personal session logging). We query ``#{pane_pipe}`` first
-        (``"0"`` = no pipe, ``"1"`` = pipe active) and only start our pipe
-        when none is active. If a pipe is already running we log and return
-        — the disclosure tooltip tells the user to stop theirs first.
+        ``pipe-pane -o`` is explicitly a TOGGLE in tmux (since 1.8): running
+        it on a pane that already has an active pipe STOPS piping. So we query
+        ``#{pane_pipe}`` first (``"0"`` = no pipe, ``"1"`` = pipe active) and
+        branch on the answer rather than toggling blind.
 
-        We also use ``pipe-pane`` WITHOUT ``-o`` when we DO start it — ``-o``
-        is the toggle form and we've already proven no pipe is active, so
+        When a pipe IS already active (typically the user's own session
+        logging) we close it with a bare ``pipe-pane`` and start ours. This
+        overrides the user's pipe on purpose. The original behaviour was to
+        log and return, leaving theirs alone, but an adopted session then had
+        no pipe CloudeCode could read: the websocket streaming loop tailed an
+        empty file forever and the browser showed a frozen terminal. Streaming
+        the session is the whole point of adoption, so ours has to win.
+
+        We use ``pipe-pane`` WITHOUT ``-o`` when we start ours, because ``-o``
+        is the toggle form and by this point no pipe is active either way, so
         we want the explicit non-toggle start semantics.
+
+        Inputs: none. Reads ``self.tmux_session`` and ``self._is_external``.
+        Outputs: None. Raises RuntimeError if the backend is not running and
+        not external, if the ``#{pane_pipe}`` probe fails, or if starting the
+        pipe fails.
         """
         if not self._running and not self._is_external:
             raise RuntimeError("backend not running")
@@ -748,7 +1037,7 @@ class TmuxBackend(SessionBackend):
 
         if state == "1":
             # Adoption contract: when the user hands the session over to
-            # CloudeCode, our pipe MUST be the one delivering bytes — otherwise
+            # CloudeCode, our pipe MUST be the one delivering bytes - otherwise
             # the WS streaming loop tails an empty file forever and the
             # browser sees a frozen banner. Close whatever pipe is already
             # active (typically the user's own logging pipe-pane) before
@@ -799,7 +1088,7 @@ class TmuxBackend(SessionBackend):
         Alternative constructor for the Track 1 "Adopt an external session"
         flow. Unlike the normal ``TmuxBackend(...)`` path, which slugifies
         ``session_id`` into ``cloude_<slug>``, this preserves the literal
-        tmux name the user gave their session — we're adopting, not
+        tmux name the user gave their session - we're adopting, not
         creating.
 
         Also flips ``self._is_external = True`` so ``attach_existing()``
@@ -829,84 +1118,219 @@ class TmuxBackend(SessionBackend):
             socket_name=socket_name,
             scrollback_lines=scrollback_lines,
         )
-        # Bypass the slugified ``cloude_<slug>`` naming — we're adopting.
+        # Bypass the slugified ``cloude_<slug>`` naming - we're adopting.
         inst.tmux_session = session_name
         inst.slug = session_name  # used in the pipe-file filename
         inst._is_external = True
         return inst
 
+    def _run_listing(self, *args: str) -> tuple[Optional[TmuxListing], str]:
+        """Run one ENUMERATION tmux command and split the two outcomes apart.
+
+        Description: The single gate every listing method goes through, so
+            the "tmux is absent / timed out / errored" branches cannot
+            drift apart between the three of them. Returns a ready-made
+            failure ``TmuxListing`` OR decoded stdout, never both. A
+            ``no_server`` exit is NOT a failure and comes back as a
+            successful empty listing (see
+            :func:`src.core.tmux_listing.classify_listing_failure`).
+
+        Inputs:
+            *args (str): tmux arguments appended to ``self._tmux_base()``.
+
+        Output:
+            tuple[Optional[TmuxListing], str]: when the first element is
+                not None it is the FINAL result and the caller must return
+                it verbatim (it may be a legitimate empty answer with
+                ``ok=True, reason='no_server'``). When it is None, the
+                second element is tmux's decoded stdout, ready to parse.
+
+        Example:
+            >>> failure, text = backend._run_listing("list-sessions", "-F", "#S")
+            >>> failure is None
+            True
+        """
+        import subprocess
+
+        if resolve_tmux_path() is None:
+            # Not "zero sessions" - we have no way to ask the question.
+            return (
+                TmuxListing.unavailable(
+                    REASON_TMUX_MISSING,
+                    detail="tmux not found on PATH or at any well-known "
+                           "install location",
+                ),
+                "",
+            )
+
+        try:
+            rc, out, err = self._run_tmux_sync(
+                *args,
+                check=False,
+                timeout=LIST_TIMEOUT_SECONDS,
+                env=listing_env(),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "tmux_listing_timeout",
+                argv=args,
+                socket=self.socket_name,
+                timeout_seconds=LIST_TIMEOUT_SECONDS,
+            )
+            return (
+                TmuxListing.unavailable(
+                    REASON_TIMEOUT,
+                    detail=f"tmux did not answer within {LIST_TIMEOUT_SECONDS}s",
+                ),
+                "",
+            )
+        except OSError as exc:
+            logger.warning(
+                "tmux_listing_probe_error",
+                argv=args,
+                socket=self.socket_name,
+                error=str(exc),
+            )
+            return (
+                TmuxListing.unavailable(REASON_PROBE_ERROR, detail=str(exc)),
+                "",
+            )
+
+        if rc != 0:
+            stderr_text = err.decode("utf-8", errors="replace")
+            listing = classify_listing_failure(rc, stderr_text)
+            if not listing.ok:
+                # A non-zero exit we could NOT read as "no server" is a
+                # real error. Warn, because the alternative history of
+                # this code silently called it zero sessions.
+                logger.warning(
+                    "tmux_listing_unavailable",
+                    argv=args,
+                    socket=self.socket_name,
+                    returncode=rc,
+                    reason=listing.reason,
+                    stderr=stderr_text.strip()[:200],
+                )
+            return listing, ""
+
+        return None, out.decode("utf-8", errors="replace")
+
     def list_attachable_sessions(
-        self, owned_names: Optional[set] = None
-    ) -> List[Dict[str, Any]]:
+        self,
+        owned_names: Optional[set] = None,
+        owned_instances: Optional[set] = None,
+    ) -> TmuxListing:
         """Enumerate tmux sessions on our socket for the adopt UI.
 
-        Runs ``tmux -L <socket> list-sessions -F
-        '#{session_name}|#{session_created}|#{session_windows}'`` and
-        splits each line on ``|``. No server running / no sessions → [].
+        Runs ``tmux -L <socket> list-sessions -F LISTING_FORMAT`` and
+        parses each line with
+        :func:`src.core.tmux_listing_parse.parse_listing_row`. The
+        caller-controlled session NAME is the LAST field and the split is
+        bounded, so a name containing the ``|`` delimiter can no longer
+        forge the fields in front of it. A row that does not validate is
+        refused and logged, never half-parsed.
 
-        ``created_by_cloude`` is set by cross-referencing each name
-        against ``owned_names`` (the SessionManager-persisted set of
-        session names Cloude Code created). When ``owned_names`` is
-        None, we fall back to the ``cloude_`` prefix heuristic AND log
-        a debug note — callers from the live app path should always
-        pass the owned set so a user's ``cloude_whatever`` external
-        session doesn't masquerade as ours.
+        Inputs:
+            owned_names (Optional[set]): names this app persisted as its
+                own, used to resolve ``created_by_cloude``.
+            owned_instances (Optional[set]): ``(tmux_name, epoch)`` pairs
+                sourced from ``sessions.origin`` (feat/sessions-table,
+                S4). PREFERRED over ``owned_names`` when supplied,
+                because it identifies the tmux INSTANCE rather than the
+                name, and the name is not an identity - it is reusable.
+                Every entry must carry an INTEGER epoch. A ``None``
+                epoch is NOT a wildcard and is ignored - the wildcard
+                form used to defeat the epoch tier for exactly the
+                sessions it protects. ``None`` for the whole argument
+                means "no instance opinion", and resolution falls back to
+                ``owned_names``.
+
+        Output:
+            TmuxListing: ``ok=True`` with one dict row per session when
+                the probe ran (``sessions=[]`` with
+                ``reason='no_server'`` is a real answer of zero);
+                ``ok=False`` with ``sessions=[]`` when tmux is missing,
+                timed out, or failed - the caller must not read that as
+                zero sessions.
+
+        RESOLUTION ORDER for ``created_by_cloude`` lives in
+        :func:`src.core.tmux_listing_parse.resolve_ownership`, which
+        documents all four tiers. The one worth repeating here is tier 2:
+        if the datastore holds ANY instance for this NAME under a
+        different epoch, the answer is False and the legacy name set is
+        never consulted. Without that tier, a session named ``foo`` that
+        this app owned could die, the user could create a new unrelated
+        ``foo``, and the new process would badge as ours off the name
+        alone.
 
         If ``owned_names`` contains a name that's NOT in the live tmux
-        listing, log a WARN (stale metadata — the reconciler should
-        prune, but we surface it here too for observability).
+        listing, log a WARN (stale metadata - the reconciler should
+        prune, but we surface it here too for observability). That WARN
+        is only meaningful on a listing that ran, so it is skipped
+        entirely on the unavailable path.
+
+        Example:
+            >>> backend.list_attachable_sessions(owned_names=set()).ok
+            True
         """
-        if not shutil.which("tmux"):
-            return []
-
-        rc, out, _ = self._run_tmux_sync(
-            "list-sessions",
-            "-F",
-            "#{session_name}|#{session_created}|#{session_windows}",
-            check=False,
+        failure, stdout_text = self._run_listing(
+            "list-sessions", "-F", LISTING_FORMAT
         )
-        if rc != 0:
-            # Exit 1 w/ "no server running" — expected when no sessions yet.
-            return []
+        if failure is not None:
+            return failure
 
-        raw_lines = out.decode("utf-8", errors="replace").splitlines()
+        # split_listing_rows, NEVER str.splitlines(). A session name may
+        # legally contain NEL, LS or PS, all three of which splitlines()
+        # treats as row terminators - so one tmux row became two parser
+        # rows, the second one entirely caller-chosen, forging the
+        # identity triple this method badges ownership from. See
+        # tmux_listing_parse's module docstring.
+        raw_lines = split_listing_rows(stdout_text)
         live_names: set = set()
         results: List[Dict[str, Any]] = []
+        # Counted, not just logged. A refused row makes this listing a
+        # VALID answer that is not a COMPLETE one, and any caller
+        # reasoning from ABSENCE (the lifecycle reconciler) must be able
+        # to tell those apart before it writes a verdict to disk. See
+        # TmuxListing.complete.
+        refused_rows = 0
 
         for line in raw_lines:
-            line = line.strip()
-            if not line:
+            row = parse_listing_row(line)
+            if row is None:
+                # A row we cannot fully validate is REFUSED, never
+                # half-trusted. Logged so a format change shows up as
+                # rows going missing WITH a reason, not as a short list.
+                refused_rows += 1
+                if line.strip():
+                    logger.warning(
+                        "list_attachable_sessions_unparseable_row",
+                        raw=line.strip()[:200],
+                        note=(
+                            "row did not match LISTING_FORMAT; refused "
+                            "rather than parsed on a best-effort basis"
+                        ),
+                    )
                 continue
-            parts = line.split("|")
-            if len(parts) < 3:
-                logger.debug(
-                    "list_attachable_sessions_unparseable_row", raw=line
-                )
-                continue
-            name, created_raw, windows_raw = parts[0], parts[1], parts[2]
+
+            name = row["name"]
+            created_at_epoch = row["created_at_epoch"]
             live_names.add(name)
 
-            try:
-                created_at_epoch = int(created_raw)
-            except ValueError:
-                created_at_epoch = 0
-            try:
-                window_count = int(windows_raw)
-            except ValueError:
-                window_count = 0
-
-            if owned_names is not None:
-                created_by_cloude = name in owned_names
-            else:
-                # Fallback heuristic; caller from live path should pass
-                # the owned set so we're not trusting a spoofable prefix.
-                created_by_cloude = name.startswith(SESSION_PREFIX)
+            created_by_cloude = resolve_ownership(
+                name,
+                created_at_epoch,
+                owned_instances,
+                owned_names,
+                prefix=SESSION_PREFIX,
+            )
 
             results.append({
                 "name": name,
                 "created_by_cloude": created_by_cloude,
                 "created_at_epoch": created_at_epoch,
-                "window_count": window_count,
+                "window_count": row["window_count"],
+                "tmux_session_id": row["session_id"],
             })
 
         if owned_names:
@@ -918,7 +1342,218 @@ class TmuxBackend(SessionBackend):
                     note="reconciler should prune these on next startup",
                 )
 
-        return results
+        return TmuxListing.answered(results, refused_rows=refused_rows)
+
+    async def respawn(
+        self, agent_command: Optional[str] = None
+    ) -> RespawnResult:
+        """Put a process back into this session's dead pane, in place.
+
+        Description: the whole restart path. Probes the pane, runs the
+            ladder in ``src.core.session_respawn`` to decide what to run,
+            then ``tmux respawn-pane`` and a dead-on-arrival re-probe.
+
+            NOTHING IS CREATED AND NOTHING IS DESTROYED. The tmux session,
+            its ``#{session_created}`` epoch, its ``#{pane_id}``, its
+            scrollback and its ``pipe-pane`` all survive (measured on tmux
+            3.7c - see tests/test_tmux_respawn_real.py). That is what keeps
+            the app's ``sessions`` row, project attribution, pinned theme,
+            unread state and name attached to the same session: the
+            instance triple this row is keyed on does not change, so no new
+            row can be minted and no lineage/fork column is ever touched.
+
+            ``-k`` IS DELIBERATELY NEVER PASSED. tmux refuses
+            ``respawn-pane`` on a live pane without it, so a click on a row
+            painted 'dead' that has since come back to life cannot kill a
+            running agent. The ``not_dead`` branch below is the friendly
+            message; tmux is the actual guarantee.
+
+            IT ALSO NEVER KILLS THE SESSION ON FAILURE, which is where it
+            departs from ``start()``. On create, tearing down a
+            dead-on-arrival corpse frees the name for a retry. On restart
+            the session IS the thing the user is trying to keep, so a
+            failed respawn leaves the corpse, the scrollback and the row
+            exactly as it found them and reports why.
+
+            NO RETRY LOOP. An agent that crashes on startup comes back as
+            ``ok=False`` naming its exit status and the first meaningful
+            line it printed. The user clicks again or does not; this method
+            never decides to.
+
+        Inputs:
+            agent_command: What the app would launch for this session's
+                recorded ``agent_type``, or None when it has no record.
+                Only CONSULTED when tmux confirms the pane had a start
+                command at all - see the ladder's docstring for why
+                ``agent_type`` alone is not admissible evidence.
+
+        Output:
+            RespawnResult: ``kind`` is the ladder verdict, ``ok`` says
+                whether a process is running in the pane now, ``detail`` is
+                one sentence fit to show the user.
+
+        Example:
+            >>> res = await backend.respawn(agent_command="cld")
+            >>> res.kind, res.ok
+            ('agent', True)
+        """
+        target = _safe_target(self.tmux_session)
+
+        rc, out, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            RESPAWN_PANE_FORMAT,
+            check=False,
+        )
+        decoded = out.decode("utf-8", errors="replace") if out else ""
+        first_line = decoded.splitlines()[0] if decoded.strip() else ""
+        probe_ok = rc == 0 and bool(first_line)
+
+        pane_dead: Optional[str] = None
+        start_command: Optional[str] = None
+        if probe_ok:
+            pane_dead, _dead_status, start_command = parse_respawn_probe(first_line)
+
+        plan = resolve_respawn_plan(
+            probe_ok=probe_ok,
+            pane_dead=pane_dead,
+            pane_start_command=start_command,
+            agent_command=agent_command,
+        )
+
+        if not plan.actionable:
+            logger.info(
+                "tmux_respawn_refused",
+                session=self.tmux_session,
+                kind=plan.kind,
+                detail=plan.detail,
+            )
+            return RespawnResult(kind=plan.kind, ok=False, detail=plan.detail)
+
+        args: List[str] = ["respawn-pane", "-t", target]
+        if plan.command:
+            args.append(plan.command)
+
+        rc_spawn, _, err_spawn = await self._run_tmux(*args, check=False)
+        if rc_spawn != 0:
+            stderr = err_spawn.decode("utf-8", errors="replace").strip()
+            logger.error(
+                "tmux_respawn_command_failed",
+                session=self.tmux_session,
+                kind=plan.kind,
+                returncode=rc_spawn,
+                stderr=stderr[:300],
+            )
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=(
+                    f"tmux refused to restart this pane: "
+                    f"{stderr or 'no error text'}"
+                ),
+                command=plan.command,
+            )
+
+        # Same 250ms dead-on-arrival window ``start()`` uses. A binary that
+        # is missing, unauthenticated, or misconfigured exits inside it, and
+        # reporting THAT is what stops a one-click restart from looking like
+        # a success that did nothing.
+        await asyncio.sleep(0.25)
+
+        rc_after, out_after, _ = await self._run_tmux(
+            "list-panes",
+            "-t",
+            self.tmux_session,
+            "-F",
+            RESPAWN_PANE_FORMAT,
+            check=False,
+        )
+        decoded_after = (
+            out_after.decode("utf-8", errors="replace") if out_after else ""
+        )
+        if rc_after != 0 or not decoded_after.strip():
+            # THIRD OUTCOME, on the verification rather than the plan. The
+            # respawn command succeeded; we simply cannot see the result.
+            # Reported as not-ok so nothing downstream renders an unmeasured
+            # success, and SAID so rather than blamed on the agent.
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=(
+                    "the restart command succeeded but tmux did not answer "
+                    "when asked whether the pane came back, so whether it is "
+                    "running cannot be determined"
+                ),
+                command=plan.command,
+            )
+
+        dead_after, status_after, _ = parse_respawn_probe(
+            decoded_after.splitlines()[0]
+        )
+        if dead_after == "1":
+            banner = await self._first_meaningful_pane_line(target)
+            logger.error(
+                "tmux_respawn_died_on_arrival",
+                session=self.tmux_session,
+                kind=plan.kind,
+                pane_dead_status=status_after,
+                capture=banner[:300],
+            )
+            reason = banner or f"exit status {status_after or 'unknown'}"
+            return RespawnResult(
+                kind=plan.kind,
+                ok=False,
+                detail=f"it started and exited again: {reason}",
+                command=plan.command,
+            )
+
+        logger.info(
+            "tmux_respawn_ok",
+            session=self.tmux_session,
+            kind=plan.kind,
+        )
+        return RespawnResult(
+            kind=plan.kind, ok=True, detail=plan.detail, command=plan.command
+        )
+
+    async def _first_meaningful_pane_line(self, target: str) -> str:
+        """Newest non-blank line of pane output, with escapes stripped.
+
+        Description: a launch banner opens with cursor/colour escapes, so
+            the raw capture is unreadable in an error surface. Coarse
+            CSI/OSC strip - good enough for one line of diagnostics, and
+            deliberately not a full terminal emulator.
+
+        Inputs:
+            target: an already ``_safe_target``-validated tmux target.
+
+        Output:
+            str: the first meaningful line found, or '' when the capture
+                failed or held nothing but blanks. An empty string means
+                "nothing to quote", and callers must fall back to the exit
+                status rather than presenting it as a message.
+
+        Example:
+            >>> await backend._first_meaningful_pane_line("cloude_x")
+            'command not found: claude'
+        """
+        rc, out, _ = await self._run_tmux(
+            "capture-pane", "-t", target, "-p", "-S", "-200", check=False
+        )
+        if rc != 0:
+            return ""
+        for raw_line in reversed(out.decode("utf-8", errors="replace").splitlines()):
+            cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line)
+            cleaned = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", cleaned)
+            cleaned = cleaned.strip()
+            # tmux writes its own "Pane is dead (...)" footer into the
+            # capture. Quoting that back at the user says nothing about
+            # WHY, so it is skipped in favour of the agent's own output.
+            if cleaned and not cleaned.startswith("Pane is dead"):
+                return cleaned
+        return ""
 
     async def stop(self) -> None:
         """Kill the tmux session and tear down the read loop."""
@@ -965,9 +1600,9 @@ class TmuxBackend(SessionBackend):
         - Large (paste payload)          → load-buffer + paste-buffer -d -p
 
         ``send-keys -l`` treats the payload literally as UTF-8 text with no
-        key-name lookup — fastest path for regular typing. ``send-keys -H``
+        key-name lookup - fastest path for regular typing. ``send-keys -H``
         delivers each 2-hex-digit argv token as a literal byte *as a key
-        event* — the correct vehicle for keystrokes like Backspace (0x7f),
+        event* - the correct vehicle for keystrokes like Backspace (0x7f),
         Escape (0x1b), arrow keys (\\x1b[A), Ctrl chords (0x01-0x1f), and
         F-keys. ``paste-buffer -d -p`` wraps the payload in bracketed-paste
         markers (\\x1b[200~ ... \\x1b[201~); Claude's TUI uses those to tell
@@ -981,13 +1616,13 @@ class TmuxBackend(SessionBackend):
             return
 
         if len(data) > PASTE_THRESHOLD_BYTES:
-            # True paste — use bracketed paste so Claude distinguishes from typed input
+            # True paste - use bracketed paste so Claude distinguishes from typed input
             await self._write_via_paste_buffer(data)
         elif _has_control_chars(data):
             # Short keystroke with control bytes (arrow, Ctrl-X, Esc, Backspace, F-keys)
             await self._write_via_hex_keys(data)
         else:
-            # Short plain text — fastest path
+            # Short plain text - fastest path
             await self._write_via_send_keys_literal(data)
 
     async def _write_via_send_keys_literal(self, data: bytes) -> None:
@@ -1098,10 +1733,130 @@ class TmuxBackend(SessionBackend):
         )
         return rc == 0
 
+    @property
+    def pid(self) -> Optional[int]:
+        """The OS pid of pane 0's foreground process, or None if unknown.
+
+        Description: Queries ``#{pane_pid}`` via ``list-panes`` for this
+            backend's session/pane. Mirrors ``PTYBackend.pid`` so
+            ``SessionManager`` can call ``getattr(backend, "pid", None)``
+            uniformly across both backends. Unlike PTYBackend (which tracks
+            a single forked pid for the life of the process), a tmux pane's
+            foreground pid can change as commands run inside it - this
+            always reflects the CURRENT foreground process, not the shell
+            that was originally spawned.
+
+        Inputs: none (reads ``self.tmux_session`` / ``self.socket_name``).
+
+        Output:
+            Optional[int]: The pane's current foreground pid, or None if
+                the session is gone or the query fails.
+
+        Example:
+            >>> backend.pid
+            48213
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-t",
+            _safe_target(self.tmux_session),
+            "-p",
+            "#{pane_pid}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        raw = out.decode("utf-8", errors="replace").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def list_pane_status_all(self) -> TmuxListing:
+        """Bulk-query activity status for every pane on this tmux server.
+
+        Description: One ``list-panes -a`` call across the WHOLE dedicated
+            tmux server, so callers building a status view for many sessions
+            (owned + external) pay a single subprocess cost instead of one
+            query per session. Only pane 0 of each session is meaningful for
+            this app (we never create a second window/pane), so when a
+            session reports multiple panes we keep the first line tmux
+            returns for that session name.
+
+        Inputs: none (reads ``self.socket_name``).
+
+        Output:
+            TmuxListing: ``ok=True`` with one row per LIVE tmux session on
+                the socket, each ``{"name": str, "pane_dead": str,
+                "pane_current_command": str, "pid": Optional[int],
+                "status": str}``. ``status`` is pre-resolved via
+                ``resolve_pane_status()`` so callers never touch the raw
+                fields unless they want to. ``ok=True, sessions=[],
+                reason='no_server'`` when no server is running (a real
+                answer of zero). ``ok=False`` when the probe could not
+                run at all, in which case callers must fall back to
+                ``STATUS_UNKNOWN`` rather than to "no panes".
+
+        Example:
+            >>> backend.list_pane_status_all().sessions
+            [{'name': 'cloude_myproj', 'pane_dead': '0',
+              'pane_current_command': 'claude', 'pid': 4821,
+              'status': 'running'}]
+        """
+        # Local import avoids a module-level cycle: session_status has no
+        # dependency back on tmux_backend, but keeping the import at the
+        # call site matches this file's existing lazy-import convention
+        # for settings (see _resolve_pipe_path).
+        from src.core.session_status import resolve_pane_status
+
+        failure, stdout_text = self._run_listing(
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}",
+        )
+        if failure is not None:
+            return failure
+
+        seen: set = set()
+        results: List[Dict[str, Any]] = []
+        # Same row-delimiter rule as list_attachable_sessions: the name
+        # is caller-controlled and splitlines() would let it manufacture
+        # extra rows. This format puts the name FIRST, so a forged row
+        # here cannot be told from a real one by field position at all -
+        # which makes using the correct row split the only defence.
+        for line in split_listing_rows(stdout_text):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) < 4:
+                logger.debug("list_pane_status_all_unparseable_row", raw=line)
+                continue
+            name, pane_dead, current_command, pid_raw = parts[0], parts[1], parts[2], parts[3]
+            if name in seen:
+                # Keep only the first pane per session (our sessions are
+                # always single-window/single-pane; defensive for any
+                # externally-created session with extra panes).
+                continue
+            seen.add(name)
+            try:
+                pid_val: Optional[int] = int(pid_raw)
+            except ValueError:
+                pid_val = None
+            results.append({
+                "name": name,
+                "pane_dead": pane_dead,
+                "pane_current_command": current_command,
+                "pid": pid_val,
+                "status": resolve_pane_status(pane_dead, current_command),
+            })
+        return TmuxListing.answered(results)
+
     async def rename_session(self, new_name: str) -> None:
         """Rename this tmux session in-place via ``rename-session``.
 
-        Atomic from the tmux server's perspective — the session keeps its
+        Atomic from the tmux server's perspective - the session keeps its
         windows, panes, history, pipe-pane hooks, and remain-on-exit setting.
         Caller is responsible for upstream state re-keying (the SessionManager
         layer handles ``owned_tmux_sessions`` + ``pinned_themes`` + the
@@ -1111,7 +1866,7 @@ class TmuxBackend(SessionBackend):
             new_name: New tmux session name. MUST be pre-validated by the
                 caller (route layer enforces ``^[A-Za-z0-9_-]{1,64}$``). We
                 still fail loudly via ``_safe_target`` if the value contains
-                a target separator — defense in depth, never trust upstream.
+                a target separator - defense in depth, never trust upstream.
 
         Raises:
             ValueError: ``new_name`` contains tmux target separators (``:``
@@ -1127,7 +1882,7 @@ class TmuxBackend(SessionBackend):
             raise RuntimeError("rename_session: backend has no tmux session name")
 
         if new_name == self.tmux_session:
-            # No-op rename. Treat as success — the user's intent ("the
+            # No-op rename. Treat as success - the user's intent ("the
             # session should be named X") is already satisfied.
             return
 
@@ -1152,22 +1907,46 @@ class TmuxBackend(SessionBackend):
         )
         self.tmux_session = new_name
 
-    def discover_existing(self) -> List[str]:
-        """List all ``cloude_*`` sessions on our dedicated socket."""
-        if not shutil.which("tmux"):
-            return []
-        rc, out, _ = self._run_tmux_sync(
+    def discover_existing(self) -> TmuxListing:
+        """List all ``cloude_*`` sessions on our dedicated socket.
+
+        Description: The startup reconciler's only view of live tmux
+            state. It PRUNES persisted ownership against this answer, so
+            a wrong empty here is not a display bug - it silently
+            destroys the user's ownership records. That is why the
+            unavailable case must stay distinguishable from zero.
+
+        Inputs: none (reads ``self.socket_name``).
+
+        Output:
+            TmuxListing: ``ok=True`` with ``sessions`` a list of
+                ``cloude_``-prefixed session names (empty list plus
+                ``reason='no_server'`` means genuinely none);
+                ``ok=False`` when the probe could not run, in which case
+                the caller MUST NOT prune or clear anything.
+
+        Example:
+            >>> backend.discover_existing().sessions
+            ['cloude_myproj']
+        """
+        failure, stdout_text = self._run_listing(
             "list-sessions",
             "-F",
             "#{session_name}",
-            check=False,
         )
-        if rc != 0:
-            # Exit code 1 with "no server running" is expected when no
-            # sessions exist yet.
-            return []
-        names = out.decode("utf-8", errors="replace").splitlines()
-        return [n.strip() for n in names if n.strip().startswith(SESSION_PREFIX)]
+        if failure is not None:
+            return failure
+        # The row-delimiter rule again, and it bites hardest here: this
+        # listing feeds the owned-name reconciliation, so a name split
+        # into two by splitlines() manufactures a second cloude_-prefixed
+        # "session" that the reconciler would then act on. The whole row
+        # IS the name in this format, so a name carrying a boundary
+        # character now survives as one row and simply fails to match
+        # anything, which is the honest outcome.
+        names = split_listing_rows(stdout_text)
+        return TmuxListing.answered(
+            [n.strip() for n in names if n.strip().startswith(SESSION_PREFIX)]
+        )
 
     def capture_scrollback(self, lines: int = 3000) -> bytes:
         """Capture the pane's recent scrollback as raw bytes (UTF-8).
@@ -1180,6 +1959,19 @@ class TmuxBackend(SessionBackend):
         tmux emits each pane-width-wrapped visual line as a separate output line,
         and xterm's re-wrap conflicts with tmux's pane-width wraps, producing
         visually jumbled scrollback when the user scrolls above the live viewport.
+
+        The bytes are passed through
+        ``scrollback_replay.normalize_replay_newlines`` before they are
+        returned. ``-p`` separates lines with a BARE LF, and the client's
+        xterm runs ``convertEol: false`` (correctly - a live PTY sends
+        ``\\r\\n`` and TUIs need a bare LF to mean "down one row, keep the
+        column"). Replaying bare LFs therefore staircases every captured
+        line to the column where the previous one ended, which is the
+        "scrolling back janks the alignment" report. See that module.
+
+        Returns:
+            Captured pane bytes with CRLF line endings, or ``b""`` when
+            the tmux call fails.
         """
         if lines <= 0:
             lines = self.scrollback_lines
@@ -1199,13 +1991,100 @@ class TmuxBackend(SessionBackend):
             )
             if rc != 0:
                 return b""
-            return out
+            return normalize_replay_newlines(out)
         finally:
             # Note: Item 7 will move this flag flip closer to the WS send
             # site (after bytes are written to the socket). For now we
-            # clear it immediately — the callback-suppression is still a
+            # clear it immediately - the callback-suppression is still a
             # future-Item-7 concern.
             self.replay_in_progress = False
+
+    def pane_in_alternate_screen(self) -> bool:
+        """Report whether pane 0 is on the alternate screen buffer.
+
+        Returns:
+            True when tmux reports ``#{alternate_on}`` as 1. False on any
+            failure - the caller's fallback is the safer branch.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{alternate_on}",
+            check=False,
+        )
+        if rc != 0:
+            return False
+        return out.decode("utf-8", errors="replace").strip() == "1"
+
+    def session_age_seconds(self) -> Optional[float]:
+        """How long this tmux session has existed, in seconds.
+
+        Used by ``src/api/ws_startup_paint.py`` to tell a session that is
+        merely young (nothing painted yet, perfectly normal) apart from
+        one that has been alive for a while and has still produced no
+        output at all - the signature of a shell startup script blocked
+        on a prompt nobody can see.
+
+        Returns:
+            Age in seconds, or ``None`` when it cannot be determined -
+            tmux failed, is not running, or returned an unparseable
+            ``#{session_created}``. ``None`` is a distinct third outcome
+            and must NOT be read as "young" or as "old"; the caller
+            declines to make a claim.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{session_created}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        try:
+            created = int(out.decode("utf-8", errors="replace").strip())
+        except ValueError:
+            return None
+        return max(0.0, time.time() - created)
+
+    def capture_visible_screen(self) -> bytes:
+        """Capture the pane's visible screen as a replayable byte stream.
+
+        ``-S 0`` starts at the first line of the visible pane (history is
+        addressed with negative numbers), so this is the viewport and
+        nothing above it. ``-e`` keeps the ANSI attributes. We do NOT pass
+        ``-J``: the scrollback path joins wrapped lines so the browser can
+        re-wrap them, but here the pane was just resized to the client's
+        exact geometry, so tmux's own line breaks are the correct ones and
+        joining them would re-wrap content that is already right.
+
+        Trailing blank lines are dropped so the cursor ends up immediately
+        after the last real character. That is what makes an unterminated
+        prompt ("password: ") look like a prompt rather than like text
+        with the cursor parked below it.
+
+        Returns:
+            Bytes with CRLF line endings, or ``b""`` on failure.
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "capture-pane",
+            "-p",
+            "-e",
+            "-S",
+            "0",
+            "-t",
+            _safe_target(self.tmux_session),
+            check=False,
+        )
+        if rc != 0:
+            return b""
+        body = out.rstrip(b"\r\n")
+        if not body.strip():
+            return b""
+        return normalize_replay_newlines(body)
 
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""
@@ -1237,10 +2116,10 @@ class TmuxBackend(SessionBackend):
             # Seek position:
             #   - Adoption path: to the recorded post-pipe-pane byte
             #     offset so we resume exactly where the initial
-            #     scrollback painted. Bounded to actual file size —
+            #     scrollback painted. Bounded to actual file size -
             #     an offset larger than the file (shouldn't happen
             #     but defensive) degrades to SEEK_END.
-            #   - Normal path (create / rehydrate): SEEK_END — we
+            #   - Normal path (create / rehydrate): SEEK_END - we
             #     only want bytes produced after we started reading.
             if self._adopt_tail_start_offset is not None:
                 try:
@@ -1251,7 +2130,7 @@ class TmuxBackend(SessionBackend):
                 try:
                     os.lseek(fd, seek_to, os.SEEK_SET)
                 except OSError:
-                    # Fall back to EOF — no worse than normal rehydrate.
+                    # Fall back to EOF - no worse than normal rehydrate.
                     try:
                         os.lseek(fd, 0, os.SEEK_END)
                     except OSError:
@@ -1263,7 +2142,7 @@ class TmuxBackend(SessionBackend):
                     recorded=self._adopt_tail_start_offset,
                     file_size=current_size,
                 )
-                # Single-use — clear so subsequent fd reopens (rotation)
+                # Single-use - clear so subsequent fd reopens (rotation)
                 # use SEEK_END like the normal path.
                 self._adopt_tail_start_offset = None
             else:
@@ -1273,7 +2152,7 @@ class TmuxBackend(SessionBackend):
                     pass
 
             while self._running:
-                # Rotation check — once a second is plenty.
+                # Rotation check - once a second is plenty.
                 now = time.monotonic()
                 if now - self._last_rotate_check > 1.0:
                     self._last_rotate_check = now
@@ -1316,7 +2195,7 @@ class TmuxBackend(SessionBackend):
         We rename the current file to ``<name>.1``, then truncate the pipe
         back to zero. tmux's ``cat >> file`` keeps appending after our
         rename because the shell re-opens the path each time the pipe-pane
-        hook fires — no tmux restart needed. We re-point our read fd at the
+        hook fires - no tmux restart needed. We re-point our read fd at the
         freshly-truncated file.
         """
         try:

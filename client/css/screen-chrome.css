@@ -1,0 +1,47 @@
+/* Authenticated-only app chrome - HIDDEN BY DEFAULT.
+ *
+ * See client/js/screen-chrome.js for the whole argument. The short
+ * version: the login screen used to be kept clean by naming every
+ * control that had to disappear, in four separate places in app.js, and
+ * a control nobody remembered to name rendered on the login screen with
+ * no error anywhere. This file inverts that. The marker
+ * `body.is-authenticated` is written ONLY by ScreenChrome.apply() and
+ * only for the authenticated screens, so its ABSENCE - the state the
+ * page is in at first paint, before any script has run, and the state it
+ * returns to on logout - hides the chrome. A control added to the header
+ * tomorrow is covered by this file the moment it is added, with no line
+ * written anywhere.
+ *
+ * OPTING IN. A control that genuinely belongs on the login screen carries
+ * `data-show-on-auth` in its markup. That is a deliberate, visible,
+ * per-control statement, and it is the only way onto that screen.
+ *
+ * `!important` is load-bearing and not laziness: #slash-commands-btn is
+ * shown by an inline `style.display = 'flex'` written by
+ * client/js/slash-commands.js, and an inline style beats any selector
+ * that is not important. Without it this file would be correct about
+ * everything except the button the user actually reported. */
+
+/* THE HEADER'S RIGHT-HAND CLUSTER, BY CONTAINER, NOT BY NAME. This is
+ * the rule that does the real work: everything inside `.controls` is
+ * gone on the login screen unless it says otherwise, including
+ * #header-menu-toggle (the kebab, injected at runtime by
+ * client/js/header-menu.js and therefore not present in index.html for
+ * anyone to remember) and #header-menu-panel, which is where
+ * header-menu.js re-parents #logoutBtn and #settingsBtn. Hiding the
+ * panel hides its contents with it. */
+body:not(.is-authenticated) .header .controls > *:not([data-show-on-auth]) {
+    display: none !important;
+}
+
+/* FLOATING CHROME THAT DOES NOT LIVE IN A SHARED CONTAINER. The
+ * slash-commands button and the d-pad button are appended straight to
+ * <body> by their own modules, so there is no ancestor to gate them on.
+ * They carry `data-auth-only` at the point they are created - one
+ * declarative token beside the element itself, rather than a second
+ * enumeration in a screen-transition function that has already proven it
+ * can be short. #session-sidebar-toggle carries the same token in
+ * index.html. */
+body:not(.is-authenticated) [data-auth-only] {
+    display: none !important;
+}

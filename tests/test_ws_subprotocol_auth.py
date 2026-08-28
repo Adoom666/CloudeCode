@@ -52,7 +52,6 @@ def patched_auth_config(monkeypatch):
         refresh_token_ttl_seconds=604800,
         refresh_grace_seconds=10,
         totp_secret="X" * 32,
-        projects=[],
     )
 
     class _FakeSettings:
@@ -430,6 +429,36 @@ def test_ws_connect_with_malformed_subprotocol_rejected_4400(ws_app):
             ws.receive_text()
 
     assert exc_info.value.code == 4400
+
+
+def test_ws_connect_with_unknown_session_id_rejected_4404(ws_app):
+    """
+    feat/safe-session-lifecycle regression guard: the client's reconnect
+    logic (client/js/terminal.js `_attemptReconnectByName`) distinguishes
+    "server forgot this session_id" (e.g. after a server restart) from
+    other close reasons SOLELY by this close code. If the server ever
+    stops emitting 4404 for an unrecognized `?session_id=`, the client's
+    by-name fallback would silently never trigger and reconnect-after-
+    restart would regress to the old behavior (retry the dead id until
+    maxReconnectAttempts, forcing a hard refresh).
+    """
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    client = TestClient(ws_app)
+    token = _mint_token()
+
+    # ws_app's _FakeSessionManager.sessions is `{}` — any session_id is
+    # "unknown" to it, exactly mirroring a fresh server process that has
+    # no memory of a pre-restart session_id.
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/ws/terminal?session_id=some-ephemeral-id-the-server-forgot",
+            subprotocols=["cloude.jwt.v1", token],
+        ) as ws:
+            ws.receive_text()
+
+    assert exc_info.value.code == 4404
 
 
 def test_ws_connect_with_old_query_token_no_longer_works(ws_app):

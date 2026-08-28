@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>project tree geometry harness</title>
+<!--
+  feat/project-session-tree (S8) - MEASURE THE TREE, DO NOT EYEBALL IT.
+
+  Same pattern as tests/manual/fab-geometry-harness.html: loads the real
+  client/js/launchpad.js and the real client/css/styles.css (no theme
+  file needed - defaults live on bare :root, see styles.css's design-
+  tokens header), stubs window.API with three canned response SHAPES
+  (?fixture=live, ?fixture=populated, ?fixture=attribution-failed - see
+  the query-string switch below) and calls the real render path
+  (Launchpad.init() -> loadProjects() -> loadRunningSessions() ->
+  loadSessionAttribution() -> renderProjectList()), then reports REAL
+  getBoundingClientRect() geometry for every `.project-node`,
+  `.project-node__sessions` and `.project-session-row` it finds.
+
+  Open over http://127.0.0.1:<port>/tests/manual/project-tree-geometry-harness.html
+  from the repo root (a bare file:// origin cannot fetch the vendored
+  scripts reliably in every browser) and read #out, or read
+  window.__treeGeometry() from the console after the initial render
+  settles (poll ready via window.__treeReady).
+
+  fixture=live mirrors this task's real 9-session/9-project snapshot,
+  where every session's project_attribution is 'unknown' (see the S8
+  build notes) - the tree renders zero project children and a 9-row
+  NEEDS ATTENTION group. fixture=populated is a synthetic shape built to
+  exercise every branch in one page: one project with two attributed
+  running sessions, one 'none'-attributed session, and one 'unknown'
+  session, so the PARENT/CHILD nesting geometry assertion has something
+  to measure. fixture=attribution-failed simulates GET /sessions/records
+  itself failing, so every running session must land in NEEDS ATTENTION.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<style>
+  #out { position: fixed; top: 8px; left: 8px; z-index: 99999; max-width: 40vw;
+         max-height: 90vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<pre id="out">rendering...</pre>
+
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+/**
+ * Canned fixture data keyed by the `?fixture=` query param. Shapes match
+ * the real wire contracts: GET /projects, GET /projects/presence,
+ * GET /sessions/attachable + GET /sessions/list (merged into
+ * runningSessions by loadRunningSessions), GET /sessions/records.
+ * @param {string} name - one of 'live' | 'populated' | 'attribution-failed'.
+ * @returns {object} {projects, presence, attachable, records}
+ */
+function fixtureFor(name) {
+    if (name === 'populated') {
+        return {
+            projects: [
+                { name: 'cloudecode', path: '/Users/jsugamele/Development/CloudeCode', description: 'main app' },
+                { name: 'scrolltest', path: '/Users/jsugamele/Development/scrolltest', description: '' },
+                { name: 'ghost-project', path: '/Users/jsugamele/Development/ghost', description: 'gone' },
+            ],
+            presence: {
+                status: 'ok',
+                projects: [
+                    { id: 1, raw_path: '/Users/jsugamele/Development/CloudeCode', presence: 'present' },
+                    { id: 2, raw_path: '/Users/jsugamele/Development/scrolltest', presence: 'present' },
+                    { id: 3, raw_path: '/Users/jsugamele/Development/ghost', presence: 'missing' },
+                ],
+                detail: null,
+            },
+            attachable: [
+                { name: 'cloude_a', created_by_cloude: true, created_at_epoch: 1000, window_count: 1, status: 'running', unread: false },
+                { name: 'cloude_b', created_by_cloude: true, created_at_epoch: 1001, window_count: 1, status: 'idle', unread: false },
+                { name: 'cloude_c', created_by_cloude: false, created_at_epoch: 1002, window_count: 1, status: 'unknown', unread: false },
+                { name: 'cloude_d', created_by_cloude: true, created_at_epoch: 1003, window_count: 1, status: 'dead', unread: false },
+            ],
+            records: [
+                { tmux_name: 'cloude_a', project_id: 1, project_attribution: 'derived_deepest' },
+                { tmux_name: 'cloude_b', project_id: 1, project_attribution: 'derived_deepest' },
+                { tmux_name: 'cloude_c', project_id: null, project_attribution: 'none' },
+                { tmux_name: 'cloude_d', project_id: null, project_attribution: 'unknown' },
+            ],
+        };
+    }
+    if (name === 'attribution-failed') {
+        return {
+            projects: [
+                { name: 'cloudecode', path: '/Users/jsugamele/Development/CloudeCode', description: 'main app' },
+            ],
+            presence: {
+                status: 'ok',
+                projects: [
+                    { id: 1, raw_path: '/Users/jsugamele/Development/CloudeCode', presence: 'present' },
+                ],
+                detail: null,
+            },
+            attachable: [
+                { name: 'cloude_a', created_by_cloude: true, created_at_epoch: 1000, window_count: 1, status: 'running', unread: false },
+            ],
+            records: null, // triggers a fetch error in the stub API below
+        };
+    }
+    // 'live' - his real 9-project / 9-session snapshot (scratch_cloude_snapshot.db,
+    // read-only VACUUM INTO copy). Every session's project_attribution is
+    // 'unknown' in his actual current DB (working_dir was never captured
+    // on these rows), so this fixture is honest about that rather than
+    // synthesizing a happier shape.
+    const names = ['Test', 'asd', 'claude-config-sync-2', 'console-msw4z3m5', 'fs2', 'fstest', 'scrolltest', 'ses_ec5bf2a3', 'test pause'];
+    return {
+        projects: [
+            { name: 'scrolltest', path: '/Users/jsugamele/Development/scrolltest', description: '' },
+            { name: 'ses_ec5bf2a3', path: '/Users/jsugamele/Development/ses_ec5bf2a3', description: '' },
+            { name: 'ses_8704e610', path: '/Users/jsugamele/Development/ses_8704e610', description: '' },
+            { name: 'ses_c3737fbe', path: '/Users/jsugamele/Development/ses_c3737fbe', description: '' },
+            { name: 'jsugamele', path: '/Users/jsugamele', description: '' },
+            { name: 'claude-config-sync', path: '/Users/jsugamele/Development/claude-config-sync', description: '' },
+            { name: 'CloudeCode', path: '~/Development/CloudeCode', description: '' },
+            { name: 'Development', path: '~/Development', description: '' },
+            { name: 'ai-setup', path: '~/Development/ai-setup', description: '' },
+        ],
+        presence: {
+            status: 'ok',
+            projects: [
+                { id: 1, raw_path: '/Users/jsugamele/Development/scrolltest', presence: 'present' },
+                { id: 2, raw_path: '/Users/jsugamele/Development/ses_ec5bf2a3', presence: 'present' },
+                { id: 3, raw_path: '/Users/jsugamele/Development/ses_8704e610', presence: 'present' },
+                { id: 4, raw_path: '/Users/jsugamele/Development/ses_c3737fbe', presence: 'present' },
+                { id: 5, raw_path: '/Users/jsugamele', presence: 'present' },
+                { id: 6, raw_path: '/Users/jsugamele/Development/claude-config-sync', presence: 'present' },
+                { id: 7, raw_path: '~/Development/CloudeCode', presence: 'present' },
+                { id: 8, raw_path: '~/Development', presence: 'present' },
+                { id: 9, raw_path: '~/Development/ai-setup', presence: 'present' },
+            ],
+            detail: null,
+        },
+        attachable: names.map((n, i) => ({
+            name: 'cloude_' + n, created_by_cloude: true, created_at_epoch: 1000 + i,
+            window_count: 1, status: 'unknown', unread: false,
+        })),
+        records: names.map((n) => ({
+            tmux_name: 'cloude_' + n, project_id: null, project_attribution: 'unknown',
+        })),
+    };
+}
+
+const params = new URLSearchParams(location.search);
+const fixtureName = params.get('fixture') || 'live';
+const fixture = fixtureFor(fixtureName);
+
+window.API.getProjects = async () => fixture.projects;
+window.API.getProjectsPresence = async () => fixture.presence;
+window.API.listAttachableSessions = async () => fixture.attachable;
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => {
+    if (fixture.records === null) throw new Error('simulated fetch failure');
+    return fixture.records;
+};
+
+window.__treeReady = false;
+
+/**
+ * Real-geometry report for the rendered tree: every `.project-node`
+ * (parent) and, for each, every `.project-session-row` inside its
+ * `.project-node__sessions` (child) - the exact pair the S8 task
+ * requires be measured with getBoundingClientRect(), not inferred from
+ * state.
+ * @returns {object[]} one entry per project-node.
+ */
+function report() {
+    const nodes = Array.from(document.querySelectorAll('#project-list > .project-node'));
+    return nodes.map((node) => {
+        const parentRect = node.getBoundingClientRect();
+        const sessionsEl = node.querySelector('.project-node__sessions');
+        const rows = sessionsEl
+            ? Array.from(sessionsEl.querySelectorAll('.project-session-row')).map((row) => {
+                const r = row.getBoundingClientRect();
+                return {
+                    name: row.dataset.name || row.querySelector('.project-session-row__name, .project-session-row__name')?.textContent || null,
+                    height: r.height,
+                    width: r.width,
+                    top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+                    insideParent: r.top >= parentRect.top - 0.5
+                        && r.bottom <= parentRect.bottom + 0.5
+                        && r.left >= parentRect.left - 0.5
+                        && r.right <= parentRect.right + 0.5,
+                };
+            })
+            : [];
+        return {
+            kind: node.getAttribute('data-project-node'),
+            name: node.getAttribute('data-project-name') || null,
+            parentHeight: parentRect.height,
+            parentTop: parentRect.top, parentBottom: parentRect.bottom,
+            childCount: rows.length,
+            children: rows,
+        };
+    });
+}
+window.__treeGeometry = report;
+
+(async () => {
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    // loadProjects() fires loadRunningSessions() WITHOUT awaiting it, and
+    // loadRunningSessions() itself awaits loadSessionAttribution() before
+    // its own final renderProjectList() call - wait a few microtask/
+    // macrotask turns for that chain to settle before measuring.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    window.__treeReady = true;
+    document.getElementById('out').textContent =
+        'fixture=' + fixtureName + '\n' + JSON.stringify(report(), null, 1);
+})();
+</script>
+</body>
+</html>

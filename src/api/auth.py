@@ -22,7 +22,28 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.config import settings, ProjectConfig
-from src.models import VerifyTOTPRequest, AuthTokenResponse, ProjectResponse, CreateProjectRequest, UpdateProjectRequest, CloneProjectRequest, SuccessResponse
+from src.api import projects_service
+from src.models import (
+    VerifyTOTPRequest,
+    AuthTokenResponse,
+    ProjectResponse,
+    CreateProjectRequest,
+    UpdateProjectRequest,
+    CloneProjectRequest,
+    SuccessResponse,
+    ConfigSettingsUpdateRequest,
+    ToggleFavoriteCommandRequest,
+)
+from src.core.workspace_settings import (
+    WorkspaceValidationError,
+    validate_bind_host,
+    validate_development_root,
+    validate_editor,
+    validate_env_map,
+    validate_shell,
+)
+from src.core.slash_command_discovery import build_command_groups, command_groups_to_dict
+from src.core import slash_command_labels, slash_favorites
 
 
 def _totp_paired_sentinel_path() -> Path:
@@ -32,7 +53,7 @@ def _totp_paired_sentinel_path() -> Path:
     Anchored to the same directory as ``config.json`` so it follows the
     user's actual config location (``~/.config/cloudecode/`` when launched
     from the Electron bundle, ``./`` in dev) instead of inventing a new
-    convention. The sentinel is a marker only — its presence (not contents)
+    convention. The sentinel is a marker only - its presence (not contents)
     signals that TOTP has been paired at least once, gating ``/auth/qr``
     from re-serving the secret.
     """
@@ -49,13 +70,13 @@ def _rate_limit_key(request: Request) -> str:
     Resolve the client identity used for rate-limit bucketing.
 
     When ``auth_rate_limits.trust_proxy_headers`` is True we honor the first
-    value of ``X-Forwarded-For`` (standard reverse-proxy convention — the
+    value of ``X-Forwarded-For`` (standard reverse-proxy convention - the
     left-most entry is the original client). When False we fall back to the
     direct peer address via ``get_remote_address``, which defends against
     spoofed XFF headers when the app is reachable directly.
 
     A misconfigured auth layer (can't load settings) must not bypass the
-    limiter — in that case we fall back to the direct peer address rather
+    limiter - in that case we fall back to the direct peer address rather
     than raising, which would otherwise 500 every auth request.
     """
     try:
@@ -67,7 +88,7 @@ def _rate_limit_key(request: Request) -> str:
         xff = request.headers.get("x-forwarded-for")
         if xff:
             # Take the leftmost (original client) IP. Strip surrounding
-            # whitespace — some proxies emit ", " separators.
+            # whitespace - some proxies emit ", " separators.
             first = xff.split(",")[0].strip()
             if first:
                 return first
@@ -81,7 +102,7 @@ def _rate_limit_key(request: Request) -> str:
 #
 # headers_enabled=True makes slowapi inject X-RateLimit-Limit/Remaining/Reset
 # AND the canonical Retry-After header on 429 responses. Retry-After is the
-# signal clients (and compliant bots) use to back off cleanly — without it
+# signal clients (and compliant bots) use to back off cleanly - without it
 # the 429 is just a wall with no hint when to try again.
 limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
 
@@ -89,7 +110,7 @@ limiter = Limiter(key_func=_rate_limit_key, headers_enabled=True)
 def _totp_rate_limit() -> str:
     """
     Build the slowapi limit string from config so operators can tune the
-    window without editing decorators. Evaluated on every request — the
+    window without editing decorators. Evaluated on every request - the
     config is cached inside ``Settings``, so this is a dict lookup.
 
     slowapi accepts semicolon-separated limits where ALL must hold. A
@@ -153,7 +174,7 @@ def _extract_repo_name(url: str) -> Optional[str]:
     Returns the final path segment (the repo name) or ``None`` if the URL
     can't be parsed into at least ``owner/repo`` shape. The returned name
     is what gh will use as the cloned-folder basename when no explicit
-    target directory is supplied — we match that behavior here.
+    target directory is supplied - we match that behavior here.
     """
     if not url:
         return None
@@ -236,7 +257,7 @@ def create_refresh_token(
 
 
 def create_jwt_token(expiry_minutes: Optional[int] = None) -> tuple[str, int]:
-    """Legacy — delegates to ``create_access_token``.
+    """Legacy - delegates to ``create_access_token``.
 
     The ``expiry_minutes`` arg is ignored (access TTL now comes from config).
     Preserved only so pre-Item-5 call sites keep compiling.
@@ -246,7 +267,7 @@ def create_jwt_token(expiry_minutes: Optional[int] = None) -> tuple[str, int]:
 
 
 def verify_jwt_token(token: str) -> bool:
-    """Legacy — prefer ``decode_access_token``.
+    """Legacy - prefer ``decode_access_token``.
 
     Returns True if the token is a valid access token. Unlike
     ``decode_access_token`` this swallows all errors and returns a bool so
@@ -268,7 +289,7 @@ def _decode_with_typ(token: str, expected_typ: str) -> dict:
 
     Why a private helper:
       - Keeps the ``algorithms=["HS256"]`` guard in one place so a future
-        refactor can't accidentally drop it (RFC 8725 §3.1 — the #1
+        refactor can't accidentally drop it (RFC 8725 §3.1 - the #1
         JWT footgun).
       - Centralizes the ``typ`` enforcement so an access token can't be
         used as a refresh token and vice versa (token-substitution attack).
@@ -285,7 +306,7 @@ def _decode_with_typ(token: str, expected_typ: str) -> dict:
         )
 
     try:
-        # EXPLICIT algorithms list — do NOT remove. Passing algorithms=None
+        # EXPLICIT algorithms list - do NOT remove. Passing algorithms=None
         # (or omitting the arg) allows "alg": "none" tokens, which is a
         # well-known JWT bypass (RFC 8725 §3.2). Also pins to HS256 so a
         # future key rotation to RS256 is an intentional, reviewed change.
@@ -369,12 +390,12 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
     Verify TOTP code and return JWT token.
 
     Defense layers, outermost first:
-      1. slowapi rate limit (5/min;20/hour by default) — caps brute-force
+      1. slowapi rate limit (5/min;20/hour by default) - caps brute-force
          attempts per client IP. Returns 429 with Retry-After.
-      2. Replay dedup (TTLCache keyed on code, 90s TTL) — a single captured
+      2. Replay dedup (TTLCache keyed on code, 90s TTL) - a single captured
          valid code cannot be replayed within pyotp's ±1-step window.
          Returns 401 with ``reason: code_reused``.
-      3. ``pyotp.TOTP.verify`` with valid_window=1 — the actual OTP check.
+      3. ``pyotp.TOTP.verify`` with valid_window=1 - the actual OTP check.
 
     Args:
         request: Required by slowapi to extract the rate-limit key.
@@ -402,7 +423,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
                 # this branch) within the TTL window. Reject without re-running
                 # the TOTP check. Same 401 shape as invalid code to keep the
                 # enumeration signal minimal, but with a distinct reason for
-                # client-side UX ("that code was already used — wait for the
+                # client-side UX ("that code was already used - wait for the
                 # next 30-second tick").
                 logger.warning("totp_code_reused", code=body.code[:2] + "****")
                 raise HTTPException(
@@ -418,7 +439,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
                     detail="Invalid authentication code"
                 )
 
-            # Valid — mark the code as consumed. Even if downstream JWT
+            # Valid - mark the code as consumed. Even if downstream JWT
             # creation blows up, we still want to ban replay of this code.
             _totp_seen_cache[body.code] = time.monotonic()
 
@@ -446,7 +467,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
 
         logger.info("totp_verification_success")
 
-        # Fix 4b — mark TOTP as paired. Idempotent: touch() with exist_ok=True
+        # Fix 4b - mark TOTP as paired. Idempotent: touch() with exist_ok=True
         # is safe if the sentinel already exists (all subsequent verifies).
         # Best-effort: a filesystem hiccup here must NOT fail the auth flow,
         # but we log loudly because a persistently unwritable config dir
@@ -465,7 +486,7 @@ async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequ
             success=True,
             access_token=access_token,
             refresh_token=refresh_token,
-            token=access_token,  # deprecated alias — remove in v3.2
+            token=access_token,  # deprecated alias - remove in v3.2
             expires_in=expires_in,
         )
 
@@ -498,7 +519,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
 
     Security properties:
       * JWT is decoded with ``algorithms=["HS256"]`` and ``typ == "refresh"``
-        enforced — no access-token smuggling into this endpoint.
+        enforced - no access-token smuggling into this endpoint.
       * The jti must be present in the RefreshStore AND pass ``is_valid``
         (not revoked, not expired, either not superseded OR within the
         grace window).
@@ -508,7 +529,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
         descendant. Both parties (legitimate user + attacker) must
         re-authenticate via TOTP.
       * Rotation itself is atomic inside ``RefreshStore.rotate``.
-      * Rate-limited at 10/minute to cap abusive retry storms — legitimate
+      * Rate-limited at 10/minute to cap abusive retry storms - legitimate
         clients refresh roughly once per ~14min (15min access TTL minus a
         safety margin), so 10/min is ample headroom while throttling
         brute-force campaigns hard.
@@ -533,7 +554,7 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
     # 2. Confirm the jti is still acceptable (includes grace window).
     if not await store.is_valid(old_jti, grace_seconds=grace):
         # Distinguish "just unknown/revoked" from "already superseded past
-        # grace" — the latter is reuse detection and triggers chain
+        # grace" - the latter is reuse detection and triggers chain
         # revocation as the defensive hammer.
         if await store.is_superseded(old_jti):
             logger.warning("refresh_reuse_detected", jti=old_jti[:8] + "…")
@@ -546,14 +567,14 @@ async def refresh_tokens(request: Request, response: Response, body: RefreshToke
 
     # 4. Atomically rotate. If rotate() returns False here there are two
     #    scenarios:
-    #      (a) near-simultaneous refresh from the same client — the row was
+    #      (a) near-simultaneous refresh from the same client - the row was
     #          JUST superseded while we were minting the new pair. is_valid
     #          above still returned True because we're inside the grace
     #          window. This is benign: the other in-flight request already
     #          got a new pair for this client. We 401 WITHOUT burning the
     #          chain so the client simply retries with its freshly-stored
     #          descendant token.
-    #      (b) true reuse-after-grace — is_valid should have caught it at
+    #      (b) true reuse-after-grace - is_valid should have caught it at
     #          step 2, so reaching here means something sketchier (clock
     #          skew, race with a purge, etc.). Still safer not to burn the
     #          chain here; the post-grace path at step 2 covers real theft.
@@ -581,7 +602,7 @@ async def logout(request: Request, body: RefreshTokenRequest):
     """
     Revoke a refresh token.
 
-    The access token is left alone — it expires on its own TTL (default
+    The access token is left alone - it expires on its own TTL (default
     15m) so a true logout requires either waiting out that window or
     telling the client to drop its access token too (which we do from
     the browser side by clearing localStorage).
@@ -628,7 +649,7 @@ async def get_totp_qr():
         HTTPException: 403 if already paired (and re-pair not enabled),
         500 if generation fails.
     """
-    # Fix 4b — refuse to serve the secret once pairing is complete,
+    # Fix 4b - refuse to serve the secret once pairing is complete,
     # unless the operator has explicitly opened the re-pair window.
     if (
         _totp_paired_sentinel_path().exists()
@@ -691,131 +712,174 @@ async def get_totp_qr():
 @router.get("/projects", response_model=list[ProjectResponse], dependencies=[Depends(require_auth)])
 async def get_projects():
     """
-    Get list of configured projects.
+    Get the project list from the AUTHORITATIVE source.
+
+    feat/db-is-authoritative. This route used to read config.json. It now
+    reads the ``projects`` table, which is keyed ``UNIQUE(root)`` and
+    therefore returns ONE entry per unique folder - the fix for the
+    launcher drawing three nodes for
+    ``/Users/jsugamele/Development/ses_ec5bf2a3`` and expanding the same
+    two child sessions under each of them.
+
+    Each row now carries its ``id``, so the launcher attaches child
+    sessions by row id straight from this response instead of looking the
+    id up in a second request keyed by raw path - the lookup that made
+    duplicate-path entries share children in the first place.
+
+    THREE OUTCOMES, and this route never collapses them:
+      - the database answered: rows served, authoritative;
+      - the database is unreachable: config.json's entries are served,
+        deduplicated by root, and GET /projects/authority reports
+        ``mode: config_fallback`` with writes refused;
+      - the database is readable but empty while config.json is not:
+        the list is EMPTY and the mode says ``db_unreadable``, so an
+        empty list is never rendered as "you have no projects" when it
+        actually means "nothing could be read".
+
+    A client that needs to know WHICH of those it is calls
+    GET /projects/authority. This route always returns a list, because a
+    launcher that cannot draw anything is a worse failure than one that
+    draws the user's projects with a banner over them.
 
     Returns:
-        List of projects from config
-
-    Raises:
-        HTTPException: If config loading fails
+        list[ProjectResponse] - never raises for a datastore fault.
     """
-    try:
-        auth_config = settings.load_auth_config()
+    view = projects_service.current_view(settings)
 
-        projects = [
-            ProjectResponse(
-                name=p.name,
-                path=p.path,
-                description=p.description
-            )
-            for p in auth_config.projects
-        ]
-
-        logger.debug("projects_retrieved", count=len(projects))
-
-        return projects
-
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
+    if view.degraded:
+        logger.warning(
+            "projects_served_degraded",
+            mode=view.mode,
+            detail=view.detail,
+            count=len(view.projects),
         )
-    except Exception as e:
-        logger.error("projects_retrieval_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve projects: {str(e)}"
-        )
+    else:
+        logger.debug("projects_retrieved", count=len(view.projects))
+
+    return projects_service.views_to_responses(view, ProjectResponse)
+
+
+@router.get("/projects/authority", dependencies=[Depends(require_auth)])
+async def get_projects_authority() -> dict:
+    """
+    Report where the project list came from, and whether writes work.
+
+    Projects live in cloude.db and nowhere else, so this route no longer
+    reports a disagreement between two sources - there is only one.
+    ``mode`` is one of:
+
+      ``db``             the normal case. The list is the table's and
+                         writes are allowed. An empty list here is a
+                         real, measured empty list.
+      ``db_unreadable``  cloude.db could not be read. The list is EMPTY
+                         because nothing could be read, NOT because
+                         nothing is there, and ``message`` says so in
+                         words. Writes are refused until it clears.
+
+    ``reconcile`` reports what the last startup pass did to the table,
+    so a repair the user did not ask for is still something the user can
+    see.
+
+    Returns:
+        dict - ``{"mode", "writable", "degraded", "message", "detail",
+        "project_count", "reconcile"}``.
+    """
+    return projects_service.authority_payload(settings)
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=201, dependencies=[Depends(require_auth)])
 async def create_project(body: CreateProjectRequest):
     """
-    Add a new project to the configuration.
+    Add a new project.
+
+    Writes the ``projects`` table, which is the only place projects
+    live. There is no second store to keep in step.
 
     Args:
-        body: Project creation parameters
+        body: Project creation parameters.
 
     Returns:
-        Created project object
+        Created project object.
 
     Raises:
-        HTTPException: If project creation fails
+        HTTPException 400: a project with that display name already exists.
+        HTTPException 409: a project already exists at that folder. This
+            is the refusal that keeps the launcher showing one node per
+            folder; it is 409 rather than 400 because the request is
+            well-formed and the conflict is with existing state.
+        HTTPException 503: cloude.db is unreachable, so the write is
+            refused rather than being applied to config.json alone.
     """
+    from contextlib import closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict,
+        ProjectRootConflict,
+        create_project as db_create_project,
+    )
+
+    projects_service.guard_writable(settings)
+
     try:
-        # Create ProjectConfig object
-        project = ProjectConfig(
-            name=body.name,
-            path=body.path,
-            description=body.description
-        )
-
-        # Save to config file
-        settings.save_project(project)
-
-        logger.info("project_created", name=project.name, path=project.path)
-
-        return ProjectResponse(
-            name=project.name,
-            path=project.path,
-            description=project.description
-        )
-
-    except ValueError as e:
+        with closing(projects_service.open_db_or_503(settings)) as conn:
+            row = db_create_project(
+                conn,
+                name=body.name,
+                path=body.path,
+                description=body.description,
+            )
+    except ProjectRootConflict as e:
+        logger.warning("project_creation_root_conflict", path=body.path, error=str(e))
+        raise HTTPException(status_code=409, detail=str(e))
+    except ProjectNameConflict as e:
         logger.warning("project_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
-        )
-    except Exception as e:
-        logger.error("project_creation_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create project: {str(e)}"
-        )
+
+    logger.info("project_created", name=row["display_name"], path=row["raw_path"])
+
+    return ProjectResponse(
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
+    )
 
 
 @router.delete("/projects/{project_name}", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def delete_project(project_name: str):
     """
-    Delete a project from the configuration.
+    Remove a project from the launcher.
+
+    feat/db-is-authoritative. Deletes the ``projects`` row, then
+    refreshes config.json. The folder on disk is never touched.
 
     Args:
-        project_name: Name of the project to delete
+        project_name: Display name of the project to remove.
 
     Returns:
-        Success response
+        Success response.
 
     Raises:
-        HTTPException: If project deletion fails
+        HTTPException 404: no project carries that display name.
+        HTTPException 409: more than one does, so the name does not
+            identify a single project. Never resolved by deleting the
+            first match.
+        HTTPException 503: cloude.db is unreachable.
     """
-    try:
-        # Delete from config file
-        settings.delete_project(project_name)
+    from contextlib import closing
 
-        logger.info("project_deleted", name=project_name)
+    from src.core.project_writes import delete_project as db_delete_project
 
-        return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
+    projects_service.guard_writable(settings)
 
-    except ValueError as e:
-        logger.warning("project_deletion_failed_validation", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first."
-        )
-    except Exception as e:
-        logger.error("project_deletion_error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete project: {str(e)}"
-        )
+    with closing(projects_service.open_db_or_503(settings)) as conn:
+        target = projects_service.resolve_target(conn, project_name)
+        db_delete_project(conn, target["id"])
+
+    logger.info("project_deleted", name=project_name, root=target["root"])
+
+    return SuccessResponse(message=f"Project '{project_name}' deleted successfully")
 
 
 @router.patch(
@@ -827,8 +891,11 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
     """
     Update a project's display name and/or description.
 
-    Display name only — the folder on disk is never touched. After a rename,
-    subsequent calls must use the NEW name (the URL path identifier changes).
+    feat/db-is-authoritative. Writes the ``projects`` row, then refreshes
+    config.json. Display name only - the folder on disk is never touched,
+    and ``projects.root`` is never rewritten, so a rename cannot move a
+    project onto another project's identity. After a rename, subsequent
+    calls must use the NEW name (the URL path identifier changes).
 
     Args:
         project_name: Current display name (URL path).
@@ -841,58 +908,56 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
     Raises:
         HTTPException 400: if no fields are supplied.
         HTTPException 404: if no project named ``project_name`` exists.
-        HTTPException 409: if ``new_name`` collides with another project.
+        HTTPException 409: if ``new_name`` collides with another project,
+            or if ``project_name`` matches more than one project.
+        HTTPException 503: cloude.db is unreachable.
     """
+    from contextlib import closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict,
+        update_project as db_update_project,
+    )
+
     if body.new_name is None and body.description is None:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    projects_service.guard_writable(settings)
+
     try:
-        updated = settings.update_project(project_name, body.new_name, body.description)
-
-        logger.info(
-            "project_updated",
-            old_name=project_name,
-            new_name=updated.name,
-            description_changed=body.description is not None,
-        )
-
-        return ProjectResponse(
-            name=updated.name,
-            path=updated.path,
-            description=updated.description,
-        )
-
-    except KeyError:
-        logger.warning("project_update_not_found", name=project_name)
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{project_name}' not found",
-        )
-    except ValueError as e:
-        if "name conflict" in str(e):
-            logger.warning(
-                "project_update_name_conflict",
-                old_name=project_name,
+        with closing(projects_service.open_db_or_503(settings)) as conn:
+            target = projects_service.resolve_target(conn, project_name)
+            row = db_update_project(
+                conn,
+                target["id"],
                 new_name=body.new_name,
+                description=body.description,
             )
-            raise HTTPException(
-                status_code=409,
-                detail=f"A project named '{body.new_name}' already exists",
-            )
-        logger.warning("project_update_failed_validation", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first.",
+    except ProjectNameConflict:
+        logger.warning(
+            "project_update_name_conflict",
+            old_name=project_name,
+            new_name=body.new_name,
         )
-    except Exception as e:
-        logger.error("project_update_error", error=str(e))
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update project: {str(e)}",
+            status_code=409,
+            detail=f"A project named '{body.new_name}' already exists",
         )
+
+    logger.info(
+        "project_updated",
+        old_name=project_name,
+        new_name=row["display_name"],
+        description_changed=body.description is not None,
+    )
+
+    return ProjectResponse(
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
+    )
 
 
 @router.post(
@@ -910,7 +975,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
       3. Resolve target = ``<parent_dir>/<repo_name>``; refuse if it exists (409).
       4. Refuse if a project with the same display name already exists (409).
       5. Run ``gh repo clone <url> <target>`` with a 5-minute bounded timeout.
-         No shell — args are passed as a vector to ``create_subprocess_exec``.
+         No shell - args are passed as a vector to ``create_subprocess_exec``.
       6. Translate gh's exit/stderr into typed HTTP errors:
             auth/network → 401, not-found → 404, other → 500.
       7. Persist the new project (display name = body.project_name or repo basename).
@@ -967,7 +1032,13 @@ async def clone_project_from_github(body: CloneProjectRequest):
         )
 
     # 5. Refuse if a project with the same display name already exists.
-    if settings.get_project(project_name) is not None:
+    #    feat/db-is-authoritative: asks the authoritative source, not
+    #    config.json. A name that exists only in a stale config.json is
+    #    not a conflict, and a name that exists only in the database
+    #    would have been missed by the old check and then failed at the
+    #    write with a 500 instead of this 409.
+    _clone_view = projects_service.guard_writable(settings)
+    if any(p["name"] == project_name for p in _clone_view.projects):
         raise HTTPException(
             status_code=409,
             detail=f"A project named '{project_name}' already exists",
@@ -982,7 +1053,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
             detail=f"Failed to create parent directory {parent}: {e}",
         )
 
-    # 7. Run gh clone — bounded timeout, no shell interpolation.
+    # 7. Run gh clone - bounded timeout, no shell interpolation.
     try:
         proc = await asyncio.create_subprocess_exec(
             "gh", "repo", "clone", body.repo_url, str(target),
@@ -1012,7 +1083,7 @@ async def clone_project_from_github(body: CloneProjectRequest):
             returncode=proc.returncode,
             stderr=err[:500],
         )
-        # Auth / network classes — gh exits non-zero with these messages.
+        # Auth / network classes - gh exits non-zero with these messages.
         if (
             "authentication" in lower
             or "permission denied" in lower
@@ -1034,37 +1105,48 @@ async def clone_project_from_github(body: CloneProjectRequest):
             detail=f"gh clone failed: {err[:500]}",
         )
 
-    # 8. Register as a project. The cloned dir stays on disk even if the
-    # config write fails — user can retry via "open project from folder".
-    project_cfg = ProjectConfig(
-        name=project_name,
-        path=str(target),
-        description=body.description,
+    # 8. Register as a project in the AUTHORITATIVE table, then refresh
+    # the config.json rollback snapshot. The cloned dir stays on disk
+    # even if registration fails - the user can retry via "open project
+    # from folder".
+    from contextlib import closing as _closing
+
+    from src.core.project_writes import (
+        ProjectNameConflict as _NameConflict,
+        ProjectRootConflict as _RootConflict,
+        create_project as _db_create_project,
     )
+
     try:
-        settings.save_project(project_cfg)
-    except ValueError as e:
-        # Defensive — step 5 already checked, but a race could squeeze in.
-        logger.warning("project_save_collision_after_clone", name=project_name, error=str(e))
-        raise HTTPException(status_code=409, detail=str(e))
-    except FileNotFoundError as e:
-        logger.error("auth_config_missing", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Configuration not found. Run setup_auth.py first.",
+        with _closing(projects_service.open_db_or_503(settings)) as _conn:
+            row = _db_create_project(
+                _conn,
+                name=project_name,
+                path=str(target),
+                description=body.description,
+            )
+    except (_NameConflict, _RootConflict) as e:
+        # Defensive - step 5 already checked the name, but a race could
+        # squeeze in, and only the database can catch a ROOT collision.
+        logger.warning(
+            "project_save_collision_after_clone", name=project_name, error=str(e)
         )
+        raise HTTPException(status_code=409, detail=str(e))
+
 
     logger.info(
         "project_cloned_from_github",
-        name=project_cfg.name,
-        path=project_cfg.path,
+        name=row["display_name"],
+        path=row["raw_path"],
         repo_url=body.repo_url,
     )
 
     return ProjectResponse(
-        name=project_cfg.name,
-        path=project_cfg.path,
-        description=project_cfg.description,
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
     )
 
 
@@ -1082,36 +1164,51 @@ async def check_auth_status():
     return SuccessResponse(message="Authenticated")
 
 
+def _config_path() -> Path:
+    """The config.json path the favorites routes read and write.
+
+    Description: favorites are read from the FILE rather than through
+      ``Settings.load_auth_config`` because the parsed model cannot tell
+      an absent ``common_slash_commands`` key from an empty one, and
+      those two states mean opposite things. See
+      ``src/core/slash_favorites.py``.
+    Inputs: none.
+    Output: Path - expanded path to config.json.
+    """
+    return Path(settings.auth_config_file).expanduser()
+
+
 @router.get("/config/common-commands", dependencies=[Depends(require_auth)])
 async def get_common_commands():
     """
-    Get list of common slash commands from config.
+    Get the user's starred slash commands, with short descriptions.
 
-    Returns:
-        List of common slash commands
+    Response shape:
+        ``commands``         - flat list of command strings. UNCHANGED
+                               from the original response, so any client
+                               written against the old shape keeps working.
+        ``command_details``  - parallel list of
+                               ``{"command", "description"}`` objects,
+                               added for the mobile chip labels.
+        ``defaulted``        - True when the user has never starred
+                               anything and these are the built-in
+                               defaults. Lets the UI say so instead of
+                               implying the user picked them.
+
+    Config entries may be bare strings (historical form) or objects with
+    a user-authored ``description``; see
+    ``src/core/slash_command_labels.py``.
 
     Raises:
         HTTPException: If config loading fails
     """
     try:
-        auth_config = settings.load_auth_config()
-
-        # Return common commands if defined, otherwise return default set
-        commands = getattr(auth_config, 'common_slash_commands', [
-            "/agents",
-            "/clear",
-            "/compact",
-            "/context",
-            "/hooks",
-            "/mcp",
-            "/resume",
-            "/rewind",
-            "/usage"
-        ])
-
-        logger.debug("common_commands_retrieved", count=len(commands))
-
-        return {"commands": commands}
+        body = slash_favorites.payload(_config_path())
+        logger.debug(
+            "common_commands_retrieved",
+            count=len(body["commands"]), defaulted=body["defaulted"],
+        )
+        return body
 
     except FileNotFoundError as e:
         logger.error("auth_config_missing", error=str(e))
@@ -1124,4 +1221,296 @@ async def get_common_commands():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve common commands: {str(e)}"
+        )
+
+
+@router.post("/config/common-commands/favorite", dependencies=[Depends(require_auth)])
+async def toggle_favorite_command(body: ToggleFavoriteCommandRequest):
+    """
+    Star or unstar one slash command, and return the new chip row.
+
+    Replaces the hand-picked ``common_slash_commands`` notion with a
+    user-chosen one: the SAME config key, written by a star in the
+    palette instead of by hand-editing JSON. Every existing entry is
+    preserved in its original form (bare string or
+    ``{"command", "description"}`` object); a newly starred command is
+    appended as a bare string, which is the historical form.
+
+    Starring the first time on a config that never declared the key
+    MATERIALIZES the built-in defaults first, so unstarring one of them
+    actually removes it rather than writing a list that still contains
+    it. An empty result is kept as an empty DECLARED list, never
+    re-seeded - the user unstarred everything on purpose.
+
+    Returns the same body as ``GET /config/common-commands`` so the
+    client repaints from the authoritative post-write state rather than
+    guessing what it just did.
+
+    Raises:
+        HTTPException: 400 on a blank command or past the favorites cap,
+            500 if config.json is missing or unreadable.
+    """
+    try:
+        path = _config_path()
+        raw, declared = slash_favorites.read_raw(path)
+        entries = slash_favorites.toggle(raw, declared, body.command, body.favorite)
+        slash_favorites.write(path, entries)
+        # The cache holds a parsed AuthConfig carrying the OLD list; any
+        # other reader of common_slash_commands would otherwise serve a
+        # stale row until the process restarts.
+        settings._auth_config_cache = None
+        result = slash_favorites.payload(path)
+        logger.info(
+            "common_command_favorite_toggled",
+            command=body.command, favorite=body.favorite,
+            count=len(result["commands"]),
+        )
+        return result
+    except slash_favorites.FavoritesError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error("auth_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except ValueError as e:
+        logger.error("common_command_favorite_config_invalid", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/config/slash-commands", dependencies=[Depends(require_auth)])
+async def get_slash_commands(project_path: Optional[str] = None):
+    """
+    Get the full slash-command palette: built-in/skill/workflow commands
+    scraped from the official docs at release time, merged with commands
+    and skills discovered on THIS machine at request time (user scope,
+    installed plugins, and - when `project_path` is given - that
+    project's own `.claude/commands` and `.claude/skills`).
+
+    A separate endpoint from `/config/common-commands` (Task 2's decision,
+    see project docs): common-commands is a small hand-curated "favorites"
+    row shown at the top of the palette and its response shape (a bare
+    list of command strings) stays exactly as-is for existing consumers.
+    This endpoint serves the full palette body underneath it, grouped for
+    direct rendering - a different shape for a different purpose, not a
+    breaking change to the old one.
+
+    Args:
+        project_path: absolute path to the currently active project's
+            working directory, used for project-scope discovery. Omit to
+            skip project-scope entirely (e.g. before any session is open).
+
+    Returns:
+        {"groups": [{"id", "label", "commands": [{"command", "args",
+        "description", "type", "alias_of"}, ...]}, ...]} in a fixed
+        group order - see `build_command_groups()`.
+
+    Raises:
+        HTTPException: on unexpected discovery failure. Missing/partial
+            data sources (no plugins installed, no project scope, a
+            stale/absent scraped JSON) are NOT errors - they just yield
+            fewer groups.
+    """
+    try:
+        groups = build_command_groups(project_path=project_path)
+        payload = command_groups_to_dict(groups)
+        logger.debug(
+            "slash_commands_retrieved",
+            group_count=len(payload),
+            command_count=sum(len(g["commands"]) for g in payload),
+            project_scoped=bool(project_path),
+        )
+        return {"groups": payload}
+    except Exception as e:
+        logger.error("slash_commands_retrieval_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve slash commands: {str(e)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Settings screen (feat/settings-screen) - the config write path.
+#
+# No config WRITE endpoint existed before this: every prior config.json
+# mutation (add_provider_model, update_project, ...) had its own narrow
+# route. This is the first general settings surface, so it gets its own
+# strict validation instead of accepting an arbitrary merge - see
+# ConfigSettingsUpdateRequest's docstring for the "extra=forbid" reasoning.
+# ---------------------------------------------------------------------------
+
+_AGENT_COMMAND_NO_FALLBACK_FIELDS = ("codex_command", "hermes_command", "openclaw_command")
+
+
+@router.get("/config/settings", dependencies=[Depends(require_auth)])
+async def get_settings():
+    """
+    Get the settings-screen payload: agent launch commands, notification
+    channel config (secrets masked), and the server bind address
+    (read-only - see ``Settings.get_settings_summary``).
+
+    Returns:
+        dict with keys ``agents``, ``notifications``, ``server``.
+
+    Raises:
+        HTTPException: 500 if config.json is missing or unreadable.
+    """
+    try:
+        return settings.get_settings_summary()
+    except FileNotFoundError as e:
+        logger.error("settings_summary_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except Exception as e:
+        logger.error("settings_summary_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve settings: {str(e)}"
+        )
+
+
+@router.patch("/config/settings", dependencies=[Depends(require_auth)])
+async def update_settings(body: ConfigSettingsUpdateRequest):
+    """
+    Apply a partial update to the ``agents`` and/or ``notifications``
+    blocks of config.json.
+
+    Only the fields the client actually SET are written (Pydantic's
+    ``model_fields_set``, not "is not None") - this is what makes
+    omitting a secret field mean "leave unchanged" while still allowing
+    an explicit empty-string write to clear it. Unknown top-level or
+    nested keys are already rejected by ``ConfigSettingsUpdateRequest``'s
+    ``extra="forbid"`` before this handler runs (FastAPI returns 422).
+
+    Args:
+        body: partial settings update. Both ``agents`` and
+            ``notifications`` are optional; a request with neither is
+            a harmless no-op that returns the unchanged summary.
+
+    Returns:
+        The full post-write settings summary (same shape as GET).
+
+    Raises:
+        HTTPException: 400 on a value that fails validation (e.g. a
+            blank codex/hermes/openclaw command - those have no
+            fallback, unlike claude_command), 500 on a config.json I/O
+            or JSON error.
+    """
+    agents_update: dict = {}
+    if body.agents is not None:
+        agents_update = body.agents.model_dump(
+            include=body.agents.model_fields_set
+        )
+        blank_required = [
+            field
+            for field in _AGENT_COMMAND_NO_FALLBACK_FIELDS
+            if field in agents_update and not (agents_update[field] or "").strip()
+        ]
+        if blank_required:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{', '.join(blank_required)} cannot be blank - only "
+                    "claude_command has a built-in fallback"
+                ),
+            )
+
+    notifications_update: dict = {}
+    if body.notifications is not None:
+        notifications_update = body.notifications.model_dump(
+            include=body.notifications.model_fields_set
+        )
+
+    # feat/settings-gui. Validate BEFORE anything reaches disk, and let
+    # each failure carry the message that names the specific problem -
+    # "development root does not exist: /x", not "invalid settings". A
+    # settings screen that accepts a bad value and breaks terminal
+    # spawning an hour later is worse than one that refuses now.
+    workspace_update: dict = {}
+    env_warnings: list = []
+    if body.workspace is not None:
+        raw_workspace = body.workspace.model_dump(
+            include=body.workspace.model_fields_set
+        )
+        try:
+            if "development_root" in raw_workspace:
+                workspace_update["development_root"] = validate_development_root(
+                    raw_workspace["development_root"]
+                )
+            if "default_shell" in raw_workspace:
+                workspace_update["default_shell"] = validate_shell(
+                    raw_workspace["default_shell"]
+                )
+            if "default_editor" in raw_workspace:
+                workspace_update["default_editor"] = validate_editor(
+                    raw_workspace["default_editor"]
+                )
+            if "env" in raw_workspace:
+                env_map, env_warnings = validate_env_map(raw_workspace["env"])
+                workspace_update["env"] = env_map
+        except WorkspaceValidationError as e:
+            # Never log the request body: an env VALUE can be a secret.
+            logger.info("workspace_settings_rejected", reason=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+
+    server_prefs_update: dict = {}
+    if body.server_prefs is not None:
+        raw_prefs = body.server_prefs.model_dump(
+            include=body.server_prefs.model_fields_set
+        )
+        try:
+            if "bind_host" in raw_prefs:
+                server_prefs_update["bind_host"] = validate_bind_host(
+                    raw_prefs["bind_host"]
+                )
+            if "tls_preferred" in raw_prefs:
+                server_prefs_update["tls_preferred"] = bool(
+                    raw_prefs["tls_preferred"]
+                )
+        except WorkspaceValidationError as e:
+            logger.info("server_prefs_rejected", reason=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(
+        "settings_update_requested",
+        agents_fields=sorted(agents_update.keys()),
+        # Never log notification VALUES (several are secrets) - only
+        # which field names changed.
+        notifications_fields=sorted(notifications_update.keys()),
+        # NAMES only, for the same reason - an env value can be a secret,
+        # and a structlog line is the last place one should land.
+        workspace_fields=sorted(workspace_update.keys()),
+        workspace_env_names=sorted((workspace_update.get("env") or {}).keys()),
+        server_prefs_fields=sorted(server_prefs_update.keys()),
+    )
+
+    try:
+        summary = settings.update_settings_config(
+            agents_update=agents_update or None,
+            notifications_update=notifications_update or None,
+            workspace_update=workspace_update or None,
+            server_prefs_update=server_prefs_update or None,
+        )
+        # Warnings ride back on the successful response rather than
+        # becoming a fourth outcome. The write HAPPENED; the user needs to
+        # see which names the policy flagged, not be told it failed.
+        summary["workspace_warnings"] = env_warnings
+        return summary
+    except FileNotFoundError as e:
+        logger.error("settings_update_config_missing", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration not found. Run setup_auth.py first."
+        )
+    except ValueError as e:
+        logger.error("settings_update_validation_error", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("settings_update_error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update settings: {str(e)}"
         )

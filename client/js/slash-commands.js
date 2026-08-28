@@ -1,141 +1,165 @@
 /**
  * Slash Commands Module
- * Handles the slash command quick-access modal
+ *
+ * Handles the slash command quick-access modal. The command LIST is no
+ * longer hand-written here (see git history for the retired
+ * `ALL_SLASH_COMMANDS` array) - it comes from the server's
+ * `GET /config/slash-commands`, which merges the release-time scraped
+ * official command list with runtime discovery of this user's own
+ * commands/skills, installed plugins, and (when a project is open) that
+ * project's own commands/skills. See `src/core/slash_command_discovery.py`
+ * and `scripts/scrape-slash-commands.py` for where the data comes from.
+ *
+ * Open/close behavior (button, lazy modal creation, overlay-click-to-close,
+ * Escape-to-close) is UNCHANGED from before this module was rewritten.
+ * What's new: groups render from server data, and once the modal is open,
+ * typing in the filter input live-filters the list (command name +
+ * description), with arrow-key/Enter navigation over the visible results.
  */
 
 console.log('[SlashCommands Module] Loading...');
 
-// Complete list of Claude Code slash commands with descriptions
-const ALL_SLASH_COMMANDS = [
-    // Session & Context
-    { command: '/clear', category: 'Session & Context', description: 'Clear history and free context' },
-    { command: '/compact', category: 'Session & Context', description: 'Compact conversation, optionally focused' },
-    { command: '/context', category: 'Session & Context', description: 'Visualize context usage as a grid' },
-    { command: '/rewind', category: 'Session & Context', description: 'Roll conversation/code back to a prior point' },
-    { command: '/resume', category: 'Session & Context', description: 'Resume by ID/name or open picker' },
-    { command: '/branch', category: 'Session & Context', description: 'Branch the conversation at this point' },
-    { command: '/rename', category: 'Session & Context', description: 'Rename the session' },
-    { command: '/export', category: 'Session & Context', description: 'Export conversation as plain text' },
-    { command: '/copy', category: 'Session & Context', description: 'Copy the Nth-latest assistant response to clipboard' },
-    { command: '/btw', category: 'Session & Context', description: 'Ask a side question without polluting the main thread' },
-    { command: '/exit', category: 'Session & Context', description: 'Exit Claude Code' },
-
-    // Models & Effort
-    { command: '/model', category: 'Models & Effort', description: 'Select/change model' },
-    { command: '/effort', category: 'Models & Effort', description: 'Set reasoning effort (low / medium / high / max / auto)' },
-    { command: '/fast', category: 'Models & Effort', description: 'Toggle fast mode' },
-
-    // Planning & Execution
-    { command: '/plan', category: 'Planning & Execution', description: 'Enter plan mode, optionally with a starter task' },
-    { command: '/ultraplan', category: 'Planning & Execution', description: 'Draft a plan in an ultraplan session, review, then execute' },
-    { command: '/loop', category: 'Planning & Execution', description: 'Run a prompt on a schedule while session is open' },
-    { command: '/schedule', category: 'Planning & Execution', description: 'Create/manage routines' },
-    { command: '/batch', category: 'Planning & Execution', description: 'Decompose large changes into units and spawn background agents per unit' },
-    { command: '/simplify', category: 'Planning & Execution', description: 'Parallel review agents scan recent changes and apply fixes' },
-    { command: '/debug', category: 'Planning & Execution', description: 'Enable debug logging and troubleshoot' },
-    { command: '/security-review', category: 'Planning & Execution', description: 'Scan the branch diff for vulnerabilities' },
-    { command: '/tasks', category: 'Planning & Execution', description: 'Manage background tasks' },
-    { command: '/diff', category: 'Planning & Execution', description: 'Interactive diff viewer for uncommitted and per-turn changes' },
-
-    // Files, Tools & Permissions
-    { command: '/add-dir', category: 'Files, Tools & Permissions', description: 'Add a working directory for file access' },
-    { command: '/permissions', category: 'Files, Tools & Permissions', description: 'Manage allow/ask/deny rules' },
-    { command: '/sandbox', category: 'Files, Tools & Permissions', description: 'Toggle sandbox mode (supported platforms)' },
-    { command: '/hooks', category: 'Files, Tools & Permissions', description: 'View hook configurations' },
-    { command: '/agents', category: 'Files, Tools & Permissions', description: 'Manage sub-agent configs' },
-    { command: '/skills', category: 'Files, Tools & Permissions', description: 'List skills' },
-    { command: '/plugin', category: 'Files, Tools & Permissions', description: 'Manage plugins' },
-    { command: '/reload-plugins', category: 'Files, Tools & Permissions', description: 'Hot-reload plugins' },
-    { command: '/mcp', category: 'Files, Tools & Permissions', description: 'Manage MCP servers and OAuth' },
-
-    // Configuration & UI
-    { command: '/config', category: 'Configuration & UI', description: 'Open Settings' },
-    { command: '/status', category: 'Configuration & UI', description: 'Settings > Status tab (works mid-response)' },
-    { command: '/theme', category: 'Configuration & UI', description: 'Change color theme' },
-    { command: '/color', category: 'Configuration & UI', description: 'Set prompt bar color' },
-    { command: '/statusline', category: 'Configuration & UI', description: 'Configure status line' },
-    { command: '/keybindings', category: 'Configuration & UI', description: 'Edit keybindings config' },
-    { command: '/terminal-setup', category: 'Configuration & UI', description: 'Configure Shift+Enter and other terminal shortcuts' },
-    { command: '/memory', category: 'Configuration & UI', description: 'Edit CLAUDE.md files, manage auto-memory' },
-    { command: '/init', category: 'Configuration & UI', description: 'Initialize project with a CLAUDE.md' },
-    { command: '/ide', category: 'Configuration & UI', description: 'IDE integrations' },
-    { command: '/chrome', category: 'Configuration & UI', description: 'Claude in Chrome settings' },
-
-    // Integrations & Remote
-    { command: '/install-github-app', category: 'Integrations & Remote', description: 'Set up Claude GitHub Actions' },
-    { command: '/install-slack-app', category: 'Integrations & Remote', description: 'Install Claude Slack app' },
-    { command: '/web-setup', category: 'Integrations & Remote', description: 'Connect GitHub for Claude Code on the web' },
-    { command: '/remote-control', category: 'Integrations & Remote', description: 'Expose session for remote control from claude.ai' },
-    { command: '/remote-env', category: 'Integrations & Remote', description: 'Configure default remote env for --remote web sessions' },
-    { command: '/teleport', category: 'Integrations & Remote', description: 'Pull a web session into the current terminal' },
-    { command: '/autofix-pr', category: 'Integrations & Remote', description: 'Spawn a web session that auto-fixes PR CI failures' },
-    { command: '/desktop', category: 'Integrations & Remote', description: 'Continue session in desktop app (macOS/Windows)' },
-    { command: '/mobile', category: 'Integrations & Remote', description: 'QR code for mobile app' },
-    { command: '/voice', category: 'Integrations & Remote', description: 'Toggle push-to-talk dictation' },
-
-    // Enterprise Auth
-    { command: '/setup-bedrock', category: 'Enterprise Auth', description: 'Amazon Bedrock config' },
-    { command: '/setup-vertex', category: 'Enterprise Auth', description: 'Google Vertex AI config' },
-
-    // Account, Plan & Billing
-    { command: '/login', category: 'Account, Plan & Billing', description: 'Sign in / switch accounts' },
-    { command: '/logout', category: 'Account, Plan & Billing', description: 'Sign out' },
-    { command: '/upgrade', category: 'Account, Plan & Billing', description: 'Upgrade plan (Pro/Max only)' },
-    { command: '/usage', category: 'Account, Plan & Billing', description: 'Plan limits and rate-limit status' },
-    { command: '/cost', category: 'Account, Plan & Billing', description: 'Token usage stats' },
-    { command: '/extra-usage', category: 'Account, Plan & Billing', description: 'Configure extra usage past rate limits' },
-    { command: '/privacy-settings', category: 'Account, Plan & Billing', description: 'Privacy settings (Pro/Max only)' },
-    { command: '/passes', category: 'Account, Plan & Billing', description: 'Share a free week with friends (if eligible)' },
-    { command: '/stats', category: 'Account, Plan & Billing', description: 'Daily usage, streaks, model preferences' },
-    { command: '/insights', category: 'Account, Plan & Billing', description: 'Report on project areas and interaction patterns' },
-    { command: '/team-onboarding', category: 'Account, Plan & Billing', description: 'Generate an onboarding guide from your last 30 days' },
-
-    // Help & Reference
-    { command: '/help', category: 'Help & Reference', description: 'Get command assistance' },
-    { command: '/doctor', category: 'Help & Reference', description: 'Diagnose install/settings; press f to let Claude fix issues' },
-    { command: '/release-notes', category: 'Help & Reference', description: 'Interactive changelog picker' },
-    { command: '/powerup', category: 'Help & Reference', description: 'Interactive feature lessons' },
-    { command: '/claude-api', category: 'Help & Reference', description: 'Load Claude API reference material' },
-    { command: '/feedback', category: 'Help & Reference', description: 'Report issues or feedback' },
-    { command: '/stickers', category: 'Help & Reference', description: 'Request stickers' }
-];
-
 class SlashCommandsModal {
     constructor() {
         this.commonCommands = [];
+        // Parallel to commonCommands: [{command, description}] with the
+        // SHORT chip description. See _loadCommonCommands().
+        this.commonCommandDetails = [];
+        // True while the row shows the built-in defaults because the user
+        // has never starred anything. See _loadCommonCommands.
+        this.commonDefaulted = false;
+        this.groups = [];
+        // Flat command -> record lookup built from `this.groups`, used
+        // for the common-commands button tooltips and for resolving a
+        // bare command string back to its full record.
+        this.commandIndex = new Map();
         this.modal = null;
         this.button = null;
         this.isOpen = false;
         this.onCommandSelect = null;
+        this.projectPath = null;
+
+        // Live-filter + keyboard-nav state (Task 4) - see
+        // client/js/slash-command-filter.js. Owns the DOM indexing,
+        // filtering, and arrow-key bookkeeping over the rendered list.
+        this.filter = new window.SlashCommandFilter();
     }
 
     /**
      * Initialize the slash commands modal
-     * Note: Does NOT create the modal - that happens lazily on first open()
+     *
+     * Description: fetches the common-commands "favorites" row and the
+     *   full grouped command palette from the server, then creates the
+     *   floating button. Does NOT create the modal itself - that still
+     *   happens lazily on first open() (unchanged from before).
+     * Inputs:
+     *   onCommandSelect (function(string): void) - called with the bare
+     *     command string (e.g. "/clear") when the user picks one.
+     *   projectPath (string|null) - absolute path of the active project's
+     *     working directory, forwarded to the server for project-scope
+     *     command/skill discovery. Optional; omit when no project is open.
+     * Output: Promise<void>.
      */
-    async init(onCommandSelect) {
+    async init(onCommandSelect, projectPath = null) {
         console.log('[SlashCommands] Initializing (NOT creating modal yet)');
         this.onCommandSelect = onCommandSelect;
+        this.projectPath = projectPath || null;
 
-        // Fetch common commands from API
+        await Promise.all([
+            this._loadCommonCommands(),
+            this._loadGroups(),
+        ]);
+
+        console.log('[SlashCommands] Initialization complete (modal will be created on demand)');
+        this.createButton();
+    }
+
+    /**
+     * Fetch the common-commands "favorites" row. Falls back to a fixed
+     * default set on any failure so the row is never empty.
+     * Inputs: none. Output: Promise<void> (sets this.commonCommands).
+     */
+    async _loadCommonCommands() {
         try {
             const response = await window.API.getCommonCommands();
             this.commonCommands = response.commands || [];
+            // `command_details` is the newer parallel array carrying the
+            // short description for each chip. Servers predating it send
+            // only `commands`, so fall back to bare entries rather than
+            // rendering nothing.
+            this.commonCommandDetails = Array.isArray(response.command_details)
+                ? response.command_details
+                : this.commonCommands.map(c => ({ command: c, description: '' }));
+            // `defaulted` distinguishes "never starred anything, these
+            // are the built-ins" from "these are the user's picks", so
+            // the row can say which it is. A server predating the field
+            // sends neither, which reads as "the user's picks" - the
+            // conservative answer, since it never claims authorship the
+            // user did not have.
+            this.commonDefaulted = response.defaulted === true;
             console.log('[SlashCommands] Fetched', this.commonCommands.length, 'common commands');
         } catch (error) {
             console.error('[SlashCommands] Failed to fetch common commands:', error);
-            // Fallback to defaults
             this.commonCommands = [
                 '/agents', '/clear', '/compact', '/context',
                 '/hooks', '/mcp', '/resume', '/rewind', '/usage'
             ];
+            this.commonCommandDetails = this.commonCommands.map(
+                c => ({ command: c, description: '' })
+            );
+            this.commonDefaulted = true;
         }
+    }
 
-        // Modal will be created lazily on first open() call
-        console.log('[SlashCommands] Initialization complete (modal will be created on demand)');
+    /**
+     * Apply a post-write favorites payload: repaint the chip row and
+     * every star in the list below, then re-wire both.
+     *
+     * Description: repaints from the AUTHORITATIVE server response rather
+     *   than mutating local state to match what the click intended, so a
+     *   partially-applied write can never leave the UI claiming a star
+     *   that is not on disk. Only the two star-bearing regions are
+     *   rebuilt; the filter's index is untouched because it holds
+     *   references to `.command-item` elements, which are not replaced.
+     * Inputs: payload (object) - `{commands, command_details, defaulted}`.
+     * Output: void.
+     */
+    _applyFavorites(payload) {
+        this.commonCommands = payload.commands || [];
+        this.commonCommandDetails = Array.isArray(payload.command_details)
+            ? payload.command_details
+            : [];
+        this.commonDefaulted = payload.defaulted === true;
+        window.SlashFavorites.repaint(this.modal, {
+            chipHtml: () => this.renderCommonCommands(),
+            details: this.commonCommandDetails,
+            onSelect: (command) => this.selectCommand(command),
+            onChange: (p) => this._applyFavorites(p),
+        });
+    }
 
-        // Create the floating button
-        this.createButton();
+    /**
+     * Fetch the full grouped command palette and rebuild the flat lookup
+     * index used for tooltips and filtering. Falls back to an empty group
+     * list on failure - the modal still opens, just with an explanatory
+     * empty state (see renderAllCommands).
+     * Inputs: none. Output: Promise<void> (sets this.groups, this.commandIndex).
+     */
+    async _loadGroups() {
+        try {
+            const response = await window.API.getSlashCommands(this.projectPath);
+            this.groups = Array.isArray(response.groups) ? response.groups : [];
+            console.log('[SlashCommands] Fetched', this.groups.length, 'command groups');
+        } catch (error) {
+            console.error('[SlashCommands] Failed to fetch slash command groups:', error);
+            this.groups = [];
+        }
+        this.commandIndex = new Map();
+        for (const group of this.groups) {
+            for (const cmd of (group.commands || [])) {
+                this.commandIndex.set(cmd.command, cmd);
+            }
+        }
     }
 
     /**
@@ -152,6 +176,14 @@ class SlashCommandsModal {
         this.button.className = 'slash-commands-btn';
         this.button.setAttribute('aria-label', 'Open Slash Commands');
         this.button.setAttribute('title', 'Open Slash Commands');
+        // AUTHENTICATED-ONLY. show() below sets an inline
+        // `display: flex`, which used to survive a logout because
+        // App.showAuth() named the controls it hid and this one was not
+        // on that list - so the slash button sat on the LOGIN screen.
+        // This token puts it under the fail-closed rule in
+        // client/css/screen-chrome.css instead, which is `!important`
+        // precisely so it beats that inline style.
+        this.button.setAttribute('data-auth-only', '');
         this.button.style.display = 'none'; // Hidden by default
 
         // Set initial icon (slash)
@@ -233,6 +265,14 @@ class SlashCommandsModal {
                             </div>
                             <div class="all-commands-section">
                                 <h3>all commands</h3>
+                                <input
+                                    type="text"
+                                    id="slash-command-filter"
+                                    class="command-filter-input"
+                                    placeholder="type to filter..."
+                                    autocomplete="off"
+                                    aria-label="Filter commands"
+                                />
                                 <div class="all-commands-list" id="all-commands-list">
                                     ${this.renderAllCommands()}
                                 </div>
@@ -254,62 +294,126 @@ class SlashCommandsModal {
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         this.modal = document.getElementById('slash-commands-modal');
         console.log('[SlashCommands] Modal added to DOM:', this.modal ? 'success' : 'FAILED');
+        this.filter.index(this.modal);
     }
 
     /**
-     * Render common commands as buttons
+     * Description: render the common-commands "favorites" row as chips.
+     *   Each chip shows the command name plus a SHORT description on a
+     *   second line. The description is the whole point of the change:
+     *   the row used to carry the full scraped description in a `title`
+     *   attribute only, which is invisible on a phone (no hover) and far
+     *   too long to render inline. The short text comes from the server's
+     *   `command_details` (see src/core/slash_command_labels.py), which
+     *   caps length so the chip stays one line and the row stays above
+     *   the fold. The long description is still available on hover via
+     *   `title` for desktop users.
+     * Inputs: none (reads this.commonCommandDetails).
+     * Output: string - HTML for the chip grid.
      */
     renderCommonCommands() {
-        console.log('[SlashCommands] renderCommonCommands() called with', this.commonCommands.length, 'commands:', this.commonCommands);
+        const details = this.commonCommandDetails || [];
+        console.log('[SlashCommands] renderCommonCommands() called with', details.length, 'commands');
+        // Markup lives in client/js/slash-favorites.js: each chip now
+        // carries its own star, so unstarring happens where the chip is
+        // rather than by hunting the command down in the list below.
+        return window.SlashFavorites.renderChips(
+            details,
+            this.commonDefaulted,
+            (cmd) => {
+                const info = this.commandIndex.get(cmd);
+                return (info && info.description) || '';
+            }
+        );
+    }
 
-        if (!this.commonCommands || this.commonCommands.length === 0) {
-            console.warn('[SlashCommands] No common commands to render!');
-            return '<div style="color: #858585; padding: 12px; text-align: center;">No common commands configured</div>';
+    /**
+     * Render all commands grouped by the server-derived groups (Task 3).
+     * Each group becomes a `.command-category`.
+     *
+     * Descriptions render SHORTENED (window.CommandDescription), because a
+     * 240-character scraped description is seven wrapped lines on a phone
+     * and 145 of them make the list run forever. The FULL text is the
+     * value and stays on the row as `data-description`: the live filter
+     * searches that (see client/js/slash-command-filter.js), and the
+     * `.command-more` button swaps the short text for it in place. Nothing
+     * reads the rendered string as data.
+     * Inputs: none (reads this.groups). Output: string - HTML.
+     */
+    renderAllCommands() {
+        if (!this.groups || this.groups.length === 0) {
+            return '<div style="color: #858585; padding: 12px; text-align: center;">no commands available</div>';
         }
 
-        return this.commonCommands.map(cmd => {
-            const cmdInfo = ALL_SLASH_COMMANDS.find(c => c.command === cmd);
-            const description = cmdInfo ? cmdInfo.description : '';
-            console.log('[SlashCommands] Rendering button for:', cmd, 'description:', description);
+        const starred = window.SlashFavorites.favoriteSet(this.commonCommandDetails);
+        return this.groups.map(group => {
+            const commands = group.commands || [];
+            if (commands.length === 0) return '';
             return `
-                <button class="command-button" data-command="${cmd}" title="${description}">
-                    ${cmd}
-                </button>
+                <div class="command-category" data-group-id="${this._escapeHtml(group.id)}">
+                    <h4 class="category-title">${this._escapeHtml(group.label)}</h4>
+                    ${commands.map(cmd => this._renderCommandItem(cmd, starred.has(cmd.command))).join('')}
+                </div>
             `;
         }).join('');
     }
 
     /**
-     * Render all commands grouped by category
+     * Render one `.command-item` row.
+     * Inputs: cmd (object) - {command, args, description} from the server.
+     * Output: string - HTML for one row.
      */
-    renderAllCommands() {
-        const categories = {};
+    _renderCommandItem(cmd, starred) {
+        const display = cmd.args ? `${cmd.command} ${cmd.args}` : cmd.command;
+        const full = cmd.description || '';
+        const short = window.CommandDescription.shorten(full);
+        const more = window.CommandDescription.isShortened(full)
+            ? '<button type="button" class="command-more" aria-expanded="false">more</button>'
+            : '';
+        // `data-description` still carries the FULL text and is still the
+        // only thing the live filter reads (slash-command-filter.js). The
+        // star is a sibling control and changes nothing about that.
+        return `
+            <div class="command-item" data-command="${this._escapeHtml(cmd.command)}" data-description="${this._escapeHtml(full)}">
+                ${window.SlashFavorites.starButton(cmd.command, !!starred)}
+                <span class="command-name">${this._escapeHtml(display)}</span>
+                <span class="command-description">${this._escapeHtml(short)}</span>
+                ${more}
+            </div>
+        `;
+    }
 
-        // Group commands by category
-        ALL_SLASH_COMMANDS.forEach(cmd => {
-            if (!categories[cmd.category]) {
-                categories[cmd.category] = [];
-            }
-            categories[cmd.category].push(cmd);
-        });
+    /**
+     * Swap one row's description between its shortened display form and
+     * the full text held in `data-description`. The row's canonical value
+     * is never touched, so the filter's index stays correct either way.
+     * Inputs: btn (Element) - the `.command-more` button that was tapped.
+     * Output: void.
+     */
+    _toggleFullDescription(btn) {
+        const item = btn.closest('.command-item');
+        if (!item) return;
+        const descEl = item.querySelector('.command-description');
+        if (!descEl) return;
+        const full = item.dataset.description || '';
+        const expanded = btn.getAttribute('aria-expanded') === 'true';
+        descEl.textContent = expanded ? window.CommandDescription.shorten(full) : full;
+        btn.setAttribute('aria-expanded', String(!expanded));
+        btn.textContent = expanded ? 'more' : 'less';
+    }
 
-        // Render each category
-        let html = '';
-        for (const [category, commands] of Object.entries(categories)) {
-            html += `
-                <div class="command-category">
-                    <h4 class="category-title">${category}</h4>
-                    ${commands.map(cmd => `
-                        <div class="command-item" data-command="${cmd.command}">
-                            <span class="command-name">${cmd.command}</span>
-                            <span class="command-description">${cmd.description}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-
-        return html;
+    /**
+     * HTML-escape helper - command descriptions/labels come from scraped
+     * docs and user-authored files, both effectively untrusted input for
+     * innerHTML purposes.
+     */
+    _escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     /**
@@ -324,10 +428,16 @@ class SlashCommandsModal {
             closeBtn.addEventListener('click', () => this.close());
         }
 
-        // Overlay click to close
+        // Overlay click to close.
+        //
+        // Routed through DismissGuard.onOverlayDismiss instead of a bare
+        // `click -> close()`. The bare form fired for ANY click that
+        // bubbled up, including clicks on the filter input three levels
+        // down, so clicking the search box closed the whole menu and it
+        // could never be typed into. See client/js/dismiss-guard.js.
         const overlay = this.modal.querySelector('.modal-overlay');
         if (overlay) {
-            overlay.addEventListener('click', () => this.close());
+            window.DismissGuard.onOverlayDismiss(overlay, () => this.close());
         }
 
         // Common command buttons
@@ -339,7 +449,7 @@ class SlashCommandsModal {
             });
         });
 
-        // All commands items
+        // All commands items - click-to-select path, unchanged.
         const commandItems = this.modal.querySelectorAll('.command-item');
         commandItems.forEach(item => {
             item.addEventListener('click', () => {
@@ -347,6 +457,46 @@ class SlashCommandsModal {
                 this.selectCommand(command);
             });
         });
+
+        // Star toggles, on the chips AND on every list row. Wired after
+        // the row/chip click handlers above precisely so its own
+        // stopPropagation runs first; see slash-favorites.js.
+        window.SlashFavorites.wire(this.modal, (payload) => this._applyFavorites(payload));
+
+        // "more" reveals the full description in place. stopPropagation is
+        // required: the button sits INSIDE .command-item, whose own click
+        // handler above selects the command and closes the modal, so
+        // without it asking to read more would run the command instead.
+        this.modal.querySelectorAll('.command-more').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleFullDescription(btn);
+            });
+        });
+
+        // Live filter (Task 4) - typing filters the list; arrow keys and
+        // Enter navigate/select the visible results. Escape is NOT
+        // handled here - it bubbles to the document-level listener below,
+        // which already closes the modal regardless of focus.
+        const filterInput = this.modal.querySelector('#slash-command-filter');
+        if (filterInput) {
+            filterInput.addEventListener('input', () => {
+                this.filter.apply(filterInput.value);
+            });
+            filterInput.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.filter.moveActive(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    this.filter.moveActive(-1);
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const target = this.filter.getEnterTarget();
+                    if (target) this.selectCommand(target.command);
+                }
+            });
+        }
 
         // Escape key to close
         document.addEventListener('keydown', (e) => {
@@ -374,6 +524,12 @@ class SlashCommandsModal {
             console.error('[SlashCommands] Failed to create modal!');
             return;
         }
+
+        // Reset any filter left over from a previous open, so reopening
+        // always starts showing the full list.
+        const filterInput = this.modal.querySelector('#slash-command-filter');
+        if (filterInput) filterInput.value = '';
+        this.filter.apply('');
 
         console.log('[SlashCommands] Adding .active class to show modal');
         this.modal.classList.add('active');

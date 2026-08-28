@@ -1,4 +1,5 @@
 {
+  "_comment_default_working_dir": "DEFAULT_WORKING_DIR is NOT here on purpose. Settings reads it from .env only (src/config.py), so a copy in this file would be read by nothing and would disagree with the real value the moment either changed. Copy .env.example to .env and set it there. See README, Path B.",
   "jwt_expiry_minutes": 30,
   "template_path": "claude-template",
   "session": {
@@ -36,6 +37,7 @@
     "sweep_interval_seconds": 3600,
     "max_size_mb": 10
   },
+  "_comment_common_slash_commands": "Bare strings still work exactly as before; their short descriptions come from the built-in table in src/core/slash_command_labels.py. Use the object form only to override the wording or to describe a command the table does not know. Keep descriptions under 28 characters - they render on the chip on a phone.",
   "common_slash_commands": [
     "/clear",
     "/compact",
@@ -46,29 +48,23 @@
     "/effort",
     "/plan",
     "/tasks",
-    "/diff"
+    {
+      "command": "/diff",
+      "description": "review changes"
+    },
+    "/login"
   ],
-  "projects": [
-    {
-      "name": "🔥 AGI-SaaS Disruptor",
-      "path": "~/projects/agi-saas",
-      "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
-    },
-    {
-      "name": "⚡ NeuralMesh3000",
-      "path": "~/projects/neural-mesh",
-      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression",
-      "agent_type": "hermes"
-    },
-    {
-      "name": "⚛️ ReactHook Nirvana",
-      "path": "~/projects/react-nirvana",
-      "description": "Component library that transcends the virtual DOM and enters the astral plane"
-    },
-    {
-      "name": "☁️ Cloude Code",
-      "path": "~/projects/cloude-code",
-      "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
-    }
-  ]
+  "_comment_projects_retired": "PROJECTS ARE NOT A CONFIG CONCERN ANY MORE. They live in cloude.db's projects table and nowhere else. This file used to carry a projects array plus a comment documenting its shape; keeping that documentation now would be a stale doc, which is worse than no doc because a reader would act on it and then wonder why nothing appeared. Add projects from the app (the + control on the launchpad). An upgrading install that still has a projects key loses nothing: the app imports every entry the database has never seen, re-reads the table to prove it covers the file, and only then removes the key.",
+  "_comment_workspace": "Global settings for what a NEW terminal is born with. Edited from the web app's settings screen (gear icon -> workspace), not by hand: the running server caches this file and only re-reads it when it writes it itself, so a hand edit needs a restart. Every value defaults to empty, which means 'not configured' - development_root reaches terminals as CLOUDE_DEV_ROOT, default_shell as SHELL, and env is injected verbatim. Names beginning CLOUDECODE_ are reserved by the app and refused.",
+  "workspace": {
+    "development_root": "",
+    "default_shell": "",
+    "default_editor": "",
+    "env": {}
+  },
+  "_comment_server_prefs": "Bind address and TLS preference, remembered across restarts so they do not have to be re-picked from the menu bar. bind_host is a PREFERENCE: the address actually bound is resolved by src/core/setup_state.py, which pins loopback until an authenticator has been paired, and uvicorn binds once so a change applies on the next restart. tls_preferred is recorded and NOT in force - this build serves plain HTTP and has no TLS terminator.",
+  "server_prefs": {
+    "bind_host": "",
+    "tls_preferred": false
+  }
 }

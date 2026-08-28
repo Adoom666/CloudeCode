@@ -1,5 +1,16 @@
 /*
- * Toast notifications (v0.7.0 Part 2)
+ * Toast notifications
+ * ------------------------------------------------------------------
+ * STACKING POLICY lives in client/js/toast.js; this file paints what it
+ * decides. Three things here exist only because of that policy:
+ *   .toast__count      the "x3" badge on a coalesced card
+ *   .toast-overflow    the single row standing in for everything the
+ *                      visible cap is holding back. It is a BUTTON, and
+ *                      it must never read as decoration - it is the only
+ *                      on-screen evidence that suppressed toasts exist.
+ *   [data-severity]    tier styling. 3 (PermissionRequest) is blocking
+ *                      and is painted as such; it is also cap-exempt in
+ *                      the JS, so it can never be behind the overflow row.
  * ------------------------------------------------------------------
  * Per-toast accent border colored from the session's project theme.
  * The server bakes a hex color onto each Toast.color field; the client
@@ -12,12 +23,33 @@
  */
 
 .toast-container {
-  /* Pinned top-right above terminal but below modals. Site modal z-index
-     is in the 1000-range; pick 900 so toasts sit just under them. */
+  /* ABOVE THE HEADER, BELOW MODALS - and 900 was neither.
+   *
+   * The old value put toasts UNDER `.header` (z-index 1000), and the two
+   * overlap: the header is `--header-h` tall (80px measured at desktop)
+   * while this container started at a hardcoded 60px, so the header
+   * painted over the top 20px of every toast. That strip is exactly
+   * where `.toast__dismiss` sits, which made the close button
+   * unclickable - `elementFromPoint` on its own centre returned the
+   * header, not the button. A notification the user cannot dismiss is
+   * worse than no notification.
+   *
+   * The original comment reasoned "site modals are in the 1000-range, so
+   * pick 900 to sit under them". The premise was out of date: modals
+   * here are 9998/9999, and 1000 is CHROME. A toast must outrank chrome
+   * and yield to modals, which is what 1100 does.
+   *
+   * `top` STAYS 60px and is deliberately NOT derived from --header-h.
+   * That was tried: the token resolves to 62px here while the rendered
+   * header measures 80px, because the home view carries a subheader row
+   * the token does not account for. Deriving from it would swap one
+   * wrong number for another that merely looks principled. Once the
+   * toast paints ABOVE the header the overlap is harmless, which is why
+   * the z-index is the fix and the offset is not. */
   position: fixed;
-  top: 60px; /* clear of the header bar */
+  top: 60px;
   right: 16px;
-  z-index: 900;
+  z-index: 1100;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -52,13 +84,13 @@
   transition: transform 200ms ease-out, opacity 200ms ease-out;
 }
 
-/* Entry animation — start off-screen right, slide to rest. */
+/* Entry animation - start off-screen right, slide to rest. */
 .toast--entering {
   transform: translateX(110%);
   opacity: 0;
 }
 
-/* Exit animation — fade + slide. */
+/* Exit animation - fade + slide. */
 .toast--dismissing {
   transform: translateX(20%);
   opacity: 0;
@@ -68,6 +100,25 @@
   font-weight: bold;
   margin: 0 0 4px 0;
   color: var(--toast-accent);
+}
+
+/* WHICH SESSION THIS TOAST IS ABOUT.
+   Quieter than the title and quieter than the body: it is context, not
+   the message. It still has to be a legible box - a name nobody can see
+   is not a name - so it gets a real font-size and its own line rather
+   than being tucked into the title's row. */
+.toast__session {
+  margin: 0 0 4px 0;
+  color: var(--color-fg-muted, #858585);
+  font-size: 11px;
+  opacity: 0.85;
+  word-break: break-word;
+}
+
+/* The could-not-name case reads as an admission rather than as a name.
+   Italic is the only cue, deliberately: the text already says it. */
+.toast__session[data-unknown="1"] {
+  font-style: italic;
 }
 
 .toast__body {
@@ -86,6 +137,13 @@
   border: none;
   color: var(--color-fg-muted, #858585);
   cursor: pointer;
+  /* styles.css pins every button to a var(--control-size) square, which
+     turned this 2px/6px glyph into a 36px box on desktop and a 44px one
+     at the 768px breakpoint - wider than the toast is tall, overhanging
+     the title row and painting the glyph off-centre. Size it from its
+     own padding instead. */
+  width: auto;
+  height: auto;
   padding: 2px 6px;
   font-size: 16px;
   line-height: 1;
@@ -113,6 +171,102 @@
   color: var(--color-info, #4fc1ff);
 }
 
+/* ------------------------------------------------------------------
+   Coalesced-repeat count badge.
+   A separate ELEMENT, not text appended to the title, for two reasons:
+   it needs its own colour and shape, and a title that literally
+   contained "x3" would be indistinguishable from this at the
+   .textContent level - which is precisely how a `~~claude` badge
+   shipped through a green suite in this codebase.
+   ------------------------------------------------------------------ */
+.toast__title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.toast__title-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast__count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 1;
+  padding: 2px 6px;
+  /* radius-pill, not radius-full: several themes zero every radius token
+     on purpose, and this is a rounded rectangle, not a circle, so it
+     degrades to a hard-edged chip there rather than to a broken dot. */
+  border-radius: var(--radius-pill, 50px);
+  background: var(--toast-accent);
+  /* The badge sits ON the accent, so it needs the page background as its
+     ink rather than the foreground colour. */
+  color: var(--color-bg-card, #252526);
+}
+
+/* ------------------------------------------------------------------
+   Severity tiers.
+   3 = PermissionRequest: blocking, user must answer. 2 = Notification.
+   1 = Stop, the chatty one. Only the top tier gets extra weight; a
+   fleet of equally-shouty cards is the problem, not the fix.
+   ------------------------------------------------------------------ */
+.toast[data-severity="3"] {
+  border-color: var(--color-warning-border, rgba(251, 191, 36, 0.35));
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5)),
+              0 0 0 1px var(--color-warning-border, rgba(251, 191, 36, 0.35));
+}
+
+/* ------------------------------------------------------------------
+   Overflow row. The cap's receipt.
+   ------------------------------------------------------------------ */
+.toast-overflow {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* styles.css pins every button to a var(--control-size) square; this
+     is a full-width row, so it sizes from its own padding - the same
+     escape .toast__dismiss needs, for the same reason. */
+  width: 100%;
+  height: auto;
+  padding: 7px 12px;
+  background: var(--color-bg-card, #252526);
+  color: var(--color-fg-muted, #858585);
+  border: 1px dashed var(--color-border, #3e3e42);
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5));
+  font-family: var(--font-mono, 'SF Mono', monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: center;
+}
+
+.toast-overflow:hover {
+  background: var(--color-bg-hover, #323235);
+  color: var(--color-fg, #d4d4d4);
+}
+
+.toast-overflow__count {
+  font-weight: bold;
+  color: var(--color-fg, #d4d4d4);
+}
+
+/* What is in there, in words. A count alone tells the user something is
+   hidden but not whether it matters. */
+.toast-overflow__worst {
+  color: var(--color-warning, #fbbf24);
+}
+
+/* The row itself takes the colour of the worst thing it holds, so a
+   glance at the edge of the screen carries the same fact as the text. */
+.toast-overflow[data-severity="2"] {
+  border-color: var(--color-warning-border, rgba(251, 191, 36, 0.35));
+}
+
 /* Mobile responsive: full-width, anchored just under the header. */
 @media (max-width: 640px) {
   .toast-container {
@@ -121,5 +275,13 @@
     left: 8px;
     width: auto;
     max-width: none;
+  }
+
+  /* A phone is mostly toast at three cards, so the JS caps at two here.
+     That makes the overflow row load-bearing rather than an edge case:
+     give it a real 44px touch target. */
+  .toast-overflow {
+    padding: 12px;
+    min-height: 44px;
   }
 }

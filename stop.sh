@@ -2,13 +2,24 @@
 
 # Stop script for Claude Code Controller
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/scripts/resolve-port.sh"
+
 echo "Stopping FastAPI server..."
 
-# Find processes using port 8000
-PIDS=$(lsof -ti:8000)
+# Resolve the configured port from .env (see scripts/resolve-port.sh for
+# the three-outcome contract). A malformed PORT= must stop this script,
+# not silently target the wrong port.
+PORT="$(resolve_port "${SCRIPT_DIR}")" || {
+    echo "ERROR: could not determine port - see reason above. Fix PORT= in .env and re-run."
+    exit 1
+}
+
+# Find processes using the configured port
+PIDS=$(lsof -ti:"${PORT}")
 
 if [ -z "$PIDS" ]; then
-    echo "No processes found on port 8000"
+    echo "No processes found on port ${PORT}"
     exit 0
 fi
 
@@ -24,7 +35,7 @@ done
 sleep 2
 
 # Force kill if still running
-REMAINING=$(lsof -ti:8000)
+REMAINING=$(lsof -ti:"${PORT}")
 if [ ! -z "$REMAINING" ]; then
     echo "Force killing remaining processes: $REMAINING"
     for PID in $REMAINING; do
@@ -33,9 +44,9 @@ if [ ! -z "$REMAINING" ]; then
 fi
 
 # Verify port is free
-if lsof -ti:8000 > /dev/null 2>&1; then
-    echo "ERROR: Port 8000 is still in use"
+if lsof -ti:"${PORT}" > /dev/null 2>&1; then
+    echo "ERROR: Port ${PORT} is still in use"
     exit 1
 else
-    echo "Port 8000 is now free"
+    echo "Port ${PORT} is now free"
 fi

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>settings workspace tab harness</title>
+<!--
+  WHY THIS EXISTS. The four global settings are only delivered if the
+  user can see and reach the controls that set them. This codebase has
+  shipped three features that were visibly broken through fully green
+  suites - a badge rendering the literal `~~claude` while tests read
+  `.textContent`, a button that fell through to the bare user-agent
+  stylesheet while "the button exists" passed, and a feature carrying 282
+  passing assertions that rendered zero pixels. Every one of those would
+  pass a markup assertion about this tab.
+
+  So scripts/verify_settings_gui.py measures GEOMETRY and PAINT on the
+  shipped markup: that each control has a non-zero box, that the remove
+  button is not a circle, that nothing overflows the panel at phone
+  width, and that the paint CHANGES between two far-apart palettes -
+  which is what turns "matches a token" into "follows the theme".
+
+  THE MARKUP IS BUILT BY THE SHIPPED MODULE. window.SettingsWorkspace
+  .render() is the single source of truth; hand-writing the rows here
+  would let the harness and the app drift, and the drift would look like
+  a pass.
+
+  ONE POSITIVE CONTROL, #control-circle, is a deliberately circular
+  button. A shape sampler that could only ever answer "not a circle"
+  would pass every real control for the wrong reason and must fail there
+  instead.
+
+  gameboy and matrix are deliberately NOT offered as contrast palettes:
+  they collapse several tokens onto one value, so a check can pass
+  because two things are the same rather than because either is right.
+
+  Serve over http from the repo root; a file:// origin cannot fetch the
+  theme manifests. Poll window.__wsReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<style>
+  body { margin: 0; padding: 24px; }
+  /* The panel is width-constrained the way the real settings modal is,
+     so an overflow measured here is an overflow a user would get. */
+  #panel { max-width: 560px; }
+
+  /* The control declares its own circle rather than using --radius-full,
+     so its verdict cannot change with a theme that zeroes the radius
+     tokens - which three of the shipped themes deliberately do. */
+  #control-circle {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: transparent; border: 1px solid #c81e6e; margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+<div id="panel" class="settings-panel-body"></div>
+<button type="button" id="control-circle" aria-label="positive control"></button>
+
+<script src="../../client/js/settings-sections.js"></script>
+<script src="../../client/js/settings-workspace.js"></script>
+<script>
+window.__wsReady = false;
+
+/**
+ * A settings summary shaped exactly like GET /config/settings returns,
+ * carrying two environment rows so the list has something to measure and
+ * a bind preference that DIFFERS from the address in force, which is the
+ * state whose warning row must be on screen.
+ */
+window.__SUMMARY = {
+    workspace: {
+        development_root: '/Users/example/Development',
+        default_shell: '/bin/zsh',
+        default_editor: 'code -w',
+        env: { EDITOR: 'code -w', MY_FLAG: '1' },
+    },
+    server_prefs: {
+        bind_host: '0.0.0.0',
+        tls_preferred: false,
+        effective_bind_host: '127.0.0.1',
+        tls_available: false,
+        restart_required: true,
+    },
+};
+
+/**
+ * Apply one shipped theme's cssVars to :root exactly as the real loader
+ * does, reading that theme's OWN manifest. Every property the previous
+ * theme set is cleared first: without that, a token the incoming
+ * manifest does not declare keeps the outgoing theme's value and the run
+ * measures a palette no user can ever have.
+ *
+ * @param {string} id - theme directory name, e.g. "terminal".
+ * @returns {Promise<object>} the cssVars map applied.
+ */
+window.__applyTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Array.from(root.style).forEach((k) => {
+        if (k.indexOf('--') === 0) root.style.removeProperty(k);
+    });
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    document.body.style.background = vars['--color-bg'] || '#000000';
+    return vars;
+};
+
+/** Rebuild the pane from the SHIPPED renderer and wire its buttons. */
+window.__build = function () {
+    const mod = window.SettingsWorkspace;
+    if (!mod || typeof mod.render !== 'function') {
+        throw new Error('SettingsWorkspace.render is not loaded; nothing to measure');
+    }
+    const panel = document.getElementById('panel');
+    panel.innerHTML = mod.render(window.__SUMMARY);
+    mod.wire(panel);
+};
+
+/**
+ * Geometry and computed paint for one element.
+ * Reports the rect rather than deciding anything, so the page cannot
+ * choose a sample point that makes a rule look right.
+ *
+ * @param {string} selector - a CSS selector, resolved inside #panel
+ *   unless it starts with '#'.
+ * @returns {?object} null when the element is absent.
+ */
+window.__box = function (selector) {
+    const root = selector.charAt(0) === '#' ? document : document.getElementById('panel');
+    const el = root.querySelector(selector);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return {
+        selector: selector,
+        rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+        borderRadius: cs.borderTopLeftRadius,
+        borderColor: cs.borderTopColor,
+        color: cs.color,
+        backgroundColor: cs.backgroundColor,
+        display: cs.display,
+        visibility: cs.visibility,
+        opacity: cs.opacity,
+        fontFamily: cs.fontFamily,
+    };
+};
+
+/** @returns {number} how many environment rows are currently rendered. */
+window.__envRowCount = function () {
+    return document.getElementById('panel').querySelectorAll('[data-env-row]').length;
+};
+
+/** Click a selector inside the panel. @param {string} s @returns {void} */
+window.__click = function (s) {
+    document.getElementById('panel').querySelector(s).click();
+};
+
+/**
+ * Read the env map back out of the DOM through the shipped collector.
+ * @returns {object} NAME -> value.
+ */
+window.__collectEnv = function () {
+    return window.SettingsWorkspace.collectEnv(document.getElementById('panel'));
+};
+
+/** @returns {object} the whole measurement bundle for the current theme. */
+window.__measure = function () {
+    const panel = document.getElementById('panel');
+    const pr = panel.getBoundingClientRect();
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        devicePixelRatio: window.devicePixelRatio,
+        theme: document.documentElement.getAttribute('data-theme'),
+        panelRect: { x: pr.left, y: pr.top, w: pr.width, h: pr.height },
+        documentScrollWidth: document.documentElement.scrollWidth,
+        root: window.__box('#settings-ws-root'),
+        shell: window.__box('#settings-ws-shell'),
+        editor: window.__box('#settings-ws-editor'),
+        bind: window.__box('#settings-ws-bind'),
+        tls: window.__box('#settings-ws-tls'),
+        envName: window.__box('[data-env-name]'),
+        envValue: window.__box('[data-env-value]'),
+        envRemove: window.__box('[data-env-remove]'),
+        envAdd: window.__box('[data-env-add]'),
+        bindPending: window.__box('[data-bind-state="pending"]'),
+        tlsUnavailable: window.__box('[data-tls-state="unavailable"]'),
+        controlCircle: window.__box('#control-circle'),
+        envRowCount: window.__envRowCount(),
+    };
+};
+
+(async () => {
+    window.__build();
+    await window.__applyTheme('terminal');
+    window.__wsReady = true;
+})();
+</script>
+</body>
+</html>

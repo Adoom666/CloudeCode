@@ -100,12 +100,12 @@ class Auth {
         } catch (error) {
             // 403 = qr endpoint is locked because the device is already
             // paired (server enforces .totp_paired sentinel). That's the
-            // happy path for the login screen — user just needs to type
+            // happy path for the login screen - user just needs to type
             // their TOTP, no setup banner required. Bail silently.
             //
             // Any OTHER non-200 (404 missing config, 500 server error,
             // network failure, etc.) means setup truly hasn't been done
-            // or the backend is broken — surface the setup banner so the
+            // or the backend is broken - surface the setup banner so the
             // first-run user knows to run setup_auth.py.
             if (error && error.status === 403) {
                 this.infoElement.classList.add('hidden');
@@ -272,7 +272,7 @@ class Auth {
      *     error rather than re-prompting.
      *
      * NOTE: callers MUST funnel through the single-flight mutex in
-     * `api.js` — calling this in parallel from multiple in-flight requests
+     * `api.js` - calling this in parallel from multiple in-flight requests
      * will race and burn the refresh-token chain via server-side reuse
      * detection.
      *
@@ -293,10 +293,10 @@ class Auth {
                 body: JSON.stringify({ refresh_token: refreshToken })
             });
         } catch (e) {
-            // fetch threw — no HTTP response was ever received. This is a
+            // fetch threw - no HTTP response was ever received. This is a
             // network-layer failure (DNS, offline, TLS, connection refused,
             // Wi-Fi re-associating after laptop wake, etc.). Refresh token
-            // status is UNKNOWN — do NOT report this as an auth failure or
+            // status is UNKNOWN - do NOT report this as an auth failure or
             // the caller will nuke a still-valid refresh token and force
             // a TOTP re-prompt for what was actually a transient blip.
             console.warn('Auth: refresh network error (preserving refresh token)', e);
@@ -305,7 +305,7 @@ class Auth {
 
         if (!response.ok) {
             // We got an HTTP response but it wasn't 2xx. 401/403 means the
-            // server explicitly rejected the refresh token — it's dead and
+            // server explicitly rejected the refresh token - it's dead and
             // the caller must reauth via TOTP. Other non-2xx (500, 503,
             // etc.) are server-side faults that also surface as "refresh
             // failed" since we can't safely proceed without a fresh access
@@ -344,7 +344,7 @@ class Auth {
     /**
      * Logout user. Best-effort server-side revocation of the refresh
      * token, then clear local state regardless. We do NOT await the
-     * server call to keep logout snappy — the server-side revoke is a
+     * server call to keep logout snappy - the server-side revoke is a
      * defense-in-depth nicety, not a blocking dependency.
      */
     logout() {

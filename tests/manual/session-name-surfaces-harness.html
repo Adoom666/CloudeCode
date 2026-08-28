@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cloude Code</title>
+<!--
+  TWO SURFACES THAT RENDER A SESSION'S NAME, MEASURED WHERE A HUMAN SEES
+  THEM: the BROWSER TAB TITLE and a TOAST CARD.
+
+  WHY THIS PAGE EXISTS RATHER THAN A DOM ASSERTION. A test that asserts
+  a resolver returns the right string proves nothing about what the tab
+  says. This codebase has shipped three visibly broken features through
+  fully green suites that read markup - a badge rendering the literal
+  `~~claude` while every test read .textContent, an unstyled button whose
+  "the button exists" assertion passed, and a feature with 282 passing
+  assertions that drew zero pixels. So:
+
+    * the tab title is read back from document.title, after the real
+      client/js/app.js setPageTitle() has run;
+    * the toast's session line is read back off the element that PAINTS
+      it, as a bounding rect and a computed style, after the real
+      client/js/toast.js has built the card.
+
+  THE REAL MODULES, not copies of what they are believed to emit.
+
+  POSITIVE CONTROL. Most verdicts here have the shape "this surface shows
+  X". A harness where nothing rendered at all, or where document.title
+  was never writable, would satisfy several of them by accident.
+  window.__control() proves the rig can move BOTH surfaces before any
+  real assertion is trusted, and its failure is CANNOT DETERMINE for the
+  whole run rather than a fail.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/session-name-surfaces-harness.html
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/toast.css" />
+<style>
+  body { margin: 0; padding: 0; min-height: 100vh; background: #1e1e1e; }
+</style>
+</head>
+<body>
+
+<!-- The SHIPPED container markup, id and all. -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- THE ONE RESOLVER, loaded first exactly as client/index.html does. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/toast.js"></script>
+<!-- app.js defines setPageTitle at top level and exposes it on window
+     before the controller class; constructing AppController has no DOM
+     side effects, so loading it here is safe and is the real thing. -->
+<script src="../../client/js/app.js"></script>
+
+<script>
+/** Drop every toast without touching the (absent) server. @returns {void} */
+window.__reset = function () {
+    const c = document.getElementById('toast-container');
+    window.ToastManager._byId.clear();
+    window.ToastManager._expanded = false;
+    while (c.firstChild) c.removeChild(c.firstChild);
+    document.title = 'Cloude Code';
+};
+
+/**
+ * Feed the real toast module one server-shape payload.
+ *
+ * @param {object} identity - { session_label, session_name } as the
+ *   server stamps them at record time; either may be null.
+ * @returns {void}
+ */
+window.__toast = function (identity) {
+    window.ToastManager.add({
+        id: 'probe-' + Math.random().toString(16).slice(2),
+        session_id: 'sess-probe',
+        kind: 'Stop',
+        title: 'Your turn',
+        body: 'a fixed body line',
+        color: null,
+        acknowledged: false,
+        session_label: identity ? identity.session_label : null,
+        session_name: identity ? identity.session_name : null,
+    });
+};
+
+/**
+ * Drive the REAL tab-title function with a session-shaped value.
+ * @param {*} sessionLike - whatever a caller would hand setPageTitle.
+ * @returns {string} document.title afterwards.
+ */
+window.__title = function (sessionLike) {
+    window.setPageTitle(sessionLike);
+    return document.title;
+};
+
+/**
+ * POSITIVE CONTROL: prove the rig can move BOTH surfaces.
+ *
+ * A run where document.title was pinned, or where the toast module never
+ * painted anything, would satisfy several "shows X" verdicts by
+ * accident. This must show a changed title AND a painted card before any
+ * real assertion is believed.
+ * @returns {object} { titleMoved, cardPainted }
+ */
+window.__control = function () {
+    window.__reset();
+    const before = document.title;
+    window.setPageTitle('a control string');
+    const titleMoved = document.title !== before && document.title.indexOf('a control string') === 0;
+    window.__toast({ session_label: 'control', session_name: 'cloude_control' });
+    const card = document.querySelector('.toast');
+    const r = card ? card.getBoundingClientRect() : null;
+    return {
+        titleMoved: titleMoved,
+        cardPainted: !!(r && r.width > 0 && r.height > 0),
+    };
+};
+
+/**
+ * Measure one element as a box plus the colours actually painted on it.
+ * @param {Element|null} el
+ * @returns {object|null}
+ */
+function box(el) {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+        w: r.width, h: r.height,
+        display: cs.display, visibility: cs.visibility,
+        opacity: parseFloat(cs.opacity),
+        color: cs.color, fontSize: cs.fontSize,
+        painted: r.width > 0 && r.height > 0
+                 && cs.display !== 'none' && cs.visibility !== 'hidden'
+                 && parseFloat(cs.opacity) > 0.01,
+    };
+}
+
+/**
+ * The whole measurement bundle for the currently-rendered state.
+ * @returns {object}
+ */
+window.__measure = function () {
+    const card = document.querySelector('.toast');
+    const sessionEl = card ? card.querySelector('.toast__session') : null;
+    return {
+        viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            hidden: document.hidden,
+            visibilityState: document.visibilityState,
+        },
+        title: document.title,
+        cardPresent: !!card,
+        cardBox: box(card),
+        // The RENDERED session line, read off the element that paints it,
+        // so a stray character injected by a CSS ::before rule shows up
+        // here instead of hiding behind a .textContent that reads the
+        // same either way.
+        sessionPresent: !!sessionEl,
+        sessionText: sessionEl ? sessionEl.textContent : null,
+        sessionBox: box(sessionEl),
+        titleText: card
+            ? (card.querySelector('.toast__title-text') || {}).textContent || null
+            : null,
+    };
+};
+
+window.__surfacesReady = true;
+</script>
+</body>
+</html>

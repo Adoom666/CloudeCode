@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', 'Menlo', 'Consolas', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#000000",
     "--color-bg-page": "#000000",
     "--color-bg-elevated": "#0A0A0A",
@@ -17,7 +17,7 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.4)",
     "--color-fg": "#C7C7C7",
     "--color-fg-muted": "#7F7F7F",
-    "--color-fg-subtle": "#4A4A4A",
+    "--color-fg-subtle": "#7a7a7a",
     "--color-fg-faint": "#7F7F7F",
     "--color-border": "#2B2B2B",
     "--color-border-subtle": "#1A1A1A",
@@ -38,7 +38,7 @@
     "--color-on-accent": "#000000",
     "--color-success": "#00CD00",
     "--color-warning": "#CDCD00",
-    "--color-danger": "#CD0000",
+    "--color-danger": "#ec0000",
     "--color-info": "#00CDCD",
     "--color-danger-bg": "rgba(205, 0, 0, 0.10)",
     "--color-danger-bg-hover": "rgba(205, 0, 0, 0.20)",
@@ -96,5 +96,12 @@
     "brightMagenta": "#FF00FF",
     "brightCyan": "#00FFFF",
     "brightWhite": "#FFFFFF"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.m4a",
+    "srcFallback": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
   }
 }

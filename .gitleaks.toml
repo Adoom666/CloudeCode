@@ -1,0 +1,56 @@
+# gitleaks configuration for cloude-code.
+#
+# Threat model this exists for: the public repository is populated by COPYING
+# FILES out of a private working repository. There is no shared git history to
+# diff against and no server-side hook chain, so nothing structural stops a
+# real credential riding along in a copied file. The scanner is the only thing
+# standing between that and a public commit, which is why it runs in CI rather
+# than as a local pre-commit hook that a contributor may not have installed.
+#
+# Scope note: the CI job scans the CHECKED-OUT TREE, not the full history.
+# Rationale is in docs/ci.md - history already contains a leak that predates
+# this pipeline, and a permanently red required check trains people to ignore
+# every check.
+
+title = "cloude-code secret scan"
+
+# Start from the upstream ruleset (every default provider rule stays active)
+# and only add allowlists below.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secrets that the default ruleset flags in this repository"
+
+# Documentation and example files whose whole purpose is to show the SHAPE of
+# a credential. Everything here must contain placeholders only. If a real
+# value ever lands in one of these, this allowlist is what hid it, so keep the
+# list short and keep the files placeholder-only.
+paths = [
+    '''^\.env\.example$''',
+    '''^config\.example\.json$''',
+    '''^\.gitleaks\.toml$''',
+    # Vendored third-party bundles. These are MINIFIED, so the generic
+    # high-entropy rules match ordinary identifiers: on 2026-08-17 the scan
+    # failed on `t.FourKeyMap=` in xterm.js and xterm-addon-webgl.js, which
+    # are not secrets and never were. We do not author these files; they are
+    # fetched by scripts/xterm-vendor/fetch.sh with pinned sha256s, and that
+    # pinning is what protects them, not this scanner. Scoped to the vendor
+    # directory only so our own client code is still fully scanned.
+    '''^client/vendor/''',
+]
+
+# Literal placeholder strings that the test suite and the docs use in place of
+# real credentials. These match the flagged VALUE, not the file, so a real
+# secret sitting next to one of them is still reported.
+#
+# Deliberately NOT allowlisted: the tests/ directory as a whole. A credential
+# pasted into a test file is exactly the accident this scanner exists to catch,
+# and the suite's own throwaway secrets are named explicitly below instead.
+regexes = [
+    '''testsecretnotreal''',
+    '''testjwtnotreal''',
+    '''your-?subdomain\.yourdomain\.com''',
+    '''(?i)change[-_]?me''',
+    '''(?i)replace[-_]?me''',
+]

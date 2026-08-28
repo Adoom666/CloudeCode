@@ -10,8 +10,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -29,7 +27,25 @@ ENV/
 # Environment Variables
 .env
 .env.local
+# Every .env sidecar. A dated .env.bak from a deploy was found untracked
+# and NOT ignored on 2026-08-16, one `git add .` from publishing the TOTP
+# and JWT secrets. .env.example is negated below so it stays tracked.
+.env.*
+!.env.example
 config.json
+# The app rewrites config.json in place and drops the previous copy beside it
+# as config.json.bak (and dated config.json.bak.<stamp> variants). Those are
+# copies of a real runtime config, so they carry exactly the same secrets
+# config.json does and must never be committed. Ignoring config.json alone
+# does not cover them: the pattern is literal, not a prefix.
+config.json.bak
+config.json.bak.*
+# Naming the .bak family alone was still too narrow. Every deploy this session
+# wrote a hand-taken config.json.pre<reason>-<date> beside it, and those are
+# whole live configs too. Ignore the entire sidecar family instead of chasing
+# one suffix at a time. This glob only matches names beginning "config.json.",
+# so config.example.json (the committed, sanitized template) is unaffected.
+config.json.*
 
 # Authentication
 totp-qr.png
@@ -55,6 +71,8 @@ logs/
 
 # Session Data
 session_metadata.json
+pinned_themes.json
+unread_state.json
 /claude-projects/
 
 # Image Uploads (per-session bucket — must never be committed)
@@ -76,3 +94,45 @@ troubleshooting/
 
 # Runtime lock files (session-scoped, PID-stamped — never meant to be tracked)
 .claude/scheduled_tasks.lock
+
+# CLAUDE.md is TRACKED here on purpose. It is the repo's agent orientation
+# doc, not a personal scratch file. A global excludesFile that ignores
+# CLAUDE.md would otherwise keep it out of every commit silently; this
+# negation wins because repo .gitignore is read after core.excludesFile.
+!CLAUDE.md
+
+# Build-only workspace for the vendored CodeMirror bundle (see
+# client/vendor/codemirror/VERSION.md). node_modules and the lockfile are
+# build inputs, not runtime code; only the built bundle under client/vendor/
+# ships.
+scripts/codemirror-vendor/node_modules/
+scripts/codemirror-vendor/package-lock.json
+
+# Release self-check cache. Written next to config.json inside whatever source
+# root the server runs from (see src/core/update_check.py CACHE_FILENAME); in a
+# dev checkout that root is this repo. Runtime state, never tracked.
+.update-check.json
+
+# electron-builder output. The .dmg is a release artifact, not source.
+macOS/dist/
+macOS/node_modules/
+
+# Screenshots from scripts/verify/measure-theme-effect-visibility.py
+scripts/verify/.theme-effect-shots/
+
+# Screenshots from scripts/verify/measure-terminal-opacity.py
+scripts/verify/.terminal-opacity-shots/
+.upgrade-baselines/
+
+# Upgrade artifacts. Never pruned automatically; prune by hand.
+.upgrade-backups/
+
+# SHIP the project's slash commands. The user's GLOBAL gitignore carries a
+# blanket `.claude/` rule, which would silently keep .claude/commands out of
+# the repository and make /upgrade unavailable to every other user - the
+# exact opposite of the point. A repo .gitignore outranks the global one, so
+# un-ignore the directory, re-ignore its local-only contents, then allow
+# commands/ back in.
+!.claude/
+.claude/*
+!.claude/commands/

@@ -18,10 +18,30 @@ from src.models import (
     WSErrorMessage
 )
 from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
+from src.api.resize_negotiation import (
+    apply_negotiated_resize,
+    release_client_resize,
+)
+from src.api.ws_startup_paint import paint_on_attach
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
+def _resolve_backend(session_manager, session_id: Optional[str]):
+    """Get the backend for a session id, tolerating older managers.
+
+    Args:
+        session_manager: The active SessionManager.
+        session_id: Target session, or None for the manager's current one.
+
+    Returns:
+        The SessionBackend, or None when it cannot be resolved.
+    """
+    if session_id and hasattr(session_manager, "get_backend"):
+        return session_manager.get_backend(session_id)
+    return getattr(session_manager, "backend", None)
 
 
 class ConnectionManager:
@@ -41,7 +61,7 @@ class ConnectionManager:
         # session. Populated by ``connect_to_session`` on the WS handshake;
         # pruned by ``disconnect``. A connection can only ever be bound to
         # ONE session (the WS endpoint is session-scoped), so we don't
-        # also need a reverse WS->session map — we walk the dict on
+        # also need a reverse WS->session map - we walk the dict on
         # disconnect, which is O(N_sessions) and dwarfed by the WS RTT.
         self._session_connections: dict[str, Set[WebSocket]] = {}
 
@@ -51,7 +71,7 @@ class ConnectionManager:
 
         NOTE: As of the subprotocol-auth change (Item 3), the handler is
         responsible for calling `websocket.accept(subprotocol=...)` BEFORE
-        invoking this method — the browser requires the server to echo the
+        invoking this method - the browser requires the server to echo the
         negotiated subprotocol, so accept() must happen at the auth site.
         This method now only registers an already-accepted socket.
 
@@ -65,8 +85,8 @@ class ConnectionManager:
         """Record that ``websocket`` is bound to ``session_id``.
 
         Idempotent. ``session_id`` of None is a no-op (legacy/orphan WS
-        sockets that never resolved to a session — e.g. the auth-only
-        test path — don't enter the per-session map).
+        sockets that never resolved to a session - e.g. the auth-only
+        test path - don't enter the per-session map).
         """
         if not session_id:
             return
@@ -78,7 +98,7 @@ class ConnectionManager:
 
         Also prunes the per-session reverse map so ``broadcast_to_session``
         never tries to send through a torn-down socket. We walk the dict
-        rather than tracking a reverse pointer — the per-session set
+        rather than tracking a reverse pointer - the per-session set
         cardinality is low (one tab per session typically) so the cost
         is negligible.
 
@@ -111,7 +131,7 @@ class ConnectionManager:
 
         Used by the toast routes (v0.7.0 Part 2) to fan a ``toast.new`` or
         ``toast.ack`` payload out to every browser tab attached to the
-        session — including the tab that triggered the action, so the
+        session - including the tab that triggered the action, so the
         creator's own UI gets the new toast without a special-case round
         trip. Failures on a single socket are logged + the socket is
         removed from BOTH the per-session map and the flat active set;
@@ -168,12 +188,12 @@ async def websocket_terminal(websocket: WebSocket):
     """
     # Validate auth BEFORE accepting. If we close pre-accept, FastAPI sends
     # HTTP 403 (the browser sees the handshake fail), which is the correct
-    # behavior — no WS connection is ever established with an invalid token.
+    # behavior - no WS connection is ever established with an invalid token.
     ok, detail = verify_jwt_from_subprotocol(websocket)
     if not ok:
         # Close codes in the 4xxx app range per RFC 6455 / IANA registry.
         # 4401 = auth failure (our convention, modeled on HTTP 401).
-        # 4400 = bad request — header present but malformed (empty /
+        # 4400 = bad request - header present but malformed (empty /
         #        whitespace-only). Absence of the header is an auth failure
         #        (client simply didn't present credentials), not a protocol
         #        error.
@@ -192,7 +212,7 @@ async def websocket_terminal(websocket: WebSocket):
         await websocket.close(code=code, reason=detail or "auth failed")
         return
 
-    # Echo the subprotocol marker back — required by RFC 6455 § 4.1. If we
+    # Echo the subprotocol marker back - required by RFC 6455 § 4.1. If we
     # accept() without a matching subprotocol the browser will drop the
     # connection client-side even though the TCP handshake "succeeded".
     await websocket.accept(subprotocol=SUBPROTOCOL_MARKER)
@@ -211,7 +231,7 @@ async def websocket_terminal(websocket: WebSocket):
     target_sid: Optional[str] = None
     if requested_sid:
         if sessions_map is not None and requested_sid not in sessions_map:
-            # Unknown session id — close with a clear app-range code.
+            # Unknown session id - close with a clear app-range code.
             logger.warning("ws_unknown_session", session_id=requested_sid)
             await websocket.close(code=4404, reason="unknown session")
             return
@@ -226,16 +246,29 @@ async def websocket_terminal(websocket: WebSocket):
         target_sid = cur.id if cur is not None else None
 
     await connection_manager.connect(websocket)
-    # v0.7.0 Part 2 — register the WS in the per-session reverse map so
+    # v0.7.0 Part 2 - register the WS in the per-session reverse map so
     # ``broadcast_to_session`` can target it for toast fanout. Bind AFTER
     # the validated session id has been resolved so the map never holds
     # entries for sessions that don't exist.
     connection_manager.bind_session(websocket, target_sid)
+    # feat/hook-driven-status - a WS terminal actually binding to a
+    # session is the strongest "the user is looking at this" signal the
+    # server has (stronger than merely appearing in a /sessions/list poll
+    # response), so this is where the auto-unread flag (set by a Stop
+    # hook) clears. Best-effort: an unknown session_manager shim without
+    # the method, or any internal error, must never break the WS connect.
+    if target_sid and hasattr(session_manager, "mark_session_viewed"):
+        try:
+            session_manager.mark_session_viewed(target_sid)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "mark_session_viewed_failed", session_id=target_sid, error=str(exc)
+            )
 
     # Subscribe to THIS session's PTY output only.
     pty_output_queue = session_manager.subscribe_output(target_sid)
 
-    # Subscribe to local-server events (replaces the old tunnel queue —
+    # Subscribe to local-server events (replaces the old tunnel queue -
     # carries `local_server_detected` / `local_server_lost` payloads).
     local_servers_queue = local_servers.subscribe()
 
@@ -246,7 +279,10 @@ async def websocket_terminal(websocket: WebSocket):
     try:
         welcome_msg = {
             "type": "log",
-            "content": "[SYSTEM] WebSocket connected - PTY terminal ready",
+            # Lowercase and unbracketed: this is rendered as a UI notice
+            # now, not written into the xterm buffer, so it no longer
+            # needs to look like a terminal banner.
+            "content": "websocket connected, pty terminal ready",
             "timestamp": datetime.utcnow().isoformat()
         }
         await websocket.send_text(json.dumps(welcome_msg))
@@ -257,24 +293,26 @@ async def websocket_terminal(websocket: WebSocket):
     #
     # Why the handshake: historical scrollback was captured at the pane's
     # PREVIOUS geometry. If the reconnecting client's viewport is different
-    # (common — rotation, window resize, different device), replaying those
+    # (common - rotation, window resize, different device), replaying those
     # frozen bytes paints them at the wrong coordinates and you get visible
     # character shrapnel until the next full app redraw.
     #
     # New contract:
     #   1. Server -> Client:  {"type": "request_dims"}
     #   2. Client -> Server:  {"type": "pty_resize", cols, rows}  (bypasses
-    #                         the 100ms debounce client-side — this is the
+    #                         the 100ms debounce client-side - this is the
     #                         handshake path, not a normal user-driven
     #                         resize)
     #   3. Server applies backend.resize(cols, rows)
     #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
     #      process (Claude/bash/etc.) and that process has a chance to
     #      finish any in-flight ANSI write before we stomp its buffer.
-    #   5. Server writes Ctrl+L (0x0c) to the pane. Claude/bash/readline
-    #      treat Ctrl+L as "redraw" — the app clears its own screen and
-    #      re-renders at the NEW size. Live-stream bytes then arrive via
-    #      pipe-pane as usual.
+    #   5. Server paints the pane's screen (see ws_startup_paint). A
+    #      full-screen TUI gets Ctrl+L and re-renders itself at the NEW
+    #      size; every other pane gets its visible screen captured
+    #      post-resize and sent to the client, because Ctrl+L into a
+    #      canonical-mode line reader is data, not a redraw. Live-stream
+    #      bytes then arrive via pipe-pane as usual.
     #
     # Trade-off: user loses historical scrollback on reconnect. Accepted
     # because a clean screen beats a corrupted one, and xterm.js retains
@@ -326,7 +364,7 @@ async def websocket_terminal(websocket: WebSocket):
                 # (ping, etc.); they'll be processed by receive_messages
                 # once the loop starts.
                 continue
-            # Drop binary frames that arrive before the handshake — the
+            # Drop binary frames that arrive before the handshake - the
             # user can't have typed anything yet. In practice clients
             # don't send binary before their first resize, but be safe.
 
@@ -337,8 +375,9 @@ async def websocket_terminal(websocket: WebSocket):
                 rows=handshake_rows,
             )
             try:
-                session_manager.resize_terminal(
-                    handshake_cols, handshake_rows, session_id=target_sid
+                await apply_negotiated_resize(
+                    session_manager, target_sid, websocket,
+                    handshake_cols, handshake_rows, connection_manager,
                 )
             except Exception as exc:
                 logger.error("ws_handshake_resize_failed", error=str(exc))
@@ -349,39 +388,40 @@ async def websocket_terminal(websocket: WebSocket):
             # so the event loop keeps draining other tasks.
             await asyncio.sleep(0.15)
 
-            # Force a redraw at the new size. Ctrl+L is readline / tmux /
-            # Claude's "clear + repaint" convention — the app owns the
-            # repaint, which means it paints at its CURRENT (post-resize)
-            # cell grid, not the stale grid any cached output was drawn in.
-            _hs_backend = (
-                session_manager.get_backend(target_sid)
-                if target_sid and hasattr(session_manager, "get_backend")
-                else getattr(session_manager, "backend", None)
+            # Make the pane's screen visible at the new size. A TUI gets
+            # Ctrl+L and repaints itself; anything else gets the pane's
+            # visible screen captured post-resize. See ws_startup_paint
+            # for why the second branch exists.
+            _strategy = await paint_on_attach(
+                websocket,
+                _resolve_backend(session_manager, target_sid),
             )
-            if _hs_backend is not None:
-                try:
-                    await _hs_backend.write(b"\x0c")
-                    logger.debug("ws_handshake_ctrl_l_sent")
-                except Exception as exc:
-                    logger.warning("ws_handshake_ctrl_l_failed", error=str(exc))
+            logger.debug("ws_handshake_painted", strategy=_strategy)
         else:
             # Degraded-mode fallback: client never delivered handshake dims
             # (timeout, bad dims, or disconnect-during-handshake recovered).
-            # A frozen banner is the worst possible UX — at least force a
-            # redraw at the pane's current (birth) size so the user sees
-            # SOMETHING. Ctrl+L is harmless if the foreground app can't honor it.
-            _hs_backend = (
-                session_manager.get_backend(target_sid)
-                if target_sid and hasattr(session_manager, "get_backend")
-                else getattr(session_manager, "backend", None)
+            # A frozen banner is the worst possible UX - paint at the
+            # pane's current (birth) size so the user sees SOMETHING.
+            await asyncio.sleep(0.15)
+            _strategy = await paint_on_attach(
+                websocket,
+                _resolve_backend(session_manager, target_sid),
             )
-            if _hs_backend is not None:
-                try:
-                    await asyncio.sleep(0.15)
-                    await _hs_backend.write(b"\x0c")
-                    logger.info("ws_handshake_ctrl_l_sent_fallback")
-                except Exception as exc:
-                    logger.warning("ws_handshake_ctrl_l_fallback_failed", error=str(exc))
+            logger.info("ws_handshake_painted_fallback", strategy=_strategy)
+
+        # feat/settings-tabs-and-commands - a console launched from the
+        # settings "terminal" tab has a configured command waiting on it.
+        # It is typed HERE, after the resize + Ctrl+L repaint above, because
+        # that repaint clears anything written earlier: typed at create
+        # time the command runs but its output is only in scrollback, and
+        # the user lands on a blank prompt. Popped on flush, so a reconnect
+        # never re-runs it. Only an ID ever crossed the API boundary; the
+        # text comes from config.json (src/core/terminal_commands.py).
+        if target_sid and hasattr(session_manager, "flush_pending_terminal_command"):
+            try:
+                await session_manager.flush_pending_terminal_command(target_sid)
+            except Exception as exc:
+                logger.warning("ws_pending_terminal_command_failed", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
@@ -389,6 +429,8 @@ async def websocket_terminal(websocket: WebSocket):
         session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
+        await release_client_resize(
+            session_manager, target_sid, websocket, connection_manager)
         connection_manager.disconnect(websocket)
         return
     except Exception as exc:
@@ -424,11 +466,19 @@ async def websocket_terminal(websocket: WebSocket):
     except Exception as e:
         logger.error("websocket_error", error=str(e))
     finally:
-        # Cleanup — unsubscribe ONLY this session's queue. Do NOT detach or
+        # Cleanup - unsubscribe ONLY this session's queue. Do NOT detach or
         # destroy the session: other tabs (or a later reconnect) may want it.
         session_manager.unsubscribe_output(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
+        # fix/multiclient-tmux-size - drop this client from size negotiation
+        # and re-apply the recomputed effective size so the pane grows back
+        # for whoever is left, rather than staying letterboxed forever.
+        # Hooked here (the endpoint's own finally, not ConnectionManager.
+        # disconnect) because that method is sync bookkeeping with no
+        # access to session_manager/resize_terminal or the session id.
+        await release_client_resize(
+            session_manager, target_sid, websocket, connection_manager)
         connection_manager.disconnect(websocket)
 
 
@@ -477,9 +527,10 @@ async def receive_messages(websocket: WebSocket, session_manager, session_id=Non
                             resize_msg = WSPTYResizeMessage(**msg)
                             logger.info("terminal_resize_request", cols=resize_msg.cols, rows=resize_msg.rows)
                             try:
-                                session_manager.resize_terminal(
+                                await apply_negotiated_resize(
+                                    session_manager, session_id, websocket,
                                     resize_msg.cols, resize_msg.rows,
-                                    session_id=session_id,
+                                    connection_manager,
                                 )
                             except Exception as e:
                                 logger.error("resize_failed", error=str(e))
@@ -561,7 +612,7 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # Item 7: feed the per-session IdleWatcher. It buffers the
                 # tail, classifies, and fires PERMISSION_PROMPT synchronously
                 # / TASK_COMPLETE from its background poll. Errors are
-                # swallowed — terminal streaming is load-bearing, notifications
+                # swallowed - terminal streaming is load-bearing, notifications
                 # are not.
                 if _idle_watcher is not None and not in_replay:
                     try:

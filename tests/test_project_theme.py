@@ -73,6 +73,9 @@ class _StubSettings:
     def get_pinned_themes_path(self) -> Path:
         return self._pin_path
 
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
     @property
     def log_directory(self) -> str:
         return str(self._log_dir)

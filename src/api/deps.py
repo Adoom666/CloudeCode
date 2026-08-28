@@ -71,8 +71,8 @@ def verify_jwt_from_subprotocol(websocket: WebSocket) -> Tuple[bool, Optional[st
     """
     Extract and verify a JWT presented via the Sec-WebSocket-Protocol header.
 
-    Browsers send the `WebSocket` constructor's second argument — an array of
-    subprotocols — as a comma-separated `Sec-WebSocket-Protocol` header. The
+    Browsers send the `WebSocket` constructor's second argument - an array of
+    subprotocols - as a comma-separated `Sec-WebSocket-Protocol` header. The
     client is expected to open the socket as:
 
         new WebSocket(url, ["cloude.jwt.v1", "<jwt_token>"])
@@ -88,8 +88,8 @@ def verify_jwt_from_subprotocol(websocket: WebSocket) -> Tuple[bool, Optional[st
 
     Returns:
         Tuple of (ok, detail_or_token):
-          - (True, token)   on success — caller uses it to derive claims if needed.
-          - (False, reason) on failure — caller sends close code 4401 (auth)
+          - (True, token)   on success - caller uses it to derive claims if needed.
+          - (False, reason) on failure - caller sends close code 4401 (auth)
             or 4400 (malformed) with `reason` as the close reason.
     """
     raw = websocket.headers.get("sec-websocket-protocol")
@@ -131,7 +131,7 @@ def verify_jwt_from_subprotocol(websocket: WebSocket) -> Tuple[bool, Optional[st
 
 
 def get_refresh_store(request: Request) -> "RefreshStore":
-    """FastAPI dependency — returns the RefreshStore mounted on app.state.
+    """FastAPI dependency - returns the RefreshStore mounted on app.state.
 
     Raises 503 if the lifespan didn't wire one up (e.g. startup ordering
     bug). Preferable to returning None and forcing every endpoint to

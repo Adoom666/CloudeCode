@@ -269,6 +269,10 @@ function generateEnvFile({ envExamplePath, envOutPath, defaultWorkingDir, logDir
  * packaged launch we rsync these from <bundle>/Resources/<name> into
  * <serverDir>/<name>, deleting orphans from within those paths.
  *
+ * The test for membership is NOT "is it a file we shipped" but "does the
+ * running app depend on this being the CURRENT version" - which includes
+ * every script the app executes by path (see nuke.sh below).
+ *
  * EVERYTHING ELSE in serverDir is user-owned state and MUST NOT be touched:
  *   - .env                      (user secrets + config)
  *   - config.json               (user-customized runtime config)
@@ -294,6 +298,17 @@ const RESYNC_ALLOWLIST = [
   { name: 'setup_auth.py', isDir: false },
   { name: 'config.example.json', isDir: false },
   { name: '.env.example', isDir: false },
+  // nuke.sh is EXECUTED from the derived tree by macOS/main.js
+  // (path.join(serverManager.getProjectRoot(), 'nuke.sh')), so it is a build
+  // artifact of the running version, not user state. It used to be first-run
+  // copy only, on the theory that a user might have customized their copy.
+  // That traded a hypothetical customization against a real one: every
+  // UPGRADE got the NEW typed-NUKE confirmation window wired to the OLD
+  // destructive script - the one that missed the state directory and left
+  // cloude.db and refresh_tokens.db on disk while reporting a full reset.
+  // Anything the app invokes by path must track the app. Guarded by
+  // tests/test_runtime_script_delivery.py.
+  { name: 'nuke.sh', isDir: false },
 ];
 
 /**
@@ -380,6 +395,12 @@ function syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged }) {
       // small config files. We don't preserve the prior content because
       // these are all example/template files the user shouldn't edit
       // in-place anyway (they edit config.json / .env derived from them).
+      //
+      // The executable bit survives: on macOS copyFileSync goes through
+      // copyfile(3) and applies the SOURCE mode even when the destination
+      // already exists with a different one. Measured 2026-08-21, not
+      // assumed - nuke.sh and setup_auth.py both have to stay 0755 here or
+      // main.js's exec of the copied path fails with EACCES.
       try {
         fs.copyFileSync(src, dst);
         synced.push(item.name);
@@ -503,6 +524,53 @@ function provisionUserThemesDir() {
 }
 
 // ---------------------------------------------------------------------------
+// VERSION stamp
+// ---------------------------------------------------------------------------
+
+/**
+ * Header written into serverDir/VERSION. Must stay byte-identical to
+ * VERSION_FILE_HEADER in src/core/version.py, which is the reader.
+ * @type {string}
+ */
+const VERSION_FILE_HEADER =
+  '# GENERATED FROM THE GIT TAG AT RELEASE TIME. DO NOT EDIT BY HAND.\n' +
+  '# See src/core/version.py for the resolution order.\n';
+
+/**
+ * Stamp the app version into serverDir/VERSION.
+ *
+ * WHY THIS EXISTS. The Python server resolves its version through
+ * src/core/version.py, whose first source is the CLOUDE_APP_VERSION env var
+ * that server-manager.js injects at spawn. That covers the normal path and
+ * nothing else: serverDir is a plain copy of src/ + client/ with NO .git and
+ * NO macOS/package.json, so a server started any other way - by hand, by a
+ * future wrapper, by a debugging session - resolves to "" and the release
+ * self check correctly but uselessly reports "unknown". Writing the file the
+ * resolver already looks for second closes that on disk, where it survives.
+ *
+ * @param {string} serverDir - Application Support/.../server dir.
+ * @param {string} version - the app version, from app.getVersion().
+ * @returns {boolean} true when written; false on any failure (non-fatal:
+ *   the env var still covers the spawn path).
+ */
+function writeVersionStamp(serverDir, version) {
+  const value = String(version || '').trim();
+  if (!value) return false;
+  try {
+    fs.writeFileSync(
+      path.join(serverDir, 'VERSION'),
+      `${VERSION_FILE_HEADER}${value}\n`,
+      'utf8'
+    );
+    console.log(`[bootstrap] stamped VERSION=${value}`);
+    return true;
+  } catch (err) {
+    console.warn(`[bootstrap] could not stamp VERSION: ${err.message}`);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main bootstrap orchestrator
 // ---------------------------------------------------------------------------
 
@@ -515,9 +583,14 @@ function provisionUserThemesDir() {
  *                                       bundleResourcesDir path (contains
  *                                       '.app/Contents/Resources').
  * @param {Function} opts.onStateChange - (state: string) => void — state observer
+ * @param {string} [opts.appVersion]   - app.getVersion(), stamped into
+ *                                       serverDir/VERSION so the Python
+ *                                       resolver has an on-disk answer.
  * @returns {Promise<{status: string, freshInstall: boolean, details?: string}>}
  */
-async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, onStateChange }) {
+async function bootstrapIfNeeded({
+  serverDir, bundleResourcesDir, isPackaged, onStateChange, appVersion,
+}) {
   const emit = (state) => {
     if (onStateChange) {
       try { onStateChange(state); } catch (_) { /* observer errors are non-fatal */ }
@@ -568,15 +641,41 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, on
   //   - A changed client/ needs to land even when everything else is already
   //     provisioned (.env, venv, config.json all exist from prior launch).
   //
-  // Dev mode is a no-op (don't clobber live source tree with stale bundle).
+  // DEV MODE RESYNCS TOO, and the comment that used to sit here claiming
+  // otherwise had the direction of the copy backwards. It read "don't
+  // clobber live source tree with stale bundle" - but in dev
+  // `bundleResourcesDir` IS the live source tree (main.js: `path.join
+  // (__dirname, '..')`, the repo root) and serverDir is the DERIVED copy
+  // under Application Support. The rsync runs repo -> derived. It cannot
+  // reach the source tree at all.
+  //
+  // What the skip actually did: the only thing landing files in dev was
+  // the first-run `copyRecursive` below, which SKIPS any file that
+  // already exists at the destination. So a NEW file appeared on the next
+  // launch and a CHANGED file never did, forever. Measured 2026-08-20:
+  // the user was testing a serverDir client/ whose index.html predated
+  // the merge, with none of the new screen-chrome files present, while
+  // the checkout on disk was correct - so half his UI was one build and
+  // half was another, and nothing anywhere errored. He reported it as a
+  // rendering defect, which is exactly what it looked like.
+  //
+  // The version stamp stays packaged-only: it records which RELEASE
+  // provisioned serverDir, and a dev launch is not a release.
   // -------------------------------------------------------------------------
-  if (packaged) {
+  {
     emit('syncing-assets');
     // Ensure serverDir exists before rsync so we never hit a missing-parent
     // race on a brand-new install where the fast-path check below would
     // normally create it via 'preparing'.
     fs.mkdirSync(serverDir, { recursive: true });
-    const sync = syncBundledAssets({ serverDir, bundleResourcesDir, isPackaged: true });
+    // `isPackaged: true` is passed unconditionally on purpose. Inside
+    // syncBundledAssets that flag means only "do the resync"; the dev
+    // launch wants exactly the same resync, from the repo root instead
+    // of from Contents/Resources. It is not a claim about how the app
+    // was launched, and nothing downstream reads it as one.
+    const sync = syncBundledAssets({
+      serverDir, bundleResourcesDir, isPackaged: true
+    });
     if (!sync.ok) {
       // A failed resync is NOT recoverable — a half-synced client/ dir will
       // serve a mix of old + new files and break the app in confusing ways.
@@ -586,6 +685,11 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, on
         freshInstall: false,
         details: `asset resync failed: ${sync.details}`,
       };
+    }
+    // Stamp AFTER the resync: the resync does not carry a VERSION file, and
+    // an upgrade must overwrite the previous release's stamp.
+    if (packaged) {
+      writeVersionStamp(serverDir, appVersion);
     }
   }
 
@@ -631,26 +735,22 @@ async function bootstrapIfNeeded({ serverDir, bundleResourcesDir, isPackaged, on
     //   - DEV-mode first-run copy (resync is skipped in dev — we still need
     //     the artifacts landed the first time the dev launches into a clean
     //     serverDir, otherwise the venv/deps/env steps have nothing to key off).
-    //   - nuke.sh — deliberately NOT in the resync allowlist; first-run copy
-    //     only so users who've customized it keep their version.
+    //
+    // nuke.sh USED to be handled here and only here (first-run copy, never
+    // refreshed). It is now in RESYNC_ALLOWLIST like every other executed
+    // artifact, so this list is simply the allowlist itself - one declaration,
+    // not two that can drift apart.
     emit('copying-files');
-    const firstRunResources = [
-      // In packaged mode these six are already resynced above; copyRecursive
-      // with its skip-if-exists behavior makes this a no-op in that case.
-      // In dev mode, this is the first-run landing.
-      { name: 'src', isDir: true },
-      { name: 'client', isDir: true },
-      { name: 'requirements.txt', isDir: false },
-      { name: 'setup_auth.py', isDir: false },
-      { name: 'config.example.json', isDir: false },
-      { name: '.env.example', isDir: false },
-      { name: 'nuke.sh', isDir: false },
-    ];
+    // In packaged mode these are already resynced above; copyRecursive and the
+    // skip-if-exists file branch make this a no-op in that case. In dev mode,
+    // this is the first-run landing.
+    const firstRunResources = RESYNC_ALLOWLIST;
     for (const item of firstRunResources) {
       const src = path.join(bundleResourcesDir, item.name);
       const dst = path.join(serverDir, item.name);
       if (!fs.existsSync(src)) {
-        // Some items (nuke.sh) may be optional. Skip if not bundled.
+        // A bundled resource can legitimately be absent in a partial dev
+        // checkout. Skip rather than abort; the resync path is authoritative.
         console.warn(`[bootstrap] bundled resource missing (skipping): ${src}`);
         continue;
       }
@@ -786,5 +886,7 @@ module.exports = {
   sha256File,
   syncBundledAssets,
   provisionUserThemesDir,
+  writeVersionStamp,
+  VERSION_FILE_HEADER,
   RESYNC_ALLOWLIST,
 };

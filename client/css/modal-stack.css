@@ -1,0 +1,37 @@
+/* =====================================================================
+ * Modal stack - client/js/modal-stack.js
+ * ---------------------------------------------------------------------
+ * Three rules only: background scroll lock, and what a COVERED modal
+ * (one with another modal stacked over it) looks like on desktop vs on
+ * a phone. Everything else about a modal's appearance stays in that
+ * modal's own stylesheet. Uses styles.css's :root tokens - no new tokens.
+ * ===================================================================== */
+
+/* Background scroll lock. `position: fixed` is deliberately NOT used
+ * here: it would reset the page scroll offset, and this app's scrolling
+ * surfaces (the terminal, the launchpad list) are inner containers, so
+ * plain overflow: hidden on the two scroll roots is enough and costs
+ * nothing on restore. */
+body.modal-stack-locked,
+html:has(body.modal-stack-locked) {
+    overflow: hidden;
+}
+
+/* Covered on DESKTOP: still visible behind the modal above it, so the
+ * layering reads as depth rather than as a screen change. Dimmed and
+ * pushed back a touch; `inert` (set in JS) already removed it from the
+ * tab order, this only makes that visible. */
+.modal-stack--covered {
+    filter: brightness(0.55) saturate(0.8);
+    transition: filter 160ms ease;
+}
+
+/* Covered on MOBILE: gone. A phone shows one thing at a time - the file
+ * picker, or the editor, never a squeezed pair. The user gets back to
+ * the picker with the editor's "back" control, not by aiming at a sliver
+ * of a modal behind another one. */
+@media (max-width: 700px) {
+    .modal-stack--covered {
+        display: none;
+    }
+}

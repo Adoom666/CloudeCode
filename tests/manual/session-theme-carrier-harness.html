@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>session theme carrier harness</title>
+<!--
+  TWO FACTS, ONE VISUAL LANGUAGE, AND THEY COLLIDED.
+
+  `.session-sidebar-row` says "this is the session you are in" with an
+  accent background, an accent 1px border and a bold accent name.
+  session-theme-tint.css said "this session carries its own theme" with
+  an inset 1px ring in that session's accent. When the two accents are
+  the SAME colour - a session pinned to the host theme, which is the
+  ordinary case - a themed row that was not selected drew an accent edge
+  and read as the selected one. Measured live on the user's instance:
+  the selection border is rgba(215, 119, 87, 0.3) and one themed row's
+  ring was rgba(215, 119, 87, 0.45).
+
+  So this page exists to measure ONE claim in BOTH directions:
+
+    a themed row that is NOT selected must be pixel-distinguishable
+    from a selected row, AND a selected row must be pixel-
+    distinguishable from a themed one.
+
+  THE WORST CASE IS THE DEFAULT CASE, so it is the one under test: the
+  session theme's accent is set to the HOST theme's own accent. Any pair
+  of different colours would make this test pass for the wrong reason.
+
+  Row set, and why each one is here:
+
+    row-plain          the reference: neither selected nor themed
+    row-themed         themed, NOT selected. The reported bug.
+    row-active         selected, not themed
+    row-active-themed  both at once - the row that has to say two things
+    control-accent     a row painted the selection accent ON PURPOSE
+
+  #control-accent is a POSITIVE CONTROL. Every verdict below is of the
+  form "this pixel is NOT the accent". A sampler that could not see the
+  accent anywhere would satisfy all of them while measuring nothing,
+  which is a false green manufactured inside the verification step. The
+  control fails loudly in that case.
+
+  The home screen carries the same fact on the same carrier, so it is
+  measured on the same run rather than assumed to match: home-plain and
+  home-themed. Moving the collision from one surface to the other is not
+  a fix.
+
+  Stylesheet order here is the shipped order and it is load bearing.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/session-theme-carrier-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__carrierReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/status-dot.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-groups.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+<!-- THE REAL EMITTER, not a hardcoded copy of what it is believed to
+     emit. A harness that hand-wrote the swatch markup would keep passing
+     if the row builders stopped rendering one, which is the exact shape
+     of "282 passing assertions, zero pixels". -->
+<script src="../../client/js/session-theme-tint.js"></script>
+<style>
+  body { margin: 0; padding: 24px; }
+  #home { max-width: 520px; margin-top: 24px; }
+  /* THE POSITIVE CONTROL paints the selection accent as an opaque fill,
+     so the sampler has to be able to see that colour for this run to
+     mean anything. */
+  #control-accent {
+      background-color: var(--color-accent);
+      border-color: var(--color-accent);
+  }
+</style>
+</head>
+<body>
+<!-- `--open` is the panel's REAL open state: the panel is position:fixed
+     with translateX(-100%) closed, so a harness that hand-rolled its own
+     layout would measure rows that never lay out that way in the app. -->
+<div class="session-sidebar-panel session-sidebar-panel--open" data-density="cozy" id="panel">
+  <div class="session-sidebar-row" id="row-plain" data-active="0" data-pinned="0">
+    <div class="session-sidebar-row-main">
+      <span class="status-dot status-dot--idle"></span>
+      <span class="session-sidebar-row-name">plain</span>
+    </div>
+  </div>
+
+  <!-- `.themed-row` carries no theme markup in the source. Both the
+       attributes and the swatch are written at runtime by
+       window.__paintThemed, which calls the SHIPPED module, using the
+       HOST theme's own accent - the worst case, not a convenient one. -->
+  <div class="session-sidebar-row themed-row" id="row-themed"
+       data-active="0" data-pinned="0">
+    <div class="session-sidebar-row-main">
+      <span class="status-dot status-dot--idle"></span>
+      <span class="session-sidebar-row-name">themed</span>
+    </div>
+  </div>
+
+  <div class="session-sidebar-row" id="row-active" data-active="1" data-pinned="0">
+    <div class="session-sidebar-row-main">
+      <span class="status-dot status-dot--idle"></span>
+      <span class="session-sidebar-row-name">active</span>
+    </div>
+  </div>
+
+  <div class="session-sidebar-row themed-row" id="row-active-themed"
+       data-active="1" data-pinned="0">
+    <div class="session-sidebar-row-main">
+      <span class="status-dot status-dot--idle"></span>
+      <span class="session-sidebar-row-name">active + themed</span>
+    </div>
+  </div>
+
+  <div class="session-sidebar-row" id="control-accent" data-active="0" data-pinned="0">
+    <div class="session-sidebar-row-main">
+      <span class="status-dot status-dot--idle"></span>
+      <span class="session-sidebar-row-name">control</span>
+    </div>
+  </div>
+</div>
+
+<div class="launchpad-container" id="home">
+  <div class="running-session-row owned" id="home-plain">
+    <div class="running-session-top">
+      <span class="running-session-name">home, unthemed</span>
+    </div>
+  </div>
+  <div class="running-session-row owned themed-row" id="home-themed">
+    <div class="running-session-top">
+      <span class="running-session-name">home, themed</span>
+    </div>
+  </div>
+</div>
+
+<script>
+window.__carrierReady = false;
+
+/**
+ * Apply one shipped theme's cssVars to :root, then point every themed
+ * row's session-theme properties at a chosen accent.
+ *
+ * @param {string} id - theme directory name, e.g. "claude".
+ * @param {?string} sessionAccent - hex accent for the SESSION theme, or
+ *   null to reuse the host theme's own accent. Null is the worst case
+ *   and the default the verifier runs.
+ * @returns {Promise<object>} the cssVars map that was applied.
+ */
+window.__applyTheme = async function (id, sessionAccent) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    document.body.style.background = vars['--color-bg'] || '#000000';
+
+    var accent = sessionAccent || vars['--color-accent'];
+    var rgb = window.__hex(accent);
+    window.__sessionAccent = 'rgb(' + rgb.join(', ') + ')';
+    window.__paintThemed(accent);
+    return vars;
+};
+
+/**
+ * Re-mark every `.themed-row` using the SHIPPED module, not a copy.
+ *
+ * The registry is stubbed with a single synthetic manifest rather than
+ * hardcoding what `attrs()` and `swatchHtml()` are believed to return, so
+ * a row builder that stopped emitting a swatch could not keep this page
+ * green. The theme id is keyed on the accent because
+ * `SessionThemeTint.colorsFor` caches per id, and a second run at a
+ * different accent must not read back the first one's colour.
+ *
+ * @param {string} accentHex - the SESSION theme's accent.
+ * @returns {void}
+ */
+window.__paintThemed = function (accentHex) {
+    var id = 'probe_' + String(accentHex).replace('#', '').toLowerCase();
+    window.Themes = {
+        listAll: function () {
+            return [{ id: id, name: 'Probe', cssVars: { '--color-accent': accentHex } }];
+        },
+    };
+    var carrier = document.createElement('div');
+    carrier.innerHTML = '<i' + window.SessionThemeTint.attrs(id) + '></i>';
+    var src = carrier.firstChild;
+    var rows = document.querySelectorAll('.themed-row');
+    for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        row.setAttribute('data-session-theme', src.getAttribute('data-session-theme'));
+        row.setAttribute('style', src.getAttribute('style'));
+        var old = row.querySelector('.session-theme-swatch');
+        if (old) old.parentNode.removeChild(old);
+        var host = row.querySelector('.session-sidebar-row-main, .running-session-top');
+        host.insertAdjacentHTML('beforeend', window.SessionThemeTint.swatchHtml(id));
+    }
+};
+
+/**
+ * Parse `#rgb` / `#rrggbb` into channels.
+ * @param {string} hex - a hex colour.
+ * @returns {number[]} [r, g, b].
+ */
+window.__hex = function (hex) {
+    var h = String(hex).trim().replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
+/**
+ * Switch the sidebar panel's density, which is a real user control and
+ * the mode in which the swatch has least room.
+ *
+ * @param {string} d - 'compact' | 'cozy' | 'detailed'.
+ * @returns {void}
+ */
+window.__setDensity = function (d) {
+    document.getElementById('panel').setAttribute('data-density', d);
+};
+
+/**
+ * Resolve a custom property off :root.
+ * @param {string} name - e.g. "--color-accent".
+ * @returns {string} the trimmed computed value.
+ */
+window.__token = function (name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+};
+
+/**
+ * Geometry and computed paint for one row, plus its swatch if it has one.
+ *
+ * The rect is reported in device-aligned integers because every sampled
+ * pixel is addressed as an offset from a row edge, and a fractional
+ * origin slides those samples off the band they were chosen to land on.
+ *
+ * @param {string} id - element id.
+ * @returns {?object} null when the element is absent.
+ */
+window.__row = function (id) {
+    var el = document.getElementById(id);
+    if (!el) return null;
+    var cs = getComputedStyle(el);
+    var r = el.getBoundingClientRect();
+    var sw = el.querySelector('.session-theme-swatch');
+    var swatch = null;
+    if (sw) {
+        var scs = getComputedStyle(sw);
+        var sr = sw.getBoundingClientRect();
+        swatch = {
+            rect: {
+                x: Math.round(sr.left), y: Math.round(sr.top),
+                w: Math.round(sr.width), h: Math.round(sr.height),
+            },
+            backgroundColor: scs.backgroundColor,
+            borderTopWidth: scs.borderTopWidth,
+            borderTopColor: scs.borderTopColor,
+            display: scs.display,
+            ariaLabel: sw.getAttribute('aria-label') || '',
+        };
+    }
+    return {
+        id: id,
+        rect: {
+            x: Math.round(r.left), y: Math.round(r.top),
+            w: Math.round(r.width), h: Math.round(r.height),
+        },
+        boxShadow: cs.boxShadow,
+        borderLeftColor: cs.borderLeftColor,
+        borderLeftWidth: cs.borderLeftWidth,
+        backgroundColor: cs.backgroundColor,
+        backgroundImage: cs.backgroundImage,
+        swatch: swatch,
+    };
+};
+
+/** @returns {object} the whole measurement bundle for the current theme. */
+window.__carrier = function () {
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        theme: document.documentElement.getAttribute('data-theme'),
+        density: document.getElementById('panel').getAttribute('data-density'),
+        sessionAccent: window.__sessionAccent,
+        tokens: {
+            accent: window.__token('--color-accent'),
+            accentBorder: window.__token('--color-accent-border'),
+            border: window.__token('--color-border'),
+            bg: window.__token('--color-bg'),
+        },
+        rows: ['row-plain', 'row-themed', 'row-active', 'row-active-themed',
+               'control-accent', 'home-plain', 'home-themed'].map(window.__row),
+    };
+};
+
+(async () => {
+    await window.__applyTheme('claude', null);
+    window.__carrierReady = true;
+})();
+</script>
+</body>
+</html>

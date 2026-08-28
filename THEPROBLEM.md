@@ -94,6 +94,11 @@ The server IS functioning correctly locally, but:
 ### Current .env Content
 Location: `/Users/Adam/Library/Application Support/cloude-code-menubar/server/.env`
 
+> Secret values below were replaced with `<redacted>`. The originals were
+> committed to this public repository and are still readable in git history,
+> so redacting the file does not un-leak them: the Cloudflare API token, the
+> TOTP secret and the JWT secret all need to be ROTATED.
+
 ```bash
 # Server Configuration
 HOST=0.0.0.0
@@ -118,15 +123,15 @@ TUNNEL_TIMEOUT=30
 USE_NAMED_TUNNELS=true
 
 # Cloudflare Configuration
-CLOUDFLARE_API_TOKEN=CLBMnt6K2PhUNPKCOOUmkTPamlBUIacyFn_AOyyo
-CLOUDFLARE_ZONE_ID=c867cc771e87c4372b4d89f22add942a
+CLOUDFLARE_API_TOKEN=<redacted>
+CLOUDFLARE_ZONE_ID=<redacted>
 CLOUDFLARE_DOMAIN=your-subdomain.yourdomain.com  # ❌ PLACEHOLDER NOT REPLACED
 CLOUDFLARE_TUNNEL_NAME=claude-tunnel
 CLOUDFLARE_TUNNEL_ID=
 
 # Authentication Secrets
-TOTP_SECRET=NIRZMH5W25CBXNDHMIVM3VCX6XXWAZQF
-JWT_SECRET=aUYQ5u9-D79iKGj5QdI-CjqtlfzoK43FazVJRFRFkvo
+TOTP_SECRET=<redacted>
+JWT_SECRET=<redacted>
 
 # Authentication Configuration
 AUTH_CONFIG_FILE=./config.json

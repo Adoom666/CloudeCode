@@ -1,0 +1,24 @@
+
+╭─ Claude Code ───────────────────────────╮
+│                                         │
+│          Welcome back Joseph!           │
+│                                         │
+│                 ▐▛███▜▌                 │
+│                ▝▜█████▛▘                │
+│                  ▘▘ ▝▝                  │
+│                                         │
+│                Sonnet 5                 │
+│               Claude Pro                │
+│          ~/Development/example         │
+│                                         │
+╰─────────────────────────────────────────╯
+
+
+
+
+  Update available! Run: brew upgrade cla…
+───────────────────────────────────────────
+❯
+───────────────────────────────────────────
+  user@host:~/Development/example…
+  ⏵⏵ bypass permissions on (shift+tab   ·

@@ -1,0 +1,75 @@
+{
+  "jwt_expiry_minutes": 30,
+  "template_path": "claude-template",
+  "session": {
+    "backend": "auto",
+    "tmux_socket_name": "roundtrip-harness-throwaway",
+    "scrollback_lines": 3000
+  },
+  "auth_rate_limits": {
+    "totp_verify_per_minute": 5,
+    "totp_verify_per_hour": 20,
+    "trust_proxy_headers": false
+  },
+  "notifications": {
+    "enabled": false,
+    "ntfy_base_url": "",
+    "ntfy_topic": "",
+    "public_base_url": "",
+    "idle_threshold_seconds": 30.0,
+    "rate_limit_global_cap": 10,
+    "rate_limit_window_seconds": 60.0,
+    "rate_limit_per_kind_cooldown_seconds": 10.0,
+    "slack_webhook_url": "",
+    "pushover_token": "",
+    "pushover_user_key": ""
+  },
+  "agents": {
+    "claude_command": "claude",
+    "codex_command": "codex",
+    "hermes_command": "hermes",
+    "openclaw_command": "openclaw tui"
+  },
+  "uploads": {
+    "enabled": true,
+    "ttl_seconds": 86400,
+    "sweep_interval_seconds": 3600,
+    "max_size_mb": 10
+  },
+  "_comment_common_slash_commands": "Bare strings still work exactly as before; their short descriptions come from the built-in table in src/core/slash_command_labels.py. Use the object form only to override the wording or to describe a command the table does not know. Keep descriptions under 28 characters - they render on the chip on a phone.",
+  "common_slash_commands": [
+    "/clear",
+    "/compact",
+    "/context",
+    "/resume",
+    "/rewind",
+    "/model",
+    "/effort",
+    "/plan",
+    "/tasks",
+    "/diff"
+  ],
+  "projects": [
+    {
+      "name": "\ud83d\udd25 AGI-SaaS Disruptor",
+      "path": "~/projects/agi-saas",
+      "description": "Self-healing kubernetes-native AGI mesh leveraging zero-knowledge proofs at edge"
+    },
+    {
+      "name": "\u26a1 NeuralMesh3000",
+      "path": "~/projects/neural-mesh",
+      "description": "Decentralized autonomous LLM swarm with blockchain-verified hallucination suppression",
+      "agent_type": "hermes"
+    },
+    {
+      "name": "\u269b\ufe0f ReactHook Nirvana",
+      "path": "~/projects/react-nirvana",
+      "description": "Component library that transcends the virtual DOM and enters the astral plane"
+    },
+    {
+      "name": "\u2601\ufe0f Cloude Code",
+      "path": "~/projects/cloude-code",
+      "description": "Remote control Claude Code sessions from literally anywhere (actually useful)"
+    }
+  ]
+}

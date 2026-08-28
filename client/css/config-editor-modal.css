@@ -1,0 +1,398 @@
+/* =====================================================================
+ * Editor modal - client/js/config-editor-modal.js
+ * ---------------------------------------------------------------------
+ * Split out of config-editor.css (which now holds only the tree panel)
+ * purely to keep both files under this project's 500-line rule; the two
+ * together are one stylesheet for one feature, loaded back to back. Uses
+ * the same design tokens as config-editor.css and styles.css's :root
+ * block - no new tokens introduced here either.
+ * ===================================================================== */
+
+/* FULL SCREEN WHEN EDITING. "when editing a file the editor is modal full
+ * screen." It used to be a 900px x 85dvh card floating over the file
+ * picker; editing a config file is the task, not a peek at one, and a
+ * code editor is the surface that most wants the pixels.
+ *
+ * The overlay it sits in is the modal backdrop and stays exactly that, so
+ * every dismissal contract is untouched: the close button, the backdrop
+ * click (now only reachable at the seams, which is fine - Escape and the
+ * two buttons are the real paths), Escape via modal-stack.js, and the
+ * unsaved-changes confirm in front of all three.
+ *
+ * The `vh` line is the fallback for engines with no dynamic viewport
+ * units; `dvh` is what every current engine uses. Order matters - see
+ * tests/test_viewport_units.node.mjs, and the measured 5.7% vh overshoot
+ * on iOS that it exists to catch.
+ *
+ * No border, no radius: a full-screen surface has no edge to draw. Flat,
+ * square, matching the settings screen. */
+.config-editor-modal-content {
+    background: var(--color-bg);
+    border: none;
+    border-radius: 0;
+    width: 100%;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+    position: relative;
+}
+
+/* The overlay has no padding of its own, but state it: a full-screen
+ * child must not be inset by a rule added to `.modal-overlay` later. */
+.config-editor-modal-overlay {
+    padding: 0;
+}
+
+.config-editor-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0;
+}
+
+/* "back to files" - the way out of the SECOND surface, now at EVERY
+ * width. It used to be phone-only, and the reason was sound at the time:
+ * on desktop the picker was visible behind the 900px card, so "back" had
+ * a visible destination and needed no signpost. A FULL-SCREEN editor
+ * removes that: the drawer behind is covered completely on desktop too,
+ * exactly as it is on a phone, and the × alone leaves the user unsure
+ * whether it closes the editor or the whole thing. Same reasoning as
+ * before, applied to the layout that exists now.
+ *
+ * Still rendered only when the picker is actually open beneath
+ * (config-editor-modal.js checks ModalStack.depth()) - with nothing
+ * behind it, back would be a second, differently-worded close button. */
+.config-editor-modal-back {
+    display: flex;
+    width: fit-content;
+    /* Same bare-`button` 36/40px square trap as the mode toggle above.
+     * The @media (max-width: 700px) block below sets width: fit-content,
+     * which happens to rescue the width on a phone, but height was still
+     * pinned at 40px and nothing rescued it at 481-700px. Declare both
+     * here so the rescue is not doing load-bearing work by accident. */
+    width: auto;
+    height: auto;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    cursor: pointer;
+    min-height: 32px;
+}
+
+.config-editor-modal-back:hover,
+.config-editor-modal-back:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+/* The `flex`/`width: fit-content` pair above used to live in a
+ * `@media (max-width: 700px)` block. Its reasoning was never about the
+ * viewport: `inline-flex` let back and the filename share a line and
+ * overlap on a 375px screen (observed), and block-level with a
+ * fit-content width puts back on its own line above the filename, sized
+ * to its own label. That is right at every width, and now that the
+ * control is shown at every width it is declared unconditionally. */
+
+.config-editor-modal-title {
+    color: var(--color-accent);
+    font-weight: bold;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    word-break: break-all;
+}
+
+.config-editor-modal-subtitle {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    margin-top: 4px;
+    word-break: break-all;
+}
+
+.config-editor-modal-body {
+    flex: 1;
+    min-height: 0;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+
+.config-editor-modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-top: 1px solid var(--color-border);
+    margin-top: 0;
+}
+
+.config-editor-dirty-flag {
+    color: var(--color-warning);
+    font-size: 0.8rem;
+    margin-right: auto;
+}
+
+.config-editor-mode-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+/* width/height are LOAD-BEARING, not decoration. styles.css carries a bare
+ * `button { width: 36px; height: 36px }` reset for the header icon row, and
+ * `@media (max-width: 480px)` raises it to 40x40 for touch. A class only
+ * beats that rule for the properties it actually declares, so without these
+ * two lines every labelled button here collapses to a 40px square on a
+ * phone and its label renders straight over the border. Measured at 375px
+ * before this rule: box 40x40, content box 10px wide, "preview" 44.1px -
+ * a 34.1px spill. Same trap the .settings-tab rule in styles.css documents. */
+.config-editor-mode-toggle button {
+    width: auto;
+    height: auto;
+    min-height: 32px;
+    padding: 5px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.config-editor-mode-toggle button[aria-selected="true"] {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+.config-editor-exec-warning,
+.config-editor-ro-warning {
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border-radius: var(--radius-md);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+}
+
+.config-editor-exec-warning {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border: 1px solid var(--color-warning-border);
+}
+
+.config-editor-ro-warning {
+    background: var(--color-bg-overlay-faint);
+    color: var(--color-fg-muted);
+    border: 1px solid var(--color-border);
+}
+
+/* ---- CodeMirror 6 host (client/vendor/codemirror/) ----------------------
+ * CM6 ships zero external CSS - all of its own chrome is inline
+ * EditorView.theme()/baseTheme() styling, so this block is only the
+ * OUTER container (border/background/sizing - what a plain textarea used
+ * to look like here) plus the handful of `.cm-*` class overrides needed
+ * to pull CM6's default (light, white-background) look onto this app's
+ * dark palette using the SAME tokens as everything else in this file -
+ * no new colors introduced. ---- */
+
+.config-editor-cm-host {
+    flex: 1;
+    min-height: 320px;
+    width: 100%;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.config-editor-cm-host:focus-within {
+    border-color: var(--color-accent);
+}
+
+.config-editor-cm-host .cm-editor {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.9rem;
+}
+
+.config-editor-cm-host .cm-editor.cm-focused {
+    outline: none;
+}
+
+.config-editor-cm-host .cm-scroller {
+    overflow: auto;
+    line-height: 1.5;
+}
+
+.config-editor-cm-host .cm-gutters {
+    background: var(--color-bg-elevated);
+    color: var(--color-fg-subtle);
+    border-right: 1px solid var(--color-border-subtle);
+}
+
+.config-editor-cm-host .cm-activeLine,
+.config-editor-cm-host .cm-activeLineGutter {
+    background: var(--color-bg-hover);
+}
+
+.config-editor-cm-host .cm-selectionBackground,
+.config-editor-cm-host .cm-content ::selection {
+    background: var(--color-accent-bg) !important;
+}
+
+.config-editor-cm-host .cm-cursor {
+    border-left-color: var(--color-accent);
+}
+
+.config-editor-cm-host .cm-matchingBracket {
+    background: var(--color-accent-bg-soft);
+    outline: 1px solid var(--color-accent-border);
+}
+
+.config-editor-cm-host[data-readonly="1"] {
+    opacity: 0.85;
+}
+
+/* Sensitive-content mask overlay - covers the editor host until the user
+ * explicitly reveals via App.showConfirmModal (see config-editor-
+ * modal.js). Purely a screen/screenshot/screen-share guard, not an
+ * access-control boundary - the content is already in the DOM/JS memory,
+ * this only stops it rendering on screen by default. */
+.config-editor-sensitive-mask {
+    flex: 1;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border: 1px dashed var(--color-warning-border);
+    border-radius: var(--radius-md);
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    text-align: center;
+    padding: 24px;
+}
+
+.config-editor-sensitive-mask svg {
+    opacity: 0.9;
+}
+
+.config-editor-sensitive-mask-text {
+    font-size: 0.85rem;
+    max-width: 320px;
+    color: var(--color-fg-muted);
+}
+
+.config-editor-badge--sensitive {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
+.config-editor-preview {
+    flex: 1;
+    min-height: 320px;
+    overflow-y: auto;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    color: var(--color-fg);
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.config-editor-preview h1,
+.config-editor-preview h2,
+.config-editor-preview h3,
+.config-editor-preview h4,
+.config-editor-preview h5,
+.config-editor-preview h6 {
+    color: var(--color-accent);
+    margin: 1em 0 0.4em;
+}
+
+.config-editor-preview h1:first-child,
+.config-editor-preview h2:first-child,
+.config-editor-preview h3:first-child {
+    margin-top: 0;
+}
+
+.config-editor-preview p {
+    margin: 0 0 0.8em;
+}
+
+.config-editor-preview ul,
+.config-editor-preview ol {
+    margin: 0 0 0.8em;
+    padding-left: 1.4em;
+}
+
+.config-editor-preview blockquote {
+    margin: 0 0 0.8em;
+    padding: 4px 12px;
+    border-left: 3px solid var(--color-accent);
+    color: var(--color-fg-muted);
+}
+
+.config-editor-preview code {
+    background: var(--color-bg-overlay-faint);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm, 4px);
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+}
+
+.config-editor-md-pre {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 0 0 0.8em;
+}
+
+.config-editor-md-pre code {
+    background: none;
+    padding: 0;
+}
+
+.config-editor-preview hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 1em 0;
+}
+
+.config-editor-preview a {
+    color: var(--color-accent);
+}
+
+/* NO MOBILE SIZE OVERRIDE. There used to be a `@media (max-width: 700px)`
+ * block here taking the card to 98% x 92dvh - a near-fullscreen nudge for
+ * a box that was 900px x 85dvh on desktop. The editor is full screen at
+ * EVERY width now, and this block was the only thing standing between it
+ * and the phone: measured at 390x844 with it still in place, the editor
+ * came out 382.2 x 776.5 at (3.9, 33.8) instead of 390 x 844 at (0, 0).
+ * Two rules describing one box is how "full screen" quietly becomes
+ * "nearly full screen" on the only device where the difference is felt. */

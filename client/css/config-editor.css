@@ -1,0 +1,397 @@
+/* =====================================================================
+ * Config/project file tree panel
+ * ---------------------------------------------------------------------
+ * New CSS file (not appended to the already-oversized styles.css), same
+ * convention as session-sidebar.css. Uses the design tokens defined in
+ * styles.css's :root block - no new tokens introduced.
+ *
+ * This file is the FILE PICKER modal only - a centered `.modal-overlay`
+ * dialog (it used to be a right-hand slide-over panel), tree-only and
+ * full height inside its own box so a long tree stays navigable. The
+ * EDITOR MODAL that stacks over it lives in the sibling stylesheet
+ * config-editor-modal.css, split out purely to keep both files under this
+ * project's 500-line rule; load both, in either order, alongside this
+ * feature's JS. Stacking chrome (scroll lock, covered-modal treatment) is
+ * in modal-stack.css.
+ * ===================================================================== */
+
+/* `.modal-overlay` sets display: flex, which beats the `hidden`
+ * attribute's UA display: none - so the picker needs this to actually
+ * stay hidden between opens. Its markup is static in index.html rather
+ * than built on demand, which is why it needs a hidden state at all. */
+.config-editor-picker-overlay[hidden] {
+    display: none;
+}
+
+/* THE PICKER'S BOX IS NOT DESCRIBED HERE ANY MORE. It stopped being a
+ * centred dialog and became a right-hand DRAWER that can be pinned open,
+ * docking the app to the left of it. Its geometry, the docked layout and
+ * the pin control all live in client/css/config-drawer.css, which loads
+ * after this file. Everything below - the header row, the tree, the rows -
+ * is unchanged and is what the drawer contains. */
+
+.config-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
+}
+
+.config-editor-title {
+    font-weight: bold;
+    color: var(--color-accent);
+    letter-spacing: 0.3px;
+}
+
+/* "+ new file" - sits between the title and the close control. Declares
+ * width/height for the bare-`button` reason documented on the tree rows
+ * below; `margin-left: auto` pushes it and the close button to the right
+ * of the flex header while the title stays left. */
+.config-editor-new {
+    width: auto;
+    height: auto;
+    min-height: 30px;
+    margin-left: auto;
+    margin-right: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.config-editor-new:hover,
+.config-editor-new:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+/* New-file prompt: the root select, the path input, and the inline error.
+ * Reuses .modal-overlay / .modal-btn from styles.css for the chrome. */
+.config-editor-new-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+
+.config-editor-new-form label {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+}
+
+.config-editor-new-form select,
+.config-editor-new-form input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    padding: 8px 10px;
+}
+
+.config-editor-new-hint {
+    color: var(--color-fg-subtle);
+    font-size: 0.75rem;
+}
+
+.config-editor-new-form select:focus,
+.config-editor-new-form input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+#config-editor-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+#config-editor-close:hover {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+/* Full-height tree - no more 45%-max-height split with an inline editor. */
+.config-editor-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.config-editor-tree {
+    flex: 1;
+    padding: 10px 8px;
+    overflow-y: auto;
+}
+
+.config-editor-loading,
+/* An absent root's explanation. Muted, not danger-coloured: "this project
+   has no .claude/" is ordinary. It exists so a short tree can never be
+   mistaken for a complete one. */
+.config-editor-notice {
+    padding: 8px 10px;
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.config-editor-error,
+.config-editor-empty {
+    padding: 10px 8px;
+    color: var(--color-fg-muted);
+    font-size: 0.85rem;
+}
+
+.config-editor-error {
+    color: var(--color-danger);
+}
+
+.config-editor-error.config-editor-success {
+    color: var(--color-accent);
+}
+
+.config-editor-root-label {
+    /* No text-transform here - these are real filesystem paths
+       (~/.claude, project .claude, working dir); "uppercase" rendered
+       "~/.claude" as "~/.CLAUDE" which is a DIFFERENT, misleading path.
+       Every other label in this panel computes text-transform: none;
+       this rule now matches that and the app's lowercase UI voice. */
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    color: var(--color-fg-subtle);
+    margin: 10px 6px 4px;
+}
+
+.config-editor-list {
+    list-style: none;
+    margin: 0;
+    padding-left: 0;
+}
+
+/* The panel's outer tree area is itself explicitly left-aligned - rows
+ * are flush against it, never centered. Every row's own content is
+ * additionally text-align: left below, so nothing upstream (a stray
+ * inherited text-align: center on an ancestor) can pull rows toward the
+ * middle of the panel again. */
+.config-editor-tree,
+.config-editor-list--roots {
+    text-align: left;
+}
+
+/* ---- tree rows: directory/root toggle + file button share one visual
+ * language (full-width tappable row, guides + glyph/spacer + icon +
+ * name), differing only in the disclosure glyph and click behavior -
+ * toggle vs. open. Both are real <button> elements so they are
+ * keyboard-reachable and screen-reader legible without any role=
+ * workarounds. Rows are LEFT-ALIGNED and FLUSH - indentation comes from
+ * the guide spans prepended to each row's content (config-editor-panel.js
+ * _buildGuides()), not from a growing left-padding, so the tree reads as
+ * connected vertical lines per depth level like a real filesystem tree
+ * rather than rows drifting rightward with nothing to anchor them. ---- */
+
+.config-editor-toggle,
+.config-editor-file {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+    /* Explicit, for the same reason as .config-editor-mode-toggle button in
+     * config-editor-modal.css: the bare `button` reset in styles.css pins
+     * height to 36px (40px under @media max-width 480px), and min-height
+     * cannot raise a declared height. Without this a row is a fixed 40px
+     * box regardless of its content. */
+    height: auto;
+    padding: 7px 6px;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+    /* Comfortable tap target on a phone - the whole row, not the icon. */
+    min-height: 34px;
+}
+
+/* A tree row's hover affordance is COLOR ONLY - it must never change the
+ * row's horizontal extent.
+ *
+ * These rows are real <button> elements, so the bare `button` reset in
+ * styles.css reaches them, and its `button:hover:not(:disabled)` rule
+ * (styles.css:514) applies `transform: scale(1.05)` plus a 12px outset
+ * glow. That reset is written for the round 36x36 header controls, where
+ * growing 5% on hover is the intended flourish. On a full-width row it is
+ * an overflow bug: a 485px row scaled 1.05 renders 509px, overhanging
+ * 12px past its own right edge, and `.config-editor-tree` has
+ * `overflow-y: auto` - which per CSS overflow-3 computes the OTHER axis to
+ * `auto` as well - so the overhang became a real horizontal scrollbar that
+ * appeared the instant the pointer touched any row. Measured before this
+ * rule: tree scrollWidth 505 against clientWidth 501 at desktop width, and
+ * 364 against 363 with the panel at its 390px-viewport width, at every
+ * nesting depth. After: 501/501 and 363/363.
+ *
+ * The `:not(:disabled)` here is not defensive noise - it is what raises
+ * these selectors to (0,3,0), above the reset's (0,2,1), so the intended
+ * background actually wins too. Without it the reset's accent tint was
+ * silently overriding both colors declared below. Same shape as
+ * `.launchpad-section-toggle:hover:not(:disabled)` in styles.css:985.
+ *
+ * If a row ever needs a hover affordance that wants more room, it has to
+ * fit INSIDE the existing width - absolutely positioned within the row, or
+ * space the row already reserves at rest - never a transform or an outset
+ * shadow. */
+.config-editor-toggle:hover:not(:disabled),
+.config-editor-file:hover:not(:disabled),
+.config-editor-toggle:focus-visible,
+.config-editor-file:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+    transform: none;
+    box-shadow: none;
+}
+
+.config-editor-file {
+    color: var(--color-fg-muted);
+}
+
+.config-editor-file:hover:not(:disabled),
+.config-editor-file:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+/* The focus ring is INSET, so it paints inside the row's own box and adds
+ * no width either. Declared last so it survives the `box-shadow: none`
+ * above, which exists only to kill the reset's outset glow. */
+.config-editor-file:focus-visible:not(:disabled),
+.config-editor-toggle:focus-visible:not(:disabled) {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.config-editor-toggle svg,
+.config-editor-file svg {
+    flex-shrink: 0;
+}
+
+/* Per-depth indentation GUIDE - one fixed-width vertical rule per
+ * ancestor level, self-stretching to the row's full height so adjacent
+ * rows' guides visually connect into continuous tree lines. */
+.config-editor-guide {
+    display: inline-block;
+    width: 14px;
+    align-self: stretch;
+    flex-shrink: 0;
+    border-right: 1px solid var(--color-border-subtle);
+}
+
+/* The literal +/- disclosure control the user asked for ("need it too
+ * use + and - like a real file tree"). Real state lives on
+ * aria-expanded; this glyph is presentational only (aria-hidden) and its
+ * text content is kept in sync by the click handler in
+ * config-editor-panel.js. Fixed-width square so file rows can reserve an
+ * identical spacer and keep names aligned at every depth. */
+.config-editor-toggle-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1;
+    color: var(--color-fg-muted);
+}
+
+.config-editor-toggle:hover .config-editor-toggle-glyph,
+.config-editor-toggle:focus-visible .config-editor-toggle-glyph {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+}
+
+/* File rows have no glyph, but reserve its exact width so a file's name
+ * lines up with a directory's name at the same depth. */
+.config-editor-toggle-spacer {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+}
+
+/* Root nodes (~/.claude, project .claude, project files) read as the
+ * top of the tree, not just another directory - bolder name, accent
+ * color, same +/- affordance as everything below it. */
+.config-editor-toggle--root .config-editor-root-label {
+    color: var(--color-accent);
+    font-weight: bold;
+}
+
+/* min-width: 0 is load-bearing, not decoration. A flex item defaults to
+ * min-width: auto, which is its min-content width, so a long name plus a
+ * flex-shrink: 0 badge (read-only / sensitive) makes the row's content
+ * wider than the row. A <button> overflows its own box symmetrically in
+ * that case, so the whole row drifted ~10px LEFT of its siblings at the
+ * same depth and broke the guide-line alignment. min-width: 0 lets the
+ * name shrink and the ellipsis above actually take effect. */
+.config-editor-node-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.config-editor-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-overlay-faint);
+    color: var(--color-fg-subtle);
+}
+
+.config-editor-badge svg {
+    width: 11px;
+    height: 11px;
+}
+
+.config-editor-badge--exec {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
+/* NO MOBILE BOX OVERRIDE HERE ANY MORE. There used to be a
+ * `@media (max-width: 700px)` block widening the picker to 98%/92dvh,
+ * back when it was a centred dialog. The drawer is full height at every
+ * width and narrows via --config-drawer-w, which config-drawer.css
+ * redefines at the same 700px. Two files describing one box is how a
+ * drawer turns back into a dialog by accident. */

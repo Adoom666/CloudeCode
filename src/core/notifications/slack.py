@@ -1,9 +1,9 @@
-"""Slack incoming-webhook push backend — plain module (mirror of ntfy.py).
+"""Slack incoming-webhook push backend - plain module (mirror of ntfy.py).
 
 Slack incoming webhook contract
 (https://api.slack.com/messaging/webhooks):
-- POST JSON to the webhook URL. Body is a Slack message payload —
-  ``text`` (fallback) plus optional ``blocks``. No auth header — the
+- POST JSON to the webhook URL. Body is a Slack message payload -
+  ``text`` (fallback) plus optional ``blocks``. No auth header - the
   URL itself is the credential.
 - Single channel: the webhook is bound to one channel at creation
   time on the Slack side. We do not pick channels here.
@@ -12,12 +12,12 @@ Privacy / surface contract:
 - We do NOT carry deep links the way ntfy does (Click header). The
   Slack message text includes the event's snippet truncated to 200
   chars; that's it. No project name composed by us, but the snippet
-  itself MAY contain free-form caller-supplied text — callers are
+  itself MAY contain free-form caller-supplied text - callers are
   responsible for what they pass in.
 
 Failure policy:
 - Fire-and-forget. Network errors, timeouts, 4xx, 5xx are all caught
-  and logged ONCE at WARN. Never raised — the toast pipeline must
+  and logged ONCE at WARN. Never raised - the toast pipeline must
   never die because Slack is down.
 - Empty webhook URL → channel is silently disabled (logged once at
   init). Subsequent ``send`` calls are no-ops.
@@ -43,7 +43,7 @@ _webhook_url: str = ""
 
 
 # --- Per-event presentation table ----------------------------------------
-# Generic emoji + title per EventType. We keep this lean — Slack messages
+# Generic emoji + title per EventType. We keep this lean - Slack messages
 # carry the event's snippet directly, so we don't need ntfy-style copy.
 _PRESENTATIONS: dict[EventType, dict[str, str]] = {
     EventType.CLAUDE_STOP: {"emoji": ":white_check_mark:", "title": "Claude finished"},
@@ -70,10 +70,10 @@ def _build_payload(event: NotificationEvent) -> dict:
     block rendering) and ``blocks`` (rich rendering on web/desktop/mobile).
     """
     presentation = _presentation_for_kind(event.kind)
-    # Snippet bounded to 200 chars defensively — Slack accepts more but
+    # Snippet bounded to 200 chars defensively - Slack accepts more but
     # there's no value flooding a chat channel with a giant blob.
     snippet = (event.snippet or "")[:200]
-    text = f"{presentation['emoji']} *{presentation['title']}* — {snippet}".rstrip(" —")
+    text = f"{presentation['emoji']} *{presentation['title']}* - {snippet}".rstrip(" -")
     return {
         "text": text,
         "blocks": [
@@ -91,7 +91,7 @@ async def init(webhook_url: str) -> None:
     Idempotent: re-init closes the prior client first.
 
     Args:
-        webhook_url: ``https://hooks.slack.com/services/...`` — empty
+        webhook_url: ``https://hooks.slack.com/services/...`` - empty
             string (or whitespace-only) disables this channel silently
             (logged once at info level).
     """
@@ -109,7 +109,7 @@ async def init(webhook_url: str) -> None:
         logger.info("slack.disabled_no_webhook")
         return
 
-    # Connect timeout matches read timeout — Slack's edge is fast; 5s
+    # Connect timeout matches read timeout - Slack's edge is fast; 5s
     # covers TLS + a typical RTT on flaky LAN.
     _client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=5.0))
     logger.info("slack.initialized")
@@ -135,7 +135,7 @@ async def send(event: NotificationEvent) -> None:
     """Fire-and-forget POST to Slack. Catches and logs ALL errors.
 
     No-ops when the webhook URL is unset OR when ``init`` was never
-    called (the router is the only legitimate caller — these checks
+    called (the router is the only legitimate caller - these checks
     are defense in depth).
 
     Args:
@@ -155,7 +155,7 @@ async def send(event: NotificationEvent) -> None:
     try:
         payload = _build_payload(event)
         response = await _client.post(_webhook_url, json=payload)
-        # Slack returns 200 on success. Non-2xx is a delivery problem —
+        # Slack returns 200 on success. Non-2xx is a delivery problem -
         # log and move on.
         if response.status_code >= 400:
             logger.warning(

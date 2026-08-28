@@ -1,37 +1,40 @@
 /**
- * Clipboard Tools (paperclip menu + terminal copy chord)
+ * Clipboard Tools (clipboard paste + terminal copy chord)
  * ----------------------------------------------------------------------
  * Two features, wired into terminal.js through two hook points (this
  * file is loaded right AFTER terminal.js in index.html; terminal.js
  * only calls in at runtime, after the async xterm CDN wait, so
  * window.ClipboardTools is always defined by then):
  *
- *  1. PAPERCLIP MENU — Terminal#_applyImageAttachButton() hands the 📎
- *     button + hidden file input to wireAttachButton(). The button now
- *     opens a small fixed-position menu:
- *       - "paste from clipboard" — reads the LOCAL device clipboard via
- *         navigator.clipboard.read(): the first image/* item routes
- *         through the existing Terminal#_uploadAndInjectImage() flow;
- *         otherwise text/plain (or the readText() fallback) is injected
- *         via Terminal#insertText() — the same binary WebSocket path as
- *         term.onData — sent as ONE frame so the server's >256B
- *         bracketed-paste heuristic in tmux_backend.py treats large
- *         pastes correctly.
- *       - "attach image" — the original hidden-file-input picker.
+ *  1. PASTE FROM CLIPBOARD - reads the LOCAL device clipboard via
+ *     navigator.clipboard.read(): the first image/* item routes through
+ *     the uploadAndInject() flow below; otherwise
+ *     text/plain (or the readText() fallback) is injected via
+ *     Terminal#insertText() - the same binary WebSocket path as
+ *     term.onData - sent as ONE frame so the server's >256B
+ *     bracketed-paste heuristic in tmux_backend.py treats large pastes
+ *     correctly.
  *
  *     Clipboard API realities: read()/readText() require a secure
  *     context + permission. On LAN http (non-localhost) the API can be
  *     entirely undefined, and where present it can reject with
  *     NotAllowedError. Every path degrades to the existing status pill
- *     pointing at the keyboard paste path — nothing throws unhandled.
- *     pasteFromClipboard() is only ever invoked from the menu tap, i.e.
+ *     pointing at the keyboard paste path - nothing throws unhandled.
+ *     pasteFromClipboard() is only ever invoked from a menu tap, i.e.
  *     inside a user gesture, which the permission model requires.
  *
- *  2. COPY CHORD — Terminal#_applyKeyHandlers()' xterm custom key
+ *     THE MENU THAT USED TO LIVE HERE IS GONE. The paperclip FAB owned a
+ *     two-item popup (paste / attach file) while a second folded strip
+ *     over the terminal's top-right corner owned copy / theme / music.
+ *     Both are now rows of the single session tools menu in
+ *     client/js/terminal-tools-menu.js, which calls the two functions
+ *     exported below. This file no longer builds or positions any UI.
+ *
+ *  2. COPY CHORD - Terminal#_applyKeyHandlers()' xterm custom key
  *     handler calls handleCopyChord() first for every key event.
  *     Cmd+C (mac) / Ctrl+Shift+C (win/linux) WITH an active xterm
  *     selection writes the selection to the system clipboard and
- *     swallows the event. Bare Ctrl+C is NEVER intercepted — it must
+ *     swallows the event. Bare Ctrl+C is NEVER intercepted - it must
  *     reach the pty as SIGINT (0x03). The selection is left in place
  *     after copy (macOS Terminal behavior: selection stays).
  */
@@ -39,11 +42,35 @@
 (function () {
     'use strict';
 
-    /** Singleton menu element + bound dismiss handlers (one menu max). */
-    let menuEl = null;
-    let menuAnchorBtn = null;
-    let onDocPointer = null;
-    let onDocKey = null;
+    /* =================================================================
+     * Reporting
+     * ================================================================= */
+
+    /**
+     * Report a result somewhere the user can actually see it.
+     *
+     * Everything in this file is reached from a session tools menu row,
+     * and the terminal status pill (z-index 70) is painted over by the
+     * sticky header (1000) and by every overlay a row can open. That is
+     * why the paste row looked like it did nothing at all over plain
+     * http: it DID report, underneath the header. FabMenu.notify is the
+     * shared fix; the pill stays as the fallback for a document that
+     * somehow loaded this without fab-menu.js.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {string} message - lowercase user-facing text.
+     * @param {string} kind - 'info', 'success' or 'error'.
+     * @returns {void}
+     */
+    function report(term, message, kind) {
+        if (window.FabMenu && typeof window.FabMenu.notify === 'function') {
+            window.FabMenu.notify(message, kind);
+            return;
+        }
+        if (term && typeof term._showStatusPill === 'function') {
+            term._showStatusPill(message, kind);
+        }
+    }
 
     /* =================================================================
      * Copy chord
@@ -53,7 +80,7 @@
      * Called from xterm's attachCustomKeyEventHandler closure for EVERY
      * key event. Returns true only when the event was consumed (the
      * caller then returns false so xterm drops it). Anything that is
-     * not a copy chord — including bare Ctrl+C — falls straight through
+     * not a copy chord - including bare Ctrl+C - falls straight through
      * to xterm's default handling.
      */
     function handleCopyChord(ev, term) {
@@ -61,7 +88,7 @@
         if ((ev.key || '').toLowerCase() !== 'c') return false;
 
         // Cmd+C (mac) or Ctrl+Shift+C (win/linux). Bare Ctrl+C (no shift)
-        // is deliberately excluded — that chord is SIGINT and must reach
+        // is deliberately excluded - that chord is SIGINT and must reach
         // the pty untouched.
         const isCopyChord =
             (ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) ||
@@ -69,7 +96,7 @@
         if (!isCopyChord) return false;
 
         if (!term.term || typeof term.term.hasSelection !== 'function' || !term.term.hasSelection()) {
-            return false; // nothing selected — let the key pass through
+            return false; // nothing selected - let the key pass through
         }
 
         ev.preventDefault();
@@ -80,157 +107,114 @@
 
     /**
      * Fire-and-forget clipboard write. Success is silent (matches macOS
-     * Terminal — the selection staying put is the confirmation); failure
+     * Terminal - the selection staying put is the confirmation); failure
      * surfaces via the existing status pill. Never throws.
      */
     function writeSystemClipboard(term, text) {
         if (!text) return;
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            navigator.clipboard.writeText(text).catch(() => {
-                term._showStatusPill('copy blocked by browser — use the system copy shortcut', 'error');
-            });
-        } else {
-            term._showStatusPill('clipboard unavailable on this connection', 'error');
-        }
-    }
-
-    /* =================================================================
-     * Paperclip menu
-     * ================================================================= */
-
-    /**
-     * Replaces the stock 📎 wiring. The hidden file input keeps the
-     * original change-handler behavior (the "attach image" path); the
-     * button now opens the menu instead of acting immediately.
-     */
-    function wireAttachButton(term, btn, input) {
-        input.addEventListener('change', async () => {
-            const file = input.files && input.files[0];
-            if (!file) return;
-            await term._uploadAndInjectImage(file, file.type || 'image/jpeg');
-            input.value = '';
-        });
-
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (menuEl) {
-                closeMenu();
-            } else {
-                openMenu(term, btn, input);
+        // Routed through CopyCompat: over plain http (Tailscale / LAN)
+        // navigator.clipboard is entirely undefined, and the old code
+        // dead-ended there with "clipboard unavailable". CopyCompat falls
+        // back to execCommand, which is not secure-context gated.
+        window.CopyCompat.copyText(text).then((result) => {
+            if (!result.ok) {
+                report(term, 'copy blocked by browser - use the system copy shortcut', 'error');
             }
         });
     }
 
-    function openMenu(term, btn, input) {
-        closeMenu();
+    /* =================================================================
+     * File input
+     * ================================================================= */
 
-        menuEl = document.createElement('div');
-        menuEl.className = 'cloude-attach-menu';
-        menuEl.setAttribute('role', 'menu');
-
-        menuEl.appendChild(menuItem('paste from clipboard', () => {
-            closeMenu();
-            pasteFromClipboard(term);
-        }));
-        menuEl.appendChild(menuItem('attach image', () => {
-            closeMenu();
-            input.click();
-        }));
-
-        document.body.appendChild(menuEl);
-        positionMenu(menuEl, btn);
-        menuAnchorBtn = btn;
-
-        // Dismiss on any outside tap or Escape. Deferred one tick so the
-        // tap that opened the menu doesn't immediately close it again.
-        // Taps on the 📎 button itself are excluded here — the button's
-        // own click handler toggles the menu, and pointerdown (capture)
-        // fires before click, so dismissing on button taps would make
-        // every re-tap close+reopen instead of closing.
-        onDocPointer = (e) => {
-            if (!menuEl) return;
-            if (menuEl.contains(e.target)) return;
-            if (menuAnchorBtn && menuAnchorBtn.contains(e.target)) return;
-            closeMenu();
-        };
-        onDocKey = (e) => {
-            if (e.key === 'Escape') closeMenu();
-        };
-        setTimeout(() => {
-            document.addEventListener('pointerdown', onDocPointer, true);
-            document.addEventListener('keydown', onDocKey, true);
-        }, 0);
+    /**
+     * Wire the hidden file input. The picker itself is opened by the
+     * "attach file" row of the session tools menu; this only owns what
+     * happens once a file comes back.
+     *
+     * Any file, not just an image: the server sanitises the name and the
+     * terminal gets a path Claude can read for itself.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {HTMLInputElement} input - the hidden file input.
+     * @returns {void}
+     */
+    function wireFileInput(term, input) {
+        if (!input || input._clipboardWired) return;
+        input._clipboardWired = true;
+        input.addEventListener('change', async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            await uploadAndInject(term, file, file.name || '');
+            input.value = '';
+        });
     }
 
-    function menuItem(label, onPick) {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'cloude-attach-menu__item';
-        item.setAttribute('role', 'menuitem');
-        item.textContent = label;
-        item.addEventListener('click', onPick);
-        return item;
+    /* =================================================================
+     * Upload + path injection
+     * ================================================================= */
+
+    /**
+     * Upload a blob and inject the resulting absolute path into the terminal.
+     *
+     * THE one upload flow, for every entry point: the desktop paste
+     * interceptor, the paste-fallback sheet, and the attach-file picker.
+     * Generalised from Terminal#_uploadAndInjectImage() 2026-08-16 rather
+     * than given a sibling, because nothing in the old body was
+     * image-specific beyond the wording. Images behave exactly as before;
+     * the server still applies the stricter image contract (magic-byte
+     * cross-check, tighter size cap) to anything with an image extension.
+     *
+     * Trailing SPACE, not Enter: Claude Code auto-attaches an absolute
+     * image path that appears in its prompt buffer, and reads any other
+     * absolute path with its own file tools, so the path lands with a
+     * separator and the user keeps typing. Auto-Enter would submit a
+     * path-only message and waste the round-trip.
+     *
+     * @param {object} term - the Terminal wrapper (insertText, status pill).
+     * @param {Blob} blob - the bytes to upload.
+     * @param {string} [filename] - declared name; empty for a nameless
+     *   clipboard blob, where api.js derives "paste.<ext>" from the type.
+     * @returns {Promise<void>}
+     */
+    async function uploadAndInject(term, blob, filename) {
+        report(term, 'uploading...', 'info');
+        try {
+            // Multi-session: scope the upload to THIS tab's session so the
+            // file lands in the right project's working dir.
+            const sessionId = typeof term._sessionId === 'function' ? term._sessionId() : null;
+            const result = await window.API.uploadFile(blob, filename || '', sessionId);
+            term.insertText(quotePathForPrompt(result.path) + ' ');
+            report(term, 'attached: ' + result.filename, 'success');
+        } catch (err) {
+            console.error('[FILE-PASTE] upload failed', err);
+            report(term, 'upload failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+        }
     }
 
     /**
-     * Anchor the menu directly above the 📎 button, right-aligned to it,
-     * clamped fully inside the VISIBLE viewport.
+     * Render an absolute path so it survives the shell prompt it lands in.
      *
-     * Uses left/top taken straight from the button's viewport rect so the
-     * menu and the measurement always live in the same coordinate space.
-     * (The previous version positioned via right/bottom computed from
-     * window.innerWidth/innerHeight minus the rect — on iOS Safari the
-     * layout and visual viewports diverge whenever the URL bar collapses,
-     * the keyboard opens, or the page is pinch/auto-zoomed, which made
-     * that subtraction produce out-of-range offsets and parked the menu
-     * at the bottom-left corner, half off-screen.)
+     * The server sanitises the BASENAME it writes, so the injected string
+     * is usually already bare-safe. The DIRECTORY half is the session's
+     * working dir, which the app does not control and which routinely
+     * contains spaces on macOS ("~/Library/Mobile Documents/..."). So the
+     * decision is made on the whole string, not on the part we sanitised.
      *
-     * Clamp bounds come from window.visualViewport when available (the
-     * actually-visible area under keyboard/zoom), offset into layout
-     * coordinates via offsetLeft/offsetTop so position:fixed resolves
-     * correctly; falls back to innerWidth/innerHeight elsewhere. Even a
-     * bogus rect can no longer push the menu off-screen — worst case it
-     * lands flush against a screen edge with an 8px margin.
+     * Bare when every character is in the shell-safe set, otherwise
+     * single-quoted with the standard `'\''` break-out for any embedded
+     * single quote. Single quotes are used rather than double because
+     * they suppress $ and ` expansion too, and Claude Code reads a quoted
+     * absolute path the same as a bare one.
+     *
+     * @param {string} p - absolute path from the upload response.
+     * @returns {string} the path, bare or single-quoted.
      */
-    function positionMenu(el, btn) {
-        const rect = btn.getBoundingClientRect();
-        const vp = window.visualViewport || null;
-        const vw = vp ? vp.width : window.innerWidth;
-        const vh = vp ? vp.height : window.innerHeight;
-        const offL = vp ? vp.offsetLeft : 0;
-        const offT = vp ? vp.offsetTop : 0;
-        const MARGIN = 8;
-
-        const w = el.offsetWidth;
-        const h = el.offsetHeight;
-
-        // Preferred spot: above the button, right edges aligned. If there
-        // is no room above, drop below the button instead.
-        let left = rect.right - w;
-        let top = rect.top - h - MARGIN;
-        if (top < offT + MARGIN) top = rect.bottom + MARGIN;
-
-        left = Math.min(Math.max(left, offL + MARGIN), offL + vw - w - MARGIN);
-        top = Math.min(Math.max(top, offT + MARGIN), offT + vh - h - MARGIN);
-
-        el.style.left = left + 'px';
-        el.style.top = top + 'px';
-    }
-
-    function closeMenu() {
-        if (onDocPointer) {
-            document.removeEventListener('pointerdown', onDocPointer, true);
-            onDocPointer = null;
-        }
-        if (onDocKey) {
-            document.removeEventListener('keydown', onDocKey, true);
-            onDocKey = null;
-        }
-        if (menuEl) {
-            menuEl.remove();
-            menuEl = null;
-        }
-        menuAnchorBtn = null;
+    function quotePathForPrompt(p) {
+        var s = String(p == null ? '' : p);
+        if (s === '') return s;
+        if (/^[A-Za-z0-9._\-\/~+=:,@]+$/.test(s)) return s;
+        return "'" + s.split("'").join("'\\''") + "'";
     }
 
     /* =================================================================
@@ -241,18 +225,25 @@
      * Reads the LOCAL device clipboard. Only called from the menu tap
      * (user gesture) to satisfy clipboard-permission rules.
      *
-     * Order: rich read() first — an image wins when present (mirrors
+     * Order: rich read() first - an image wins when present (mirrors
      * the desktop paste interceptor in terminal.js). Text comes from
      * the same rich items when available, else the readText() fallback.
-     * Any denial or API absence degrades to a status-pill message
-     * pointing at the keyboard paste path. Never throws.
+     *
+     * DETECT, DO NOT ASSUME. The read APIs need a secure context, which
+     * a LAN address never is, so on http they are simply absent and on
+     * https they can still reject with NotAllowedError. Either way we
+     * stop asking the browser and ask the USER instead, via the paste
+     * fallback - the one path that works on every origin. Never throws.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @returns {Promise<void>}
      */
     async function pasteFromClipboard(term) {
         const canRead = !!(navigator.clipboard && typeof navigator.clipboard.read === 'function');
         const canReadText = !!(navigator.clipboard && typeof navigator.clipboard.readText === 'function');
 
         if (!canRead && !canReadText) {
-            term._showStatusPill('paste unavailable on this connection — use cmd+v / ctrl+v in the terminal', 'error');
+            openFallback(term);
             return;
         }
 
@@ -263,7 +254,9 @@
                     const imageType = (item.types || []).find((t) => t.indexOf('image/') === 0);
                     if (imageType) {
                         const blob = await item.getType(imageType);
-                        await term._uploadAndInjectImage(blob, imageType);
+                        // A clipboard blob carries no name; api.js derives
+                        // "paste.<ext>" from the blob's own mime type.
+                        await uploadAndInject(term, blob, '');
                         return;
                     }
                 }
@@ -274,10 +267,10 @@
                         return;
                     }
                 }
-                term._showStatusPill('clipboard is empty', 'info');
+                report(term, 'clipboard is empty', 'info');
                 return;
             } catch (err) {
-                // Permission denied / unsupported MIME — fall through to
+                // Permission denied / unsupported MIME - fall through to
                 // the text-only path before giving up.
             }
         }
@@ -288,15 +281,33 @@
                 if (text) {
                     injectText(term, text);
                 } else {
-                    term._showStatusPill('clipboard is empty', 'info');
+                    report(term, 'clipboard is empty', 'info');
                 }
                 return;
             } catch (err) {
-                // Fall through to the blocked message below.
+                // Permission denied. Fall through to the fallback.
             }
         }
 
-        term._showStatusPill('paste blocked by browser — use cmd+v / ctrl+v in the terminal', 'error');
+        openFallback(term);
+    }
+
+    /**
+     * Hand the paste over to the user because the browser will not hand
+     * it to us. Passes injectText in so the fallback shares this file's
+     * injection path rather than growing a second one.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @returns {void}
+     */
+    function openFallback(term) {
+        if (window.PasteFallback && typeof window.PasteFallback.open === 'function') {
+            window.PasteFallback.open(term, injectText);
+            return;
+        }
+        report(term,
+            'paste unavailable on this connection - use cmd+v / ctrl+v in the terminal',
+            'error');
     }
 
     /**
@@ -304,22 +315,35 @@
      * frame via the existing Terminal#insertText() (the same send path
      * term.onData uses) so the server's >256B bracketed-paste heuristic
      * sees the whole paste as a single payload.
+     *
+     * THE ONLY INJECTION PATH. Both the secure-context read above and
+     * the paste fallback in paste-fallback.js land here, so bracketed
+     * paste and the single-frame send cannot diverge between them.
+     * Newlines are passed through untouched.
+     *
+     * @param {object} term - the Terminal wrapper.
+     * @param {string} text - the text to inject, newlines included.
+     * @returns {void}
      */
     function injectText(term, text) {
         if (!text) {
-            term._showStatusPill('clipboard is empty', 'info');
+            report(term, 'clipboard is empty', 'info');
             return;
         }
         if (!term.ws || term.ws.readyState !== WebSocket.OPEN) {
-            term._showStatusPill('terminal not connected', 'error');
+            report(term, 'terminal not connected', 'error');
             return;
         }
         term.insertText(text);
-        term._showStatusPill('pasted from clipboard', 'success');
+        report(term, 'pasted from clipboard', 'success');
     }
 
     window.ClipboardTools = {
         handleCopyChord,
-        wireAttachButton,
+        pasteFromClipboard,
+        wireFileInput,
+        injectText,
+        quotePathForPrompt,
+        uploadAndInject,
     };
 })();

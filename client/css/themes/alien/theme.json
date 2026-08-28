@@ -1,7 +1,7 @@
 {
   "id": "alien",
   "name": "Alien",
-  "description": "Nostromo MOTHER 6000 — phosphor green on ink black, hazard yellow on industrial grey.",
+  "description": "Nostromo MOTHER 6000 - phosphor green on ink black, hazard yellow on industrial grey.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -15,9 +15,9 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.45)",
     "--color-header-bg": "#020806",
     "--color-fg": "#7cfca8",
-    "--color-fg-muted": "#4a8a64",
-    "--color-fg-subtle": "#2a5040",
-    "--color-fg-faint": "#1c382c",
+    "--color-fg-muted": "#4b8c65",
+    "--color-fg-subtle": "#498c70",
+    "--color-fg-faint": "#468d6e",
     "--color-border": "#1a3a28",
     "--color-border-subtle": "#0e2418",
     "--color-accent": "#33ff66",
@@ -91,5 +91,11 @@
     "brightCyan": "#ccffee",
     "brightWhite": "#ccffd0"
   },
-  "themeCss": "theme.css"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.m4a",
+    "srcFallback": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
+  }
 }

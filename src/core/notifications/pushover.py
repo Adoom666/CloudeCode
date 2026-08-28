@@ -1,9 +1,9 @@
-"""Pushover push backend — plain module (mirror of ntfy.py / slack.py).
+"""Pushover push backend - plain module (mirror of ntfy.py / slack.py).
 
 Anticipated by the module docstring in ``__init__.py``: "when a second
 backend ships (Pushover, Slack, etc.) refactor then." Slack shipped
 first (v0.7.0 Part 4); this is that anticipated Pushover backend, added
-as a third plain module rather than triggering the ABC refactor — three
+as a third plain module rather than triggering the ABC refactor - three
 independent fire-and-forget senders still don't justify the interface
 overhead.
 
@@ -17,17 +17,17 @@ Pushover API contract (https://pushover.net/api):
 - Success is HTTP 200 with JSON ``{"status": 1, "request": "..."}``.
   Failure is either a non-200 status or a 200 body with
   ``"status": 0`` and an ``"errors"`` array describing what was wrong
-  (bad token, invalid user key, etc.) — both cases are logged and
+  (bad token, invalid user key, etc.) - both cases are logged and
   swallowed, never raised.
 
 Privacy contract, same posture as ntfy.py:
 - Title/message carry NO project name and NO session_slug.
 - The slug DOES appear in the ``url`` param when a public_base_url is
-  configured — same accepted trade-off as ntfy's Click header.
+  configured - same accepted trade-off as ntfy's Click header.
 
 Failure policy:
 - Network errors, timeouts, non-200, and status != 1 are all caught
-  and logged ONCE at WARN. Never raised — fire-and-forget by contract.
+  and logged ONCE at WARN. Never raised - fire-and-forget by contract.
 - Token or user key unset → send is a silent no-op (caller is the
   router, which already gates on has_pushover before enqueueing).
 """
@@ -59,7 +59,7 @@ _user_key: str = ""
 
 
 # --- Per-event presentation table ----------------------------------------
-# Generic Title/body — NEVER mention project name or session_slug, same
+# Generic Title/body - NEVER mention project name or session_slug, same
 # rule as ntfy. Priority scale (Pushover): -2 lowest, -1 low, 0 normal,
 # 1 high (bypasses quiet hours), 2 emergency (requires ack, not used here
 # since nothing in this app needs a retry/ack loop).
@@ -154,7 +154,7 @@ async def init(token: str, user_key: str) -> None:
     _user_key = (user_key or "").strip()
 
     if not (_token and _user_key):
-        # Either half missing — Pushover requires both. Disable silently,
+        # Either half missing - Pushover requires both. Disable silently,
         # same posture as slack.py's empty-webhook-url path.
         logger.info(
             "pushover.disabled_incomplete_credentials",
@@ -163,7 +163,7 @@ async def init(token: str, user_key: str) -> None:
         )
         return
 
-    # Connect timeout matches read timeout — same 5s budget as the other
+    # Connect timeout matches read timeout - same 5s budget as the other
     # two backends, tuned for a flaky LAN + TLS handshake.
     _client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=5.0))
     logger.info("pushover.initialized")
@@ -194,7 +194,7 @@ async def send(
     """Fire-and-forget POST to Pushover. Catches and logs ALL errors.
 
     No-ops when credentials are unset OR when ``init`` was never called
-    (the router is the only legitimate caller — these checks are
+    (the router is the only legitimate caller - these checks are
     defense in depth, same as the other two backends).
 
     Args:
@@ -249,7 +249,7 @@ async def send(
             )
             return
 
-        # Pushover returns 200 even for some validation failures — the
+        # Pushover returns 200 even for some validation failures - the
         # real success signal is the JSON body's "status" field.
         try:
             body = response.json()

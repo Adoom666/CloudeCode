@@ -1,0 +1,28 @@
+
+╭─── Claude Code v2.1.223 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                   │
+│                Welcome back Joseph!                │ Ask Claude to create a new app or clone a repository                                                       │
+│                                                    │ ────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                 │
+│                      ▝▜█████▛▘                     │ Fixed MCP OAuth sign-in failing with a redirect URI mismatch for servers that use a pre-registered OAuth … │
+│                        ▘▘ ▝▝                       │ Documented `claude remote-control --continue` for resuming the most recent Remote Control session          │
+│   Sonnet 5 · Claude Pro ·                          │ Added server-supplied Claude Code hook support for self-hosted runner sessions, matching managed-environm… │
+│   user@example.com's Organization                 │ /release-notes for more                                                                                    │
+│              ~/Development/example-session          │                                                                                                            │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ give me 5 paragraphs of lorem ipsum
+
+⏺ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Login
+
+   Browser didn't open? Use the url below to sign in (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=true&client_id=REDACTED&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=REDACTED&code_challenge=REDACTED&code_challenge_method=S256&state=REDACTED
+
+
+   Paste code here if prompted >
+
+   Esc to cancel

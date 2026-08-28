@@ -404,3 +404,255 @@ def test_client_supplied_source_field_is_overwritten(themes_app, patched_roots):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["source"] == "builtin"  # server stamp wins
+
+
+# --------------------------------------------------------------------------- #
+# The `audio` block — the regression that made the whole app silent.
+#
+# GET /api/v1/themes declares response_model=List[ThemeManifest]. That model
+# had no `audio` field, so Pydantic dropped the block at parse time and
+# FastAPI serialised it away again. Every theme.json on disk carried a
+# correct block; the client received none of them, built no playback node,
+# and honestly reported that the theme had no track. Four separate audio
+# fixes landed downstream of this while it was the actual cause.
+#
+# The test that would have caught it asserts on the RESPONSE, not on the
+# file: reading theme.json back and finding `audio` there proves nothing,
+# because that was true throughout the outage.
+# --------------------------------------------------------------------------- #
+
+_AUDIO_BLOCK = {
+    "src": "/static/assets/audio/dead-ship.m4a",
+    "srcFallback": "/static/assets/audio/dead-ship.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500,
+}
+
+
+def test_audio_block_survives_the_response_model(themes_app, patched_roots):
+    """The `audio` block must reach the client, field for field."""
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "withaudio", audio=dict(_AUDIO_BLOCK))
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["audio"] == _AUDIO_BLOCK
+
+
+def test_theme_without_audio_reports_null_not_missing(themes_app, patched_roots):
+    """A silent theme says so explicitly rather than omitting the key.
+
+    The client branches on `m.audio`, and an absent key and a null are the
+    same to it, but an explicit null is the difference between "this theme
+    has no track" and "something ate the field" when reading a payload by
+    hand during the next outage.
+    """
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "silent")
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "audio" in data[0]
+    assert data[0]["audio"] is None
+
+
+def test_every_bundled_theme_serves_its_audio_block():
+    """All shipped themes must serve audio through the REAL bundled root.
+
+    Deliberately not monkeypatched: this walks `client/css/themes/` exactly
+    as the endpoint does in production. A manifest that parses but loses its
+    audio on the way out is silence for that theme and nothing else.
+    """
+    app = FastAPI()
+    app.include_router(routes_mod.router, prefix="/api/v1")
+    app.dependency_overrides[require_auth] = lambda: True
+
+    resp = TestClient(app).get("/api/v1/themes")
+    assert resp.status_code == 200
+    bundled = [t for t in resp.json() if t["source"] == "builtin"]
+    assert bundled, "no bundled themes discovered"
+
+    silent = [t["id"] for t in bundled if not (t.get("audio") or {}).get("src")]
+    assert silent == [], f"themes serving no audio src: {silent}"
+
+
+def test_out_of_range_audio_values_are_clamped_not_rejected(
+    themes_app, patched_roots
+):
+    """A bad number must not take the whole theme out of the selector.
+
+    `_load_manifest` drops any manifest that fails validation, so a strict
+    validator here would turn one typo into a theme that silently vanishes
+    from the picker. Clamp instead.
+    """
+    bundled, _ = patched_roots
+    _write_manifest(
+        bundled,
+        "loud",
+        audio={**_AUDIO_BLOCK, "volume": 9.0, "fadeMs": -200},
+    )
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1, "a clampable value must not drop the theme"
+    assert data[0]["audio"]["volume"] == 1.0
+    assert data[0]["audio"]["fadeMs"] == 0
+
+
+def test_audio_block_without_src_drops_the_theme(themes_app, patched_roots):
+    """`src` is required: an audio block with no source is a real error.
+
+    Distinct from clamping. A missing src cannot be repaired into anything
+    meaningful, so the manifest is skipped and logged like any other
+    malformed one rather than served as a half-usable track.
+    """
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "broken", audio={"volume": 0.5})
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+# --------------------------------------------------------------------------- #
+# themeCss: dead-file removal (2026-08-19)
+#
+# client/css/themes/*/theme.css was never wired to any <link href> - the
+# client applies themes entirely through cssVars and effects.js. All
+# theme.css files and the themeCss key that pointed at them were removed.
+# The themeCss field stays on ThemeManifest so a manifest that declares one
+# without shipping the file fails loudly (skip + log) instead of the
+# silent-drop that a missing pydantic field used to cause.
+# --------------------------------------------------------------------------- #
+
+
+def test_declared_themecss_missing_file_drops_theme_and_logs_loudly(
+    themes_app, patched_roots, spy_logger
+):
+    """A manifest that declares `themeCss` but does not ship the file must
+    be skipped and logged, never silently served with a dangling reference.
+    """
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "good")
+    _write_manifest(bundled, "dangling", themeCss="theme.css")
+    # Deliberately do NOT create dangling/theme.css on disk.
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    ids = [t["id"] for t in resp.json()]
+    assert ids == ["good"]
+    assert "theme_manifest_themecss_missing" in _warning_event_names(spy_logger)
+
+
+def test_declared_themecss_with_file_present_still_validates(
+    themes_app, patched_roots
+):
+    """The inverse of the drop case: a manifest that declares `themeCss`
+    and actually ships the file must validate and pass the field through.
+    """
+    bundled, _ = patched_roots
+    theme_dir = _write_manifest(bundled, "has-css", themeCss="theme.css").parent
+    (theme_dir / "theme.css").write_text("/* real */", encoding="utf-8")
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["themeCss"] == "theme.css"
+
+
+def test_theme_without_themecss_validates_with_null_field(
+    themes_app, patched_roots
+):
+    """The common case post-removal: no `themeCss` key at all must still
+    validate cleanly and report the field as null, not error or vanish.
+    """
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "plain")
+
+    client = TestClient(themes_app)
+    resp = client.get("/api/v1/themes")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["themeCss"] is None
+
+
+def test_no_bundled_theme_css_files_remain_on_disk():
+    """Filesystem assertion, not just endpoint behavior: no `theme.css`
+    exists anywhere under the real bundled themes root any more.
+    """
+    root = routes_mod._bundled_themes_root()
+    leftovers = sorted(str(p) for p in root.glob("*/theme.css"))
+    assert leftovers == [], f"theme.css files still present: {leftovers}"
+
+
+def test_no_bundled_theme_declares_a_dangling_themecss():
+    """Walks the REAL bundled root exactly as the endpoint does. If any
+    shipped theme.json still declares `themeCss`, its file must exist -
+    otherwise `_load_manifest` would (correctly) drop that theme, and this
+    test names the dangling reference instead of the theme just vanishing.
+    """
+    root = routes_mod._bundled_themes_root()
+    dangling = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        manifest_path = child / "theme.json"
+        if not manifest_path.is_file():
+            continue
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        theme_css = raw.get("themeCss")
+        if theme_css and not (child / theme_css).is_file():
+            dangling.append(child.name)
+    assert dangling == [], f"themes declaring a missing themeCss: {dangling}"
+
+
+def test_every_bundled_theme_declares_and_ships_effects_js():
+    """Bidirectional check against the REAL bundled root: every theme must
+    both declare an `effects` filename in its manifest AND have that file
+    present on disk - and nothing may ship an effects.js that no manifest
+    declares. effects.js is the ONLY per-theme JS/CSS asset that actually
+    loads in the running app (see themeCss above for the one that never did).
+    """
+    root = routes_mod._bundled_themes_root()
+    theme_dirs = sorted(
+        p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    )
+    assert theme_dirs, "no bundled theme directories found"
+
+    not_declared = []
+    declared_but_missing = []
+    for theme_dir in theme_dirs:
+        manifest_path = theme_dir / "theme.json"
+        effects_on_disk = (theme_dir / "effects.js").is_file()
+        effects_declared = None
+        if manifest_path.is_file():
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            effects_declared = raw.get("effects")
+        if effects_on_disk and effects_declared != "effects.js":
+            not_declared.append(theme_dir.name)
+        if effects_declared and not (theme_dir / effects_declared).is_file():
+            declared_but_missing.append(theme_dir.name)
+
+    assert not_declared == [], f"effects.js present but undeclared: {not_declared}"
+    assert declared_but_missing == [], (
+        f"effects declared but missing on disk: {declared_but_missing}"
+    )

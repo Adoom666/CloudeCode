@@ -1,0 +1,191 @@
+/* =====================================================================
+ * File browser DRAWER - geometry, docking, and the pin control.
+ * ---------------------------------------------------------------------
+ * WHAT CHANGED. The file picker was a centred `.modal-overlay` dialog
+ * (520px wide, 85dvh tall) that covered the terminal it was about. It is
+ * now a full-height drawer against the RIGHT edge, and it can be PINNED:
+ * pinned means docked, so the app pays for it in layout instead of being
+ * covered by it, and the terminal narrows to the space that is left.
+ *
+ * THIS IS THE SESSION SIDEBAR'S PIN, DELIBERATELY. Same persisted '1'/'0'
+ * `cloude.*` key, same 700px mobile cut-off, same "docked means no
+ * backdrop and no auto-close", same body-class-drives-padding mechanism,
+ * same explicit TerminalLayout.requestFit() after the transition settles.
+ * Two panels that dock should not dock two different ways; if you change
+ * one, look at the other. The only real difference is the edge, and
+ * therefore which padding and which floating controls move.
+ *
+ * NOT A SECOND STYLESHEET FOR THE SAME THING. config-editor.css still
+ * owns everything INSIDE the drawer (header row, tree, rows) and
+ * config-editor-modal.css owns the editor that opens from it. This file is
+ * only the box, the dock, and the pin. Split for the 500-line rule; load
+ * this one after config-editor.css.
+ *
+ * FLAT, NOT ROUNDED. No pills, no ovals, square corners on the drawer and
+ * on the pin - matching the flattened settings screen.
+ * ===================================================================== */
+
+:root {
+    /* The drawer's width, and therefore the horizontal space the app
+     * gives up when it is DOCKED. Single source of truth for both, the
+     * same job --sidebar-dock-w does for the conversation sidebar.
+     *
+     * 40vw is the cap that matters on a wide screen: a fixed 420px is a
+     * third of a 1280px window but a tenth of a 4K one. */
+    --config-drawer-w: min(420px, 40vw);
+}
+
+/* Under the pin's own mobile cut-off the drawer is always an overlay, so
+ * the width is about readability on a phone rather than about how much
+ * terminal is left. */
+@media (max-width: 700px) {
+    :root {
+        --config-drawer-w: min(360px, 88vw);
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * The drawer box
+ * ------------------------------------------------------------------ */
+
+/* `.modal-overlay` centres its child. The drawer hugs the right edge and
+ * runs the full height instead. The overlay itself stays exactly what it
+ * was - the backdrop, and the click target that dismisses on an outside
+ * click - so nothing about the modal contract changes. */
+.config-editor-picker-overlay {
+    justify-content: flex-end;
+    align-items: stretch;
+}
+
+.config-editor-picker-content {
+    width: var(--config-drawer-w);
+    max-width: 100%;
+    /* Full viewport height. The `vh` line is the fallback for engines with
+     * no dynamic viewport units; `dvh` is what every current engine uses.
+     * Order matters - see tests/test_viewport_units.node.mjs. */
+    height: 100vh;
+    height: 100dvh;
+    background: var(--color-bg-elevated);
+    /* One hairline on the edge that faces the app. No outline box, no
+     * radius: a drawer is part of the frame, not a card floating in it. */
+    border: none;
+    border-left: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: -4px 0 24px var(--color-bg-overlay-soft);
+    display: flex;
+    flex-direction: column;
+    animation: configDrawerIn 160ms ease;
+}
+
+@keyframes configDrawerIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+/* ------------------------------------------------------------------ *
+ * The pin control, in the drawer's own header row
+ * ------------------------------------------------------------------ */
+
+/* Geometry is DECLARED, not inherited. styles.css carries a bare
+ * `button { width: var(--control-size); height: var(--control-size) }`
+ * and a class only beats it for the properties the class states, so a
+ * class that named width and forgot height would come out 36px tall
+ * (40px under the 480px media query). That trap has produced nine
+ * user-visible bugs in this app; both values are here on purpose. */
+.config-drawer-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-right: 6px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.config-drawer-pin:hover,
+.config-drawer-pin:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    border-color: var(--color-accent-border-soft);
+    outline: none;
+}
+
+.config-drawer-pin[aria-pressed="true"] {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border-soft);
+}
+
+.config-drawer-pin[hidden] {
+    display: none;
+}
+
+.config-drawer-pin svg {
+    display: block;
+}
+
+/* ------------------------------------------------------------------ *
+ * DOCKED (pinned)
+ *
+ * `.config-drawer-docked` lands on <body> only while the drawer is
+ * pinned AND open AND the viewport is wider than 700px - see
+ * client/js/config-drawer-pin.js - so there is no phone case to override
+ * here at all. Docked means the drawer stops overlaying the app and the
+ * app makes room for it instead.
+ * ------------------------------------------------------------------ */
+
+/* The screens pay the bare dock width: everything inside them brings its
+ * own padding. This is what shrinks the terminal's box, and the resize is
+ * ANNOUNCED to TerminalLayout.requestFit() rather than left to the
+ * ResizeObserver - the sidebar pin shipped on that assumption once and the
+ * terminal was reported not to resize. */
+body.config-drawer-docked .screen {
+    padding-right: var(--config-drawer-w);
+    transition: padding-right 160ms ease;
+}
+
+/* The header pays the dock width PLUS its own side padding, for the same
+ * reason the docked sidebar does on the left: its edge child sits at the
+ * content edge, so the bare width would glue it to the drawer's border. */
+body.config-drawer-docked .header {
+    padding-right: calc(var(--config-drawer-w) + var(--header-pad-x));
+    transition: padding-right 160ms ease;
+}
+
+/* A docked drawer covers nothing, so a backdrop would only be a full
+ * screen click target that closes it by accident. Transparent AND
+ * click-through: the terminal beside it must stay usable, which is the
+ * entire point of docking rather than overlaying. */
+body.config-drawer-docked .config-editor-picker-overlay {
+    background: transparent;
+    pointer-events: none;
+}
+
+body.config-drawer-docked .config-editor-picker-content {
+    pointer-events: auto;
+    /* A shadow says "floating above". This is part of the layout now. */
+    box-shadow: none;
+    animation: none;
+}
+
+/* THE FLOATING RIGHT-HAND CONTROLS MOVE IN BY THE DOCK WIDTH.
+ *
+ * They are `position: fixed` against the viewport edge, so screen padding
+ * does not move them: without this the FAB column and the d-pad would sit
+ * ON TOP of the docked drawer. The connection light bar is NOT included
+ * here any more - it moved to the bottom-LEFT corner, on the opposite
+ * edge from a drawer that docks on the right, so the drawer never reaches
+ * it. */
+body.config-drawer-docked .fab-menu-btn {
+    right: calc(var(--fab-slot-0) + var(--config-drawer-w));
+}
+
+body.config-drawer-docked .dpad-float-button {
+    right: calc(var(--fab-slot-1) + var(--config-drawer-w));
+}

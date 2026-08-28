@@ -122,7 +122,14 @@ async def test_sweeper_handles_missing_uploads_dir(tmp_path):
     """Base exists but no ``.cloude_uploads/`` inside → no-op."""
     sweeper = _make_sweeper([str(tmp_path)], ttl_seconds=60)
     result = await sweeper.sweep_now()
-    assert result == {"files_pruned": 0, "bytes_freed": 0}
+    # A missing bucket is a SKIP, not a refusal: the question was
+    # answered and there is genuinely nothing there.
+    assert result == {
+        "files_pruned": 0,
+        "bytes_freed": 0,
+        "bases_refused": 0,
+        "project_list_determined": True,
+    }
 
 
 # --------------------------------------------------------------------------- #

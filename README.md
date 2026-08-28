@@ -37,6 +37,7 @@ The session never restarted, never lost context, and never needed an SSH client.
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Install](#install)
+- [Upgrading and rolling back](#upgrading-and-rolling-back)
 - [Configuration](#configuration)
 - [Security model](#security-model)
 - [Honest limits](#honest-limits)
@@ -180,7 +181,8 @@ Switching projects, closing the tab, losing WiFi, restarting the server — none
 | ⭐ **"Claude is waiting on you" push** | A state machine reads the pane's own box-drawing output to detect a permission prompt or a finished task, then pushes to your phone. It rejects false positives from things like `grep Allow` output and markdown quote blocks. |
 | **Privacy-scrubbed notifications** | Push payloads carry canned generic text only — never a project name, never session content. The identifying detail lives solely in the tap-through deep link. |
 | **Slack webhook channel** | The same events fanned to a Slack incoming webhook if you'd rather get them there. |
-| **Native Claude Code hook wiring** | On boot it idempotently merges a managed block into `~/.claude/settings.json` so Claude's own Stop / Notification / PermissionRequest hooks feed the pipeline. Best effort — it never blocks startup. |
+| **Native Claude Code hook wiring** | On boot it idempotently merges a managed block into `~/.claude/settings.json` covering `Stop` / `Notification` / `PermissionRequest` (toasts + push) plus `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `SubagentStart` / `SubagentStop` (session status, below). Fully automatic — there is nothing to configure by hand, and it's best effort: it never blocks startup, and it never touches a hook block someone else installed. Set `disable_claude_hooks: true` to opt out entirely (session status then falls back to tmux-only, see below). |
+| ⭐ **Hook-driven session status + read/unread** | The sidebar and launchpad status dot is driven by Claude Code's own lifecycle hooks, not a tmux poll: `dead` → `question` ("your turn" — a Notification/PermissionRequest is unresolved) → `working` / `working_subagent` (live tool-use heartbeat, distinguishing top-level work from a spawned subagent) → `finished_unread` (a `Stop` landed and nobody's looked) → `idle`. A dropped `Stop` self-heals after a 120s heartbeat timeout instead of wedging "working" forever. Read/unread is tracked **server-side** (not localStorage) so it follows you between your phone and your laptop, and you can manually pin a session unread for followup — that pin survives you opening the session, and only clears when you clear it. If your Claude Code has no hooks configured (or you set `disable_claude_hooks`), this degrades gracefully to the plain tmux-only `working` / `idle` / `dead` / `unknown` states — nothing is ever guessed. |
 | **In-app toasts with cross-tab ack** | Toasts arrive over the session WebSocket. Dismissing one on your laptop dismisses it on your phone. Missed toasts are backfilled on reconnect. |
 | **Dev-server auto-detection** | When Claude starts `npm run dev`, the detected port is TCP-probed and surfaced as a clickable link — and disappears when the server stops. |
 | **Bounded, rate-limited dispatch** | A 100-deep drop-oldest queue with a global cap and per-kind cooldown means a chatty session can't notification-bomb your phone. |
@@ -222,7 +224,7 @@ Switching projects, closing the tab, losing WiFi, restarting the server — none
 | **Per-project theme pinning** | The theme is stored in a `.cc.theme` dotfile inside the project directory, so every device that opens that project gets the same look — and it survives session renames. |
 | **Drop-in custom themes** | Author a `theme.json` in the user themes directory and it's discovered live on the next `GET /themes`. No rebuild. |
 | **Live theme swap** | Changing themes re-palettes the running terminal instantly. No reconnect, no re-render of the session. |
-| **Ambient theme audio (capability)** | The theme format supports an `audio` block with Web Audio crossfade, muted by default and only initialized on a real user click. It ships **dormant** — no bundled theme uses it. |
+| **Ambient theme music** | Themes carry an `audio` block played through a Web Audio crossfade. It is off until you turn it on: "play music" in a session's editor menu is the only on/off, it is remembered per session, and nothing plays on the home screen. Settings > general has one global **music volume** — an attenuator only, floored at 35% so it can never be a second, silent way to switch sound off. |
 | **Reduced-motion respected** | `prefers-reduced-motion: reduce` is honored. |
 
 ### Native macOS app and ops
@@ -344,6 +346,22 @@ shasum -a 256 Cloude.Code-0.8.1-arm64.dmg
 
 The DMG is code-signed but **not notarized**, so Gatekeeper will warn on first open.
 
+**Two files, two jobs, and neither one has a default.** `config.json` holds
+projects, agents, notifications and slash commands; `.env` holds the machine
+paths and the secrets. Skipping either is a hard startup failure with a
+specific message, not a silent degrade:
+
+| Missing | What you get |
+|---|---|
+| `config.json` | `FileNotFoundError: Auth config file not found: config.json`, and 26 test errors/failures if you run the suite |
+| `DEFAULT_WORKING_DIR` in `.env` | a `CONFIGURATION ERROR` banner naming the field, before the server binds |
+
+`DEFAULT_WORKING_DIR` is deliberately NOT in `config.example.json`. `Settings`
+reads it from the environment only (`src/config.py`), so a copy of it in
+`config.json` would be inert - a value that looks authoritative, is read by
+nothing, and disagrees with the real one the moment either changes. One home
+per setting.
+
 ### Path B — From source
 
 ```bash
@@ -353,6 +371,9 @@ cd cloudecode
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+cp config.example.json config.json   # agents, notifications; projects starts EMPTY
+cp .env.example .env                 # then set DEFAULT_WORKING_DIR and LOG_DIRECTORY
 
 python3 setup_auth.py     # generates TOTP + JWT secrets, prints a QR, optional push setup
 ./start.sh                # python3 -m src.main, binds 0.0.0.0:8000
@@ -385,6 +406,106 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 
 ---
 
+## Upgrading and rolling back
+
+### Let Claude do it
+
+Everyone running this is already running Claude Code, so the upgrade is
+something you can hand to the agent. In a Claude Code session opened on this
+checkout:
+
+```
+/upgrade
+```
+
+or just tell it: "upgrade CloudeCode and confirm the data migrated." The
+command ships in this repo at `.claude/commands/upgrade.md` and follows
+[docs/upgrade-with-claude.md](docs/upgrade-with-claude.md), which is written
+for an agent: take a baseline first, upgrade, then verify the database against
+that baseline and report the measurements rather than the word "success".
+
+The two scripts that make it verifiable are `scripts/upgrade-baseline.sh`
+(snapshot version, schema version and per-table row counts before you start,
+read-only) and `scripts/upgrade-verify.sh` (compare afterwards). Each check
+reports one of three outcomes and the exit code says which: 0 all passed,
+1 something failed, 2 something could not be evaluated. **2 is deliberately
+not 0** - "I could not look" is not "nothing is wrong."
+
+You can still do all of it by hand. The rest of this section is that.
+
+Two scripts, `scripts/upgrade.sh` and `scripts/rollback.sh`, move a Path B (from-source) install between release tags. This section is in the root README rather than a separate `docs/` file because upgrading is something you do to the same checkout Install/Configuration/Security already describe, and every fact those scripts depend on (`.env`, `config.json`, `CLOUDE_STATE_DIR`, `config_version`, port 8000) is defined a few sections up. Splitting it out would mean either duplicating that context or forcing you to jump between two files mid-upgrade.
+
+**This covers Path B only.** The packaged `.app` has no in-place upgrader (see Honest limits) - a new version means downloading a new DMG and dragging it over the old one in `/Applications`. What these scripts DO share with the packaged app is everything under the hood: the same version resolver (`src/core/version.py`), the same config migration (`src/core/config_migration.py`), and the same release-tag self-check the app itself runs in the background and reports at `GET /api/v1/version` (TOTP-gated; the home bottom bar's version chip and the server-status panel both read it). If that self-check reports `update_available`, it names the tag and prints the exact command to run.
+
+### Everything is pinned to a release tag
+
+There is no "upgrade to whatever's newest on the branch." `scripts/upgrade.sh` only moves to a tag that is a real, published release tag on the remote (checked with `git ls-remote`, the same call the in-app self-check makes), and it refuses a tag that does not exist there. Given no tag, it resolves the newest one itself. This is the "idiot-proof" requirement: you cannot typo your way onto an untagged commit, and you cannot silently drift onto whatever HEAD happens to be.
+
+### Upgrading
+
+```bash
+cd cloudecode                 # your Path B checkout
+./scripts/upgrade.sh          # upgrades to the latest release tag
+./scripts/upgrade.sh 0.9.0    # upgrades to a specific tag
+./scripts/upgrade.sh 0.9.0 --yes    # non-interactive (no confirmation prompt)
+```
+
+What it does, in order: resolves the version you are currently on and refuses to continue if it cannot (see "when it refuses" below); resolves the target tag and confirms it is a real release tag; if you are already on that tag, it stops there and changes nothing; otherwise it takes a full backup of your user state and prints the backup's path before touching anything; shows you exactly what it is about to do and asks you to confirm (unless `--yes`); stops the server; runs `git fetch --tags` then `git checkout tags/<tag>`; installs that tag's `requirements.txt`; runs the config migration; restarts the server; and then verifies the server actually answers on `/health` and reports the version you just asked for. A verification failure is reported as a failure, with the exact rollback command to run - never as a quiet warning.
+
+Running the same command twice in a row is safe: the second run sees you are already on the target tag and does nothing further (no second backup, no restart).
+
+### Rolling back
+
+```bash
+./scripts/rollback.sh 0.8.1               # go back to a specific version
+./scripts/rollback.sh 0.8.1 --yes          # non-interactive
+./scripts/rollback.sh 0.8.1 --code-only    # move CODE only, accept the mismatch
+```
+
+**Rollback moves CODE and DATA together, and that is the default.** Rolling back only the code leaves the old app looking at a newer `cloude.db`: it refuses to write and drops to degraded read-only, which is the safe failure rather than data loss, but it is not a working install. So `rollback.sh` reads `migration_trail.jsonl`, works out which schema and config versions were in force when this install was at the target release, and restores `cloude.db` and `config.json` to that point from the backups the trail names.
+
+The version is read off the last data entry that STARTED before the target release's `code` entry. The BACKUP is a different entry: backups are taken before a step runs, so the snapshot of version N hangs off the step that moved AWAY from N. Restoring the backup attached to the entry that named the version would put you one version too far back.
+
+It always RESTORES (copy back the backup taken at that version) and never REVERSEs (apply a step's own recorded undo). REVERSE keeps rows RESTORE discards, but its correctness depends on a human having written a complete reversal for that step, and an unattended script must not take the path that rests on a hand-maintained claim.
+
+Before it overwrites anything it prints exactly what it is about to restore, from which backup, taken when, generated from the trail entry itself rather than from a fixed sentence, and says that it cannot be undone. It does still write a `<artifact>.prerestore-<timestamp>` snapshot of what is about to be destroyed. The script will never read that snapshot back; it is there so you can.
+
+`--code-only` skips the data half. It is the opt-out, not the default, and it prints the resulting code/schema mismatch loudly, naming both numbers, because that mismatch is the whole failure this behaviour exists to prevent.
+
+Rollback also checks out the older code AND restores the install-directory backup that was captured right before you left that version, because config migrations only ever move forward. Older code reading a config.json that a newer migration wrote is not a state anyone tested. The rollback target must have a matching backup or the script refuses outright - see below.
+
+### Where backups live
+
+Every upgrade writes a fresh, timestamped backup into `.upgrade-backups/` inside the checkout, before it changes anything. The directory name records both versions, for example `.upgrade-backups/20260817T235913Z_from-0.8.1_to-0.9.0`. Inside it, `install/` holds `.env` and `config.json` (and `config.json.bak` / `.update-check.json` when present), and `state/` holds whatever was found under the state directory at the time: `refresh_tokens.db`, `session_metadata.json`, and, when they have been created yet, `pinned_themes.json` and `unread_state.json`. A file `.manifest` inside the backup records, for every one of those names, exactly one of three outcomes: backed up, legitimately not present yet (a feature you have not used yet, like pinning a theme), or - if that ever happens - refuses to finish rather than pretend the backup is complete. The state directory defaults to `~/Library/Application Support/CloudeCode` (override with `CLOUDE_STATE_DIR`); if you are upgrading an install from before this directory existed, its data is still under the old `LOG_DIRECTORY` path from `.env.example` (`/tmp/cloude-code-logs` by default, which macOS clears on reboot) - set `CLOUDE_STATE_DIR` to that old path before running `scripts/upgrade.sh` so the backup actually finds it, rather than the install directory alone.
+
+Nothing is ever deleted from `.upgrade-backups/`. Prune it by hand if it grows large; the scripts only ever add to it.
+
+### When it refuses
+
+Both scripts follow one rule: if a check cannot be completed, they say so and stop, rather than guessing. Concretely:
+
+- **"could not determine the current version"** - `upgrade.sh` will not move a version it cannot name. This can happen on a checkout with no `.git`, or one that is not itself a git work tree root (see `src/core/version.py`'s resolution order). Fix the checkout, or if this is a brand-new `git clone` that has never been run, there is nothing installed to upgrade yet.
+- **"no backup found for version X"** - `rollback.sh` refuses rather than checking out old code next to a config it was never tested against. If you genuinely have a backup somewhere else, pass `--backup-dir`.
+- **"the upgrade trail could not be read"** - `migration_trail.jsonl` has a bad line somewhere other than the very last one. `rollback.sh` stops before stopping the server, before checking anything out, and before copying anything. It will NOT fall back to the newest backup: a rollback that guesses which backup to write over your live database is worse than no rollback. Repair or move the trail file and re-run, or pass `--code-only` to move code alone and accept the mismatch.
+- **"no backup was ever taken AT vN"** - the trail knows which version belonged to the target release, but that version only ever existed inside a multi-step migration run, which takes one backup at its start. There is no snapshot of the version you are asking for, so it refuses rather than restoring a neighbouring one.
+- **"the trail records no code entry arriving at X"** - only `upgrade.sh` and `rollback.sh` write `kind='code'` entries, and only since this feature landed. An install whose trail predates them has no anchor for the data question, so the data half refuses. The code half is still available with `--code-only`.
+- **an unverified backup** - `backup_verified` is 0 or missing on the entry that names the backup. A backup that could not be verified is treated as a backup that does not exist, so it refuses rather than restoring bytes nobody checked.
+- **"the server did not answer .../health"** or **"reports version X, expected Y"** - the upgrade or rollback ran, but the server did not come back the way it should have. This is reported as a failure with a non-zero exit, and for an upgrade it prints the exact `./scripts/rollback.sh <previous version>` command to recover with.
+- **"could not reach \<remote\> to verify the tag exists"** - this is a third, separate outcome from "the tag does not exist." A network problem or an unreachable remote is not the same as a bad tag, and the script says which one happened rather than guessing.
+- **"tracked files have local modifications"** - both scripts refuse to run `git checkout` over a dirty tree. Commit or discard the changes first.
+
+None of these leave the install half-changed silently. If a step fails partway (for example, a copy during restore), the message says exactly that and tells you which command to run to inspect or finish the job by hand.
+
+### The unidentified-developer prompt (packaged app only)
+
+The DMG is code-signed but not notarized (see Honest limits and `.github/workflows/release.yml`), so the first time you open a new version of the app, macOS Gatekeeper shows "Cloude Code cannot be opened because it is from an unidentified developer." **Right-click the app and choose Open** - that one-time step clears it, and you will not see it again for that build. `xattr -dr com.apple.quarantine` also works from Terminal if you prefer. This is expected and is not a sign anything is broken.
+
+### Future: a state database, not yet built
+
+A single SQLite database at `~/Library/Application Support/CloudeCode/cloude.db` is planned to eventually hold projects, sessions, adoption state, pinned themes, and unread state in one place instead of the scattered JSON files described above. **This is a note for whoever adds it, not a description of anything that exists today.** When it lands, `scripts/upgrade.sh`'s backup step must be extended to include it, and it must be copied with SQLite's own backup API or `VACUUM INTO`, never a plain file copy (`cp`) - a WAL-mode database copied mid-write with `cp` can produce a file that opens without error and is silently missing the most recent transactions. That failure mode looks identical to a clean backup until someone tries to restore it.
+
+---
+
 ## Configuration
 
 ### Environment variables (`.env`)
@@ -394,7 +515,8 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | `HOST` | `0.0.0.0` | Interface uvicorn binds to |
 | `PORT` | `8000` | Server port. HTTP and WebSocket share it |
 | `DEFAULT_WORKING_DIR` | *required* | Root directory new project sessions are created under |
-| `LOG_DIRECTORY` | *required* | State directory: session metadata, refresh-token DB, tmux pipe files, logs |
+| `CLOUDE_STATE_DIR` | `~/Library/Application Support/CloudeCode` | State directory: session metadata, refresh-token DB, tmux pipe files, logs, and (once it lands) `cloude.db`. The server refuses to start if this cannot be created - it never falls back to a temp directory |
+| `LOG_DIRECTORY` | unset | LEGACY, superseded by `CLOUDE_STATE_DIR`. Only relevant to an install upgrading from before `CLOUDE_STATE_DIR` existed: if set, `session_metadata.json` / `pinned_themes.json` / `unread_state.json` are read from here whenever the new location does not have them yet. Never the write target |
 | `TOTP_SECRET` | *required* | Your TOTP shared secret. Generated by `setup_auth.py` or the Electron bootstrap |
 | `JWT_SECRET` | *required* | JWT signing key. Same generators |
 | `AUTH_CONFIG_FILE` | `./config.json` | Path to the non-secret runtime config |
@@ -437,6 +559,8 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 | | `hermes_command` | `hermes` | Command for `agent_type=hermes` |
 | | `openclaw_command` | `openclaw tui` | Command for `agent_type=openclaw` |
 | | `shell_command` | `$SHELL -i` | The bare-console agent type |
+| | `wrappers[]` | `[]` | User-defined launch wrappers for the claude family — see "Launch wrappers" below. Empty means "not configured": resolution falls through to `claude_command`, then the `cld`/`cldor` fallback, unchanged |
+| top level | `config_version` | `0` | Migration bookkeeping (see "Launch wrappers" / rollback below). Absent = pre-wrappers config, treated as `0` |
 | `uploads` | `enabled` | `true` | Image paste and attach on or off |
 | | `ttl_seconds` | `86400` | How long uploaded images survive before sweeping |
 | | `max_size_mb` | `10` | Per-upload size cap |
@@ -446,12 +570,85 @@ Cloude Code binds to the interface you pick and stops there. It ships no tunnel.
 
 Every block is optional and fails soft to defaults with a warning log if malformed.
 
+### Launch wrappers
+
+`agents.wrappers` replaces a single hardcoded `claude_command` with as many
+named, user-editable launch commands as you want — pick one per session (the
+settings panel's "launch wrappers" section), or set a default. A wrapper's
+`script` can be a single command or a full multi-line shell function
+definition pasted verbatim (paste the whole thing, indentation and all — the
+settings-panel editor preserves it exactly). If `script` *defines* a
+function rather than being directly runnable, set `entry` to the function
+name to call it after sourcing.
+
+Never paste a secret into a wrapper's `script` or `description`. Read
+credentials from the macOS Keychain at run time inside the script instead —
+the pattern the built-in `cld`/`cldor` examples both use
+(`security find-generic-password ...`). This app never sees the value
+either way.
+
+**Upgrading an existing install**: on first boot after upgrading, a one-shot,
+idempotent migration (`src/core/config_migration.py`) runs automatically. It
+NEVER touches `claude_command`/`codex_command`/`hermes_command`/
+`openclaw_command` — those keep working forever, migrated or not. If you
+already had a non-empty `claude_command` set, migration stamps
+`config_version` and leaves everything else alone (no wrappers get seeded on
+top of your existing choice). Otherwise it probes whether `cld` / `cldor`
+actually resolve in your shell (`zsh -ic 'type cld'`) and, only if so, seeds
+thin wrapper entries that forward to them — your existing `~/.zshrc`
+functions become selectable wrappers instead of a hidden fallback. Nothing
+is guessed: a function that doesn't resolve is never seeded.
+
+**Rolling back**: the migration backs up `config.json` to `config.json.bak`
+(the pre-write bytes, one generation) before it writes anything. To undo:
+
+```bash
+cp config.json.bak config.json   # restores the exact pre-migration file
+```
+
+That's a config-level rollback — the legacy fallback keys were never
+modified, so resolution behavior returns to exactly what it was before you
+upgraded. If you need a code-level rollback too, `baseline/adoom-2026-08-14`
+(commit `6392124`) tags the last commit before the wrappers feature existed:
+
+```bash
+git checkout baseline/adoom-2026-08-14 -- src/
+```
+
 ### CLI
 
 ```bash
 python3 setup_auth.py --rotate-topic   # regenerate the push topic without a full re-setup
+./nuke.sh                              # full teardown, asks you to type NUKE
+./nuke.sh --dry-run                    # print every target, delete nothing
 ./nuke.sh --skip-confirm               # non-interactive full teardown
 ```
+
+#### What `nuke.sh` removes, and how to rehearse it
+
+It removes `.env`, `config.json`, `venv/`, the log and projects directories,
+the `/tmp` artifacts, the LaunchAgent, the Electron app-support directory,
+and **the state directory** - `cloude.db`, `refresh_tokens.db` and
+`migration_trail.jsonl`. That last one is resolved by calling
+`resolve_state_dir()`, the same shell mirror of `Settings.get_state_dir()`
+that `upgrade.sh` uses, so `CLOUDE_STATE_DIR` is honoured and no path is
+restated in shell. If the path cannot be resolved the script exits non-zero
+having deleted nothing, rather than skipping a target it could not find.
+
+It does **not** kill the tmux server. A socket is keyed on (user, socket
+name) and carries no record of which checkout started a session, so sessions
+on it cannot be attributed to this install. The script names the socket and
+prints the exact `kill-server` command instead. `CLOUDE_NUKE_KILL_TMUX=true`
+opts in.
+
+Every destructive target is redirectable, which is what makes
+`tests/test_nuke_sandbox.py` able to run the real script end to end against a
+temp directory: `CLOUDE_NUKE_HOME`, `CLOUDE_NUKE_TMP_DIR`,
+`CLOUDE_NUKE_LAUNCHCTL`, `CLOUDE_NUKE_PGREP_PATTERN` (empty disables the
+machine-wide process match), `CLOUDE_NUKE_TMUX_BIN`,
+`CLOUDE_NUKE_TMUX_SOCKET`, `CLOUDE_NUKE_KILL_TMUX`, `CLOUDE_NUKE_DRY_RUN`.
+Each defaults to the real production value, so plain `./nuke.sh` behaves
+exactly as documented above.
 
 ---
 

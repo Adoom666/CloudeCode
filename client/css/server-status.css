@@ -1,0 +1,252 @@
+/* ===========================================================================
+ * Server status panel - client/js/server-status-panel.js
+ * ---------------------------------------------------------------------------
+ * Rides on the shared `.modal-overlay` / `.modal-header` / `.modal-body`
+ * chrome in styles.css and adds only what is specific to this panel: a
+ * two-column label/value grid, the tmux session rows, and one close
+ * control per row.
+ *
+ * FLAT, NO PILLS. The settings screen was flattened at the user's explicit
+ * request and this panel matches it: every radius here is 0 or a token,
+ * never a capsule, and ownership is a word rather than a chip.
+ *
+ * EVERY BUTTON CLASS DECLARES width, height AND border-radius. styles.css
+ * carries a bare `button` element rule setting all three (36/44/40px square
+ * with `--radius-full: 50%`) for the round header icons. A class only beats
+ * an element selector for the properties it ACTUALLY declares, so a button
+ * class that declares only a background silently comes out round and
+ * square-sized. `.home-bar__btn` carries the same warning for the same
+ * reason.
+ *
+ * ONE-HANDED AT 390px. The label/value grid collapses to one column below
+ * 520px and the session row's close control drops to the row's own line at
+ * full tap height, because a 44px control competing with a long session
+ * name for a 390px line is how a mis-tap kills the wrong session.
+ * =========================================================================== */
+
+.server-status-content {
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
+    width: 92%;
+    max-width: 620px;
+    max-height: 88vh;
+    max-height: 88dvh;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.server-status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0;
+}
+
+.server-status-header h2 {
+    color: var(--color-accent);
+    font-size: 1.2rem;
+    margin: 0;
+    font-weight: bold;
+    text-transform: lowercase;
+    flex: 1;
+    min-width: 0;
+}
+
+/* Text button, not an icon button: it must escape the round `button`
+   element reset on all three of width, height and border-radius. */
+.server-status-refresh {
+    width: auto;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.server-status-refresh:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    color: var(--color-fg);
+    transform: none;
+    box-shadow: none;
+}
+
+.server-status-body {
+    padding: 16px 20px 20px 20px;
+    overflow-y: auto;
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.server-status-section {
+    margin-bottom: 22px;
+}
+
+.server-status-section:last-child {
+    margin-bottom: 0;
+}
+
+.server-status-heading {
+    color: var(--color-accent);
+    font-size: 0.95rem;
+    font-weight: bold;
+    margin: 0 0 8px 0;
+    text-transform: lowercase;
+    border-bottom: 1px solid var(--color-border-subtle);
+    padding-bottom: 4px;
+}
+
+.server-status-line {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 4px 12px;
+    padding: 3px 0;
+    font-size: 0.85rem;
+    align-items: baseline;
+}
+
+.server-status-label {
+    color: var(--color-fg-muted);
+    min-width: 0;
+    word-break: break-word;
+}
+
+.server-status-value {
+    color: var(--color-fg);
+    min-width: 0;
+    word-break: break-word;
+}
+
+/* The third outcome, made visible. A row that could not be measured has
+   to look different from one that reads healthy, or the whole point of
+   carrying the reason through from the server is lost. */
+.server-status-value--unknown {
+    color: var(--color-warning);
+}
+
+.server-status-value--attention {
+    color: var(--color-accent);
+}
+
+.server-status-command {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--color-fg);
+    background: var(--color-bg-overlay-faint);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    word-break: break-all;
+    user-select: all;
+}
+
+/* ---- tmux session rows -------------------------------------------- */
+
+.server-status-session {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.server-status-session-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.server-status-session-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--color-fg);
+    word-break: break-all;
+}
+
+.server-status-session-meta {
+    font-size: 0.75rem;
+    color: var(--color-fg-faint);
+    margin-top: 2px;
+    word-break: break-word;
+}
+
+.server-status-session-dir {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-subtle);
+    margin-top: 2px;
+    word-break: break-all;
+}
+
+/* Destructive, so it is danger-coloured - but only on hover, because a
+   list of eight permanently-red controls stops reading as a warning. */
+.server-status-kill {
+    width: auto;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    font-family: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.server-status-kill:hover:not(:disabled) {
+    background: var(--color-danger-bg);
+    border-color: var(--color-danger-border);
+    color: var(--color-danger);
+    transform: none;
+    box-shadow: none;
+}
+
+.server-status-kill:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* ---- one-handed phone layout --------------------------------------- */
+
+@media (max-width: 520px) {
+    .server-status-content {
+        width: 96%;
+        max-height: 92vh;
+        max-height: 92dvh;
+    }
+
+    .server-status-body {
+        padding: 12px 14px 16px 14px;
+    }
+
+    .server-status-line {
+        grid-template-columns: 1fr;
+        gap: 0;
+        padding: 4px 0;
+    }
+
+    .server-status-label {
+        font-size: 0.72rem;
+        text-transform: lowercase;
+    }
+
+    .server-status-session {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .server-status-kill {
+        width: 100%;
+        height: 44px;
+        margin-top: 6px;
+    }
+}

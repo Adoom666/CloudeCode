@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#0a0e1a",
     "--color-bg-page": "#05080f",
     "--color-bg-elevated": "#141a28",
@@ -17,8 +17,8 @@
     "--color-bg-overlay-faint": "rgba(5, 8, 15, 0.45)",
     "--color-fg": "#e8d4a8",
     "--color-fg-muted": "#a89878",
-    "--color-fg-subtle": "#5e5544",
-    "--color-fg-faint": "#736a55",
+    "--color-fg-subtle": "#8f8167",
+    "--color-fg-faint": "#8c8268",
     "--color-border": "#2a3450",
     "--color-border-subtle": "#1a2030",
     "--color-accent": "#ff7a00",
@@ -97,6 +97,11 @@
     "brightCyan": "#7ae6ff",
     "brightWhite": "#fff5e0"
   },
-  "themeCss": "theme.css",
-  "effects": "effects.js"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/cyber-city.m4a",
+    "srcFallback": "/static/assets/audio/cyber-city.ogg",
+    "volume": 0.45,
+    "fadeMs": 2000
+  }
 }

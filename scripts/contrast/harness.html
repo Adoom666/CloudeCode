@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>contrast harness</title>
+<link rel="stylesheet" href="/client/css/styles.css">
+<link rel="stylesheet" href="/client/css/session-sidebar.css">
+<link rel="stylesheet" href="/client/css/home-bar.css">
+<style>
+  body { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .panel { width: 300px; }
+</style>
+</head>
+<body>
+  <div class="header"><h1>CloudeCode <span class="title">Header Title</span></h1></div>
+
+  <div class="row">
+    <div class="session-sidebar-panel panel" style="position:static; transform:none; box-shadow:none;">
+      <div class="session-sidebar-header">
+        <span class="session-sidebar-title">Sessions</span>
+        <button class="session-sidebar-pin" aria-pressed="false">P</button>
+        <button id="session-sidebar-close">X</button>
+      </div>
+      <div class="session-sidebar-list">
+        <div class="session-sidebar-row" data-active="0">
+          <span class="session-sidebar-row-name">my-session-name</span>
+          <span class="session-sidebar-row-badge">TMUX</span>
+        </div>
+        <div class="session-sidebar-row" data-active="1">
+          <span class="session-sidebar-row-name">active-session</span>
+          <span class="session-sidebar-row-badge">EXT</span>
+        </div>
+        <div class="mark-unread-toggle">*</div>
+        <div class="session-sidebar-row-delete">X</div>
+      </div>
+      <div class="session-sidebar-empty">no sessions</div>
+    </div>
+
+    <div class="panel">
+      <div class="running-sessions-section">
+        <div class="running-session-row owned">
+          <div class="running-session-top"><span class="running-session-name">owned-row</span></div>
+          <div class="running-session-badges"><span class="badge badge-tmux">TMUX</span></div>
+        </div>
+        <div class="running-session-row external">
+          <div class="running-session-top"><span class="running-session-name">external-row</span></div>
+          <div class="running-session-badges"><span class="badge badge-external">EXTERNAL</span></div>
+        </div>
+      </div>
+      <div class="adopt-disclosure-body">
+        <p>full setup in the <a href="https://github.com/example/example#readme" target="_blank" rel="noopener">README</a>.</p>
+      </div>
+    </div>
+
+    <div class="panel home-bar" style="position:static; height:auto; padding:10px;">
+      <button class="home-bar__btn">btn</button>
+      <span class="home-bar__version">v1.2.3</span>
+    </div>
+  </div>
+
+  <script type="module">
+    async function applyTheme(id) {
+      const res = await fetch(`/client/css/themes/${id}/theme.json`);
+      const manifest = await res.json();
+      document.documentElement.setAttribute('data-theme', id);
+      const root = document.documentElement.style;
+      for (const [k, v] of Object.entries(manifest.cssVars || {})) root.setProperty(k, v);
+      document.querySelectorAll('link[data-theme-css]').forEach(l => l.remove());
+      if (manifest.themeCss) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = `/client/css/themes/${id}/${manifest.themeCss}`;
+        link.setAttribute('data-theme-css', '1');
+        document.head.appendChild(link);
+      }
+      document.querySelectorAll('script[data-theme-fx]').forEach(s => s.remove());
+      if (manifest.effects) {
+        const mod = await import(`/client/css/themes/${id}/${manifest.effects}`);
+        mod.init && mod.init({});
+      }
+    }
+    window.applyTheme = applyTheme;
+    const params = new URLSearchParams(location.search);
+    applyTheme(params.get('theme') || 'claude');
+  </script>
+</body>
+</html>

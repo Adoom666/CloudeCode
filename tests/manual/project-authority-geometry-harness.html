@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>project authority geometry harness</title>
+<!--
+  feat/db-is-authoritative - MEASURE THE LAUNCHER, DO NOT EYEBALL IT.
+
+  Same pattern as tests/manual/project-tree-geometry-harness.html: loads
+  the real client/js/launchpad.js and the real client/css/styles.css,
+  stubs window.API with canned response SHAPES, calls the real render
+  path, and reports REAL getBoundingClientRect() geometry.
+
+  What this one exists to measure that the tree harness cannot:
+
+    ?fixture=real-duplicates   his ACTUAL 13-entry config.json, served
+                               the NEW way - GET /projects returns the
+                               9 deduplicated rows, each carrying its
+                               database id. Two running sessions are
+                               attributed to the project whose root three
+                               config names used to share, so the "same
+                               work rendered three times" bug would show
+                               as three nodes each holding both rows.
+    ?fixture=legacy-duplicates the OLD shape: GET /projects returns all
+                               13 config entries with no id, and the
+                               launcher looks each id up in the presence
+                               map by raw path. This is the BUG, kept as
+                               a fixture so the fix is a measured
+                               difference rather than an assertion about
+                               a state nobody reproduced.
+    ?fixture=fallback          cloude.db unreachable. Projects served
+                               from config.json, every id null, the
+                               read-only rollback banner drawn.
+    ?fixture=disagree          both sources readable and differing.
+
+  Open over http://127.0.0.1:<port>/tests/manual/project-authority-geometry-harness.html
+  from the repo root and read #out, or read window.__authorityGeometry()
+  from the console once window.__authorityReady is true.
+
+  A TRAP THIS HARNESS DOES NOT HIDE. A headless tab often reports
+  document.hidden === true, which collapses window.innerWidth to 0 and
+  silently zeroes every getBoundingClientRect(). The report therefore
+  carries `viewport.innerWidth` and `viewport.hidden` as its first keys,
+  and every consumer must assert innerWidth > 0 BEFORE trusting a single
+  rect below it. A zero-width report is not evidence of a layout bug; it
+  is evidence that nothing was measured.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 44vw;
+         max-height: 92vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<pre id="out">rendering...</pre>
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+// His real config.json project list, verified 2026-08-18 against a
+// read-only copy of the live file. 13 entries, 9 unique roots.
+const REAL_CONFIG = [
+    { name: 'fs2', path: '/Users/jsugamele/Development/scrolltest' },
+    { name: 'scrolltest', path: '/Users/jsugamele/Development/scrolltest' },
+    { name: 'test pause', path: '/Users/jsugamele/Development/ses_ec5bf2a3' },
+    { name: 'ses_ec5bf2a3', path: '/Users/jsugamele/Development/ses_ec5bf2a3' },
+    { name: 'asd', path: '/Users/jsugamele/Development/ses_8704e610' },
+    { name: 'qqwe', path: '/Users/jsugamele/Development/ses_ec5bf2a3' },
+    { name: 'Test', path: '/Users/jsugamele/Development/ses_c3737fbe' },
+    { name: 'console-msw4z3m5', path: '/Users/jsugamele' },
+    { name: 'claude-config-sync-2', path: '/Users/jsugamele/Development/claude-config-sync' },
+    { name: 'claude-config-sync', path: '/Users/jsugamele/Development/claude-config-sync' },
+    { name: 'CloudeCode', path: '/Users/jsugamele/Development/CloudeCode' },
+    { name: 'Development', path: '/Users/jsugamele/Development' },
+    { name: 'ai-setup', path: '/Users/jsugamele/Development/ai-setup' },
+];
+
+const TRIPLICATED_ROOT = '/Users/jsugamele/Development/ses_ec5bf2a3';
+
+/**
+ * The deduplicated project rows GET /projects now returns for his config.
+ * @returns {object[]} One row per unique root, each with its database id.
+ */
+function dedupedProjects() {
+    const seen = new Map();
+    let nextId = 1;
+    for (const e of REAL_CONFIG) {
+        if (seen.has(e.path)) continue;
+        seen.set(e.path, {
+            id: nextId++, name: e.name, path: e.path, root: e.path,
+            description: null, agent_type: null,
+        });
+    }
+    return [...seen.values()];
+}
+
+/**
+ * Presence rows for the deduplicated projects, all present.
+ * @returns {object} A GET /projects/presence response body.
+ */
+function presenceForDeduped() {
+    return {
+        status: 'ok',
+        detail: null,
+        projects: dedupedProjects().map((p) => ({
+            id: p.id, raw_path: p.path, root: p.root,
+            presence: 'present', presence_detail: null,
+        })),
+    };
+}
+
+/**
+ * Two running sessions attributed to the triplicated project.
+ * @returns {object} {attachable, records}
+ */
+function sessionsOnTriplicatedProject() {
+    const target = dedupedProjects().find((p) => p.root === TRIPLICATED_ROOT);
+    const names = ['cloude_dup_a', 'cloude_dup_b'];
+    return {
+        attachable: names.map((n, i) => ({
+            name: n, created_by_cloude: true, created_at_epoch: 1000 + i,
+            window_count: 1, status: 'idle', unread: false,
+        })),
+        records: names.map((n) => ({
+            tmux_name: n, project_id: target.id,
+            project_attribution: 'derived_deepest',
+        })),
+    };
+}
+
+/**
+ * The healthy authority payload: db mode, sources agree.
+ * @returns {object} A GET /projects/authority response body.
+ */
+function healthyAuthority() {
+    return {
+        mode: 'db', writable: true, degraded: false,
+        message: 'projects are served from cloude.db, which is authoritative.',
+        detail: null, project_count: 9,
+        diff: {
+            agree: true, authoritative: 'db', difference_count: 0,
+            only_in_db: [], only_in_config: [], field_mismatches: [],
+            duplicate_config_roots: [],
+        },
+        diff_state: 'known',
+    };
+}
+
+/**
+ * Canned fixture data keyed by the `?fixture=` query param.
+ * @param {string} name - real-duplicates | legacy-duplicates | fallback | disagree
+ * @returns {object} {projects, presence, authority, attachable, records}
+ */
+function fixtureFor(name) {
+    const s = sessionsOnTriplicatedProject();
+
+    if (name === 'legacy-duplicates') {
+        // THE BUG, reproduced. All 13 config entries, no ids, and a
+        // presence map keyed by raw path - so the three entries sharing
+        // TRIPLICATED_ROOT all resolve to the same id and all three draw
+        // the same two child sessions.
+        return {
+            projects: REAL_CONFIG.map((e) => ({
+                name: e.name, path: e.path, description: null,
+            })),
+            presence: presenceForDeduped(),
+            authority: healthyAuthority(),
+            attachable: s.attachable,
+            records: s.records,
+        };
+    }
+
+    if (name === 'fallback') {
+        return {
+            projects: dedupedProjects().map((p) => ({ ...p, id: null })),
+            presence: { status: 'unreachable', projects: [], detail: 'no such file' },
+            authority: {
+                mode: 'config_fallback', writable: false, degraded: true,
+                message: 'cloude.db is UNREACHABLE. Projects are being served from '
+                    + 'config.json in read-only rollback mode - adding, renaming and '
+                    + 'removing projects is refused until the datastore is readable '
+                    + 'again, so the rollback file is not edited while the database '
+                    + 'cannot be seen.',
+                detail: 'unable to open database file',
+                project_count: 9, diff: null, diff_state: 'cannot_determine',
+            },
+            attachable: [], records: [],
+        };
+    }
+
+    if (name === 'disagree') {
+        return {
+            projects: dedupedProjects(),
+            presence: presenceForDeduped(),
+            authority: {
+                mode: 'db', writable: true, degraded: false,
+                message: 'ok', detail: null, project_count: 9,
+                diff: {
+                    agree: false, authoritative: 'db', difference_count: 2,
+                    only_in_db: [{ root: '/tmp/x', display_name: 'db-only', raw_path: '/tmp/x' }],
+                    only_in_config: [{ root: '/tmp/y', name: 'config-only', path: '/tmp/y' }],
+                    field_mismatches: [], duplicate_config_roots: [],
+                },
+                diff_state: 'known',
+            },
+            attachable: [], records: [],
+        };
+    }
+
+    // 'real-duplicates' - the FIXED shape.
+    return {
+        projects: dedupedProjects(),
+        presence: presenceForDeduped(),
+        authority: healthyAuthority(),
+        attachable: s.attachable,
+        records: s.records,
+    };
+}
+
+const params = new URLSearchParams(location.search);
+const fixtureName = params.get('fixture') || 'real-duplicates';
+const fixture = fixtureFor(fixtureName);
+
+window.API.getProjects = async () => fixture.projects;
+window.API.getProjectsPresence = async () => fixture.presence;
+window.API.getProjectsAuthority = async () => {
+    if (fixture.authority === null) throw new Error('simulated fetch failure');
+    return fixture.authority;
+};
+window.API.listAttachableSessions = async () => fixture.attachable;
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => fixture.records;
+
+window.__authorityReady = false;
+
+/**
+ * Real-geometry report for the rendered launcher.
+ *
+ * `viewport` comes FIRST and deliberately: a hidden tab collapses
+ * innerWidth to 0 and zeroes every rect below, so a consumer must check
+ * it before trusting anything else here.
+ *
+ * @returns {object} {viewport, counts, banner, nodes}
+ */
+function report() {
+    const list = document.getElementById('project-list');
+    const nodes = Array.from(document.querySelectorAll('#project-list > .project-node'))
+        .filter((n) => n.getAttribute('data-project-node') === 'project');
+    const bannerEl = document.querySelector('.project-authority-banner');
+    const bannerRect = bannerEl ? bannerEl.getBoundingClientRect() : null;
+
+    const html = list ? list.innerHTML : '';
+    let tripCount = 0;
+    let i = html.indexOf(TRIPLICATED_ROOT);
+    while (i !== -1) { tripCount++; i = html.indexOf(TRIPLICATED_ROOT, i + 1); }
+
+    return {
+        viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            hidden: document.hidden,
+            measurable: window.innerWidth > 0 && !document.hidden,
+        },
+        fixture: fixtureName,
+        counts: {
+            projectNodes: nodes.length,
+            triplicatedRootOccurrences: tripCount,
+            nodesWithChildren: nodes.filter(
+                (n) => n.querySelector('.project-node__sessions')
+            ).length,
+            totalSessionRows: document.querySelectorAll(
+                '#project-list .project-session-row'
+            ).length,
+        },
+        banner: bannerEl ? {
+            className: bannerEl.className,
+            state: bannerEl.getAttribute('data-authority-state'),
+            writable: bannerEl.getAttribute('data-writable'),
+            height: bannerRect.height,
+            width: bannerRect.width,
+            top: bannerRect.top,
+            visible: bannerRect.height > 0 && bannerRect.width > 0,
+        } : null,
+        nodes: nodes.map((node) => {
+            const r = node.getBoundingClientRect();
+            const sessionsEl = node.querySelector('.project-node__sessions');
+            const rows = sessionsEl
+                ? Array.from(sessionsEl.querySelectorAll('.project-session-row'))
+                : [];
+            return {
+                name: node.getAttribute('data-project-name'),
+                path: (node.querySelector('.project-path') || {}).textContent || null,
+                height: r.height,
+                width: r.width,
+                top: r.top,
+                nonZeroBox: r.height > 0 && r.width > 0,
+                childCount: rows.length,
+                children: rows.map((row) => {
+                    const rr = row.getBoundingClientRect();
+                    return {
+                        name: row.dataset.name || null,
+                        height: rr.height,
+                        width: rr.width,
+                        insideParent: rr.top >= r.top - 0.5 && rr.bottom <= r.bottom + 0.5,
+                    };
+                }),
+            };
+        }),
+    };
+}
+window.__authorityGeometry = report;
+
+(async () => {
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    // loadProjects() fires loadRunningSessions() WITHOUT awaiting it, and
+    // that chain awaits loadSessionAttribution() before its own final
+    // renderProjectList() - wait for it to settle before measuring.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    window.__authorityReady = true;
+    document.getElementById('out').textContent =
+        'fixture=' + fixtureName + '\n' + JSON.stringify(report(), null, 1);
+})();
+</script>
+</body>
+</html>

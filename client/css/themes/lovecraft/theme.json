@@ -1,11 +1,11 @@
 {
   "id": "lovecraft",
   "name": "HP Lovecraft",
-  "description": "Abyssal teal, sickly green, blood-violet — cosmic horror palette.",
+  "description": "Abyssal teal, sickly green, blood-violet - cosmic horror palette.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#080f12",
     "--color-bg-page": "#04080a",
     "--color-bg-elevated": "#10181d",
@@ -16,9 +16,9 @@
     "--color-bg-overlay-soft": "rgba(4, 8, 10, 0.65)",
     "--color-bg-overlay-faint": "rgba(4, 8, 10, 0.35)",
     "--color-fg": "#a8c4b0",
-    "--color-fg-muted": "#6e8278",
-    "--color-fg-subtle": "#3e4a44",
-    "--color-fg-faint": "#4a5a52",
+    "--color-fg-muted": "#70857b",
+    "--color-fg-subtle": "#70857b",
+    "--color-fg-faint": "#6e867a",
     "--color-border": "#1f3338",
     "--color-border-subtle": "#142024",
     "--color-accent": "#4a8472",
@@ -38,8 +38,8 @@
     "--color-on-accent": "#04080a",
     "--color-success": "#6e9a78",
     "--color-warning": "#a88840",
-    "--color-danger": "#7a2840",
-    "--color-info": "#3a6878",
+    "--color-danger": "#c75475",
+    "--color-info": "#498397",
     "--color-danger-bg": "rgba(122, 40, 64, 0.12)",
     "--color-danger-bg-hover": "rgba(122, 40, 64, 0.22)",
     "--color-danger-border": "rgba(122, 40, 64, 0.35)",
@@ -96,5 +96,12 @@
     "brightMagenta": "#7a4e78",
     "brightCyan": "#5fb3a8",
     "brightWhite": "#cce0d2"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
+    "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+    "volume": 0.5,
+    "fadeMs": 2000
   }
 }

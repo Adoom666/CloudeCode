@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>status dot shape harness</title>
+<!--
+  "unknown" and "idle" render as the same grey dot. idle means "alive,
+  nothing happening"; unknown means the server could not determine the
+  state. Rendering a could-not-evaluate identically to a definite answer
+  is the false-green class this codebase's THREE-OUTCOME RULE exists to
+  kill, sitting in the indicator the user reads most often.
+
+  MEASURE THE SHAPE, DO NOT ASSERT THE CLASS NAME. A class-name assertion
+  passes against a ring that renders solid, and this repo has shipped
+  three visibly broken features through fully green suites whose
+  assertions read markup. So scripts/verify_status_dot_shape.py samples
+  TWO real pixels of every dot - its centre and its rim - and requires
+  them to DIFFER for unknown (hollow) and to MATCH for every other state
+  (filled). No colour token and no class name decides that verdict.
+
+  Colour cannot be the whole answer either. Under the `claude` theme
+  --color-fg-faint and --color-fg-subtle are the SAME value (#959595), so
+  idle and unknown were pixel-identical; under `terminal` they differ by
+  5 levels, which is below any threshold a human eye or this harness
+  would call a difference. Shape is the cue that survives both.
+
+  THE DOTS ARE BUILT BY THE SHIPPED MODULE, not hand-written here.
+  window.SessionStatusUI.dotHtml() is the single source of truth for the
+  status-dot markup; hardcoding a span in this file would let the module
+  and the harness drift and the drift would look like a pass.
+
+  TWO POSITIVE CONTROLS, one per verdict, both independent of the code
+  under test:
+    #control-filled  is a deliberately SOLID 9px box.
+    #control-hollow  is a deliberately HOLLOW 9px box.
+  A sampler that could only ever report "centre equals rim" would pass
+  every filled state for the wrong reason and fail #control-hollow. A
+  sampler that could only ever report "they differ" would fail
+  #control-filled. Neither failure mode can hide behind the real dots.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/status-dot-shape-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__dotsReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/status-dot.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+<style>
+  /* The page carries no colour opinion of its own: __applyTheme paints
+     the backdrop from the theme's --color-bg, so a hollow dot's centre
+     composites against the same colour a real sidebar row sits on
+     rather than against a white default. */
+  body { margin: 0; padding: 24px; }
+  #dots { max-width: 320px; }
+
+  /* The controls copy .status-dot's geometry from the real stylesheet by
+     using the same class, then override only the fill. They deliberately
+     do NOT use --radius-full, so their verdict cannot change with a
+     theme that zeroes the radius tokens. */
+  #control-filled, #control-hollow {
+      width: 9px; height: 9px; display: inline-block; border-radius: 0;
+      margin-right: 12px;
+  }
+  #control-filled { background: #c81e6e; }
+  #control-hollow { background: transparent; box-shadow: inset 0 0 0 2px #c81e6e; }
+  #controls { margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="session-sidebar-list" id="dots"></div>
+
+<div id="controls">
+  <span id="control-filled"></span><span id="control-hollow"></span>
+</div>
+
+<script src="../../client/js/session-status-ui.js"></script>
+<script>
+window.__dotsReady = false;
+
+/**
+ * The seven states, in the same display-priority order the shipped
+ * module documents. Every one is measured; a subset would let a state
+ * regress into looking like its neighbour without failing anything.
+ * @type {Array<string>}
+ */
+window.__STATES = ['dead', 'question', 'working_subagent', 'working',
+                   'finished_unread', 'idle', 'unknown'];
+
+/**
+ * Apply one shipped theme's cssVars to :root, exactly as the real theme
+ * loader does, by reading that theme's OWN manifest off disk. Hardcoding
+ * a palette here would test a palette this app does not ship.
+ *
+ * EVERY PROPERTY THE PREVIOUS THEME SET IS CLEARED FIRST. Without that,
+ * a token the incoming manifest does not declare keeps the OUTGOING
+ * theme's value, and the run measures a palette no user can ever have.
+ * It was not hypothetical: `codex` declares no --radius-full, and after
+ * `terminal` had been applied it measured as 0 rather than falling back
+ * to the stylesheet's own 50% - so a whole check was scored against a
+ * value that came from the harness's setup, not from the theme.
+ *
+ * @param {string} id - theme directory name, e.g. "claude".
+ * @returns {Promise<object>} the cssVars map that was applied.
+ */
+window.__applyTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Array.from(root.style).forEach((k) => {
+        if (k.indexOf('--') === 0) root.style.removeProperty(k);
+    });
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    document.body.style.background = vars['--color-bg'] || '#000000';
+    return vars;
+};
+
+/**
+ * Resolve a custom property off :root to its computed value.
+ * @param {string} name - e.g. "--color-fg-subtle".
+ * @returns {string} the trimmed value, "" when the property is unset.
+ */
+window.__token = function (name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+};
+
+/**
+ * Build one sidebar row per state, with the dot produced by the SHIPPED
+ * module so the harness cannot drift from what the app renders.
+ * @returns {void}
+ */
+function build() {
+    const ui = window.SessionStatusUI;
+    if (!ui || typeof ui.dotHtml !== 'function') {
+        throw new Error('SessionStatusUI.dotHtml is not loaded; nothing to measure');
+    }
+    document.getElementById('dots').innerHTML = window.__STATES.map((s) => (
+        '<div class="session-sidebar-row" data-active="0" data-pinned="0" '
+        + 'data-state="' + s + '">'
+        + '<div class="session-sidebar-row-main" id="cell-' + s + '">'
+        + ui.dotHtml(s)
+        + '<span class="session-sidebar-row-name">' + s + '</span>'
+        + '</div></div>'
+    )).join('');
+}
+
+/**
+ * Geometry and computed paint for one dot, keyed by its state.
+ *
+ * The rect is reported so the driver can compute its own sample points;
+ * this function deliberately does NOT decide where to sample, because a
+ * page that both chose the sample point and reported the colour could
+ * choose a point that made any rule look right.
+ *
+ * @param {string} state - one of __STATES.
+ * @returns {?object} null when the dot is absent from the DOM.
+ */
+window.__dot = function (state) {
+    const cell = document.getElementById('cell-' + state);
+    const el = cell ? cell.querySelector('.status-dot') : null;
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return {
+        state: state,
+        className: el.className,
+        rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+        backgroundColor: cs.backgroundColor,
+        boxShadow: cs.boxShadow,
+        borderRadius: cs.borderRadius,
+        title: el.getAttribute('title'),
+        ariaLabel: el.getAttribute('aria-label'),
+    };
+};
+
+/** @param {string} id - element id. @returns {?object} its box. */
+window.__box = function (id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { id: id, rect: { x: r.left, y: r.top, w: r.width, h: r.height } };
+};
+
+/** @returns {object} the whole measurement bundle for the current theme. */
+window.__dots = function () {
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        devicePixelRatio: window.devicePixelRatio,
+        theme: document.documentElement.getAttribute('data-theme'),
+        tokens: {
+            bg: window.__token('--color-bg'),
+            fgFaint: window.__token('--color-fg-faint'),
+            fgSubtle: window.__token('--color-fg-subtle'),
+            radiusFull: window.__token('--radius-full'),
+        },
+        dots: window.__STATES.map(window.__dot),
+        controlFilled: window.__box('control-filled'),
+        controlHollow: window.__box('control-hollow'),
+    };
+};
+
+(async () => {
+    build();
+    await window.__applyTheme('claude');
+    window.__dotsReady = true;
+})();
+</script>
+</body>
+</html>

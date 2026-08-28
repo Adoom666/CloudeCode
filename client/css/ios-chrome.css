@@ -1,0 +1,157 @@
+/* iOS standalone chrome
+ *
+ * Everything here is inert in a normal desktop browser: `env(safe-area-
+ * inset-*)` resolves to 0px anywhere there is no notch or home indicator,
+ * and the standalone-only rules are gated behind
+ * `@media (display-mode: standalone)`. So this file cannot move a single
+ * pixel on the web-first desktop layout.
+ *
+ * It matters only when index.html declares `viewport-fit=cover`, which
+ * lets the page paint edge to edge and hands the developer responsibility
+ * for keeping content out from under the notch and the home indicator.
+ * Without these rules, cover mode puts the header title under the notch
+ * and the terminal's bottom line under the home-indicator bar.
+ *
+ * Loaded after styles.css so it wins on equal specificity and so the
+ * theme custom properties it references already exist.
+ */
+
+/* Painting the page background out into the inset areas, so the notch and
+ * the home-indicator strip match the app instead of showing white, is now
+ * done by the `html { background: var(--color-bg) }` rule in styles.css.
+ * That rule exists because the effects canvas has to paint between the root
+ * background and body (see styles.css, "PAGE BACKGROUND LIVES ON html"), and
+ * it covers the insets for free, so a second rule here would only be a
+ * competing declaration.
+ *
+ * It is deliberately NOT re-declared with --color-bg-page. That variable is
+ * the darker header/chrome colour, not the page colour: it differs from
+ * --color-bg in 18 of the 23 shipped themes, and it is unset entirely in
+ * corporate_v2 and legacy_windows. The old rule here read
+ * `var(--color-bg-page, #0a0a0a)`, which painted the root near-black under
+ * light themes and grey-less under legacy_windows. Body's opaque background
+ * hid that for as long as body had one. */
+
+/* The header is `position: sticky; top: 0` - in cover mode that puts it
+ * flush under the status bar. Pad the top inset in and widen the side
+ * padding by the landscape insets, which are non-zero when the phone is
+ * rotated and the notch is on the left or right edge. */
+.header {
+    /* --header-pad-y already carries the per-breakpoint value, so the
+     * top inset is added ONCE here rather than restated three times.
+     * The same token feeds --header-h, which the top-right FAB below
+     * clears itself against. */
+    padding-top: calc(var(--header-pad-y) + env(safe-area-inset-top));
+    /* --header-pad-x carries the per-breakpoint side padding the same way,
+     * so the two media queries that used to restate 15px and 12px here are
+     * gone. That restatement was not just duplication: the docked-sidebar
+     * rule in session-sidebar.css adds --header-pad-x back on top of the
+     * sidebar width, and this file wins over styles.css on load order, so
+     * a literal here would silently drift the docked toggle's gap. */
+    padding-left: calc(var(--header-pad-x) + env(safe-area-inset-left));
+    padding-right: calc(var(--header-pad-x) + env(safe-area-inset-right));
+}
+
+/* Body-level bottom inset so the last line of any screen clears the home
+ * indicator. Applied to the screens rather than <body> because <body> is
+ * the scroll container and padding there would fight the sticky header. */
+.screen {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* THE HOME SCREEN IS EXCLUDED FROM THE RULE ABOVE, BY NAME.
+ *
+ * It carries a bottom bar (client/css/home-bar.css) that reaches both
+ * side edges and the bottom edge. Padding the SCREEN would park the bar
+ * one inset up from the bottom with a strip of bare page background
+ * underneath it, which reads as a rendering fault. The bar takes the
+ * inset itself, below, so its own background paints down over the
+ * home-indicator strip while its contents stay above it.
+ *
+ * An id beats the `.screen` class, so no !important and no ordering
+ * dependency. Same shape as the `:not(.session-editor-fab)` exclusion
+ * further down: an element that owns its own inset says so here rather
+ * than silently taking the generic one as well. */
+#launchpad-screen {
+    padding-bottom: 0;
+}
+
+/* The bar's inset. home-bar.css defaults --home-bar-inset to 0px and does
+ * all of its box arithmetic against the token, so this one declaration is
+ * the whole standalone story - and this file stays the ONE place in the
+ * app that reads env(safe-area-inset-*).
+ *
+ * IT CANNOT BE JUDGED FROM A BROWSER TAB. env(safe-area-inset-bottom) is
+ * 0 in Safari browser mode and only becomes non-zero once the app is
+ * installed to the Home Screen, so this rule is invisible until then. To
+ * verify the geometry without installing, override the token from
+ * devtools - `document.documentElement.style.setProperty(
+ * '--home-bar-inset', '34px')` - and the bar must grow by exactly 34px
+ * downward while every item inside it stays where it was. That override
+ * is why the token is redefined on :root and NOT on .home-bar: an inline
+ * style on the root element beats a stylesheet rule on :root, but a
+ * stylesheet rule on the closer .home-bar would shadow it and the
+ * simulation would silently do nothing. */
+:root {
+    --home-bar-inset: env(safe-area-inset-bottom);
+}
+
+/* Floating controls are positioned against the viewport edge, so each one
+ * needs the bottom inset added to its own offset or it sits under the
+ * home indicator. Values mirror the base offsets in styles.css.
+ *
+ * The session editor is EXCLUDED because it is not on the bottom row any
+ * more - it hangs from the top-right rail and takes the TOP inset
+ * instead, below. This file loads after terminal-tools.css, so without
+ * the :not() the bottom rule here would win on equal specificity and
+ * quietly drag the editor back down to the command line. */
+.dpad-float-button,
+.slash-commands-btn,
+.fab-menu-btn:not(.session-editor-fab) {
+    bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
+}
+
+/* The top-right rail. The header grows by exactly the top inset above,
+ * so the editor's clearance below it is the same --fab-gap it is in
+ * browser mode. `bottom: auto` is restated because the base rule in
+ * terminal-tools.css is what this file is layered over. */
+.session-editor-fab {
+    top: calc(var(--fab-top-edge) + env(safe-area-inset-top));
+    bottom: auto;
+}
+
+/* THE CONNECTION LIGHT NEEDS NO RULE HERE ANY MORE. It used to be a
+ * `position: fixed` chip that had to be pushed up off the home indicator
+ * by hand. It now lives inside `.info`, a normal in-flow child of
+ * `#terminal-screen`, which is a `.screen` - the bottom-inset padding a
+ * few rules up already clears the home indicator for it, the same way it
+ * does for every other screen's last line of content. */
+
+/* Slide-over panels run the full height of the viewport, so they own both
+ * the top and bottom insets themselves. `.config-editor-picker-content`
+ * is the file DRAWER; it used to be `.config-editor-panel`, a class that
+ * stopped existing when the browser became a centred dialog, so this rule
+ * named nothing for a while. It is a full-height right-edge drawer again
+ * now (client/css/config-drawer.css) and the name is correct again. */
+.session-sidebar-panel,
+.config-editor-picker-content {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Toasts stack from the top-right corner; keep them below the status bar
+ * and clear of a landscape notch. */
+.toast-container {
+    top: calc(60px + env(safe-area-inset-top));
+    right: calc(16px + env(safe-area-inset-right));
+}
+
+/* Standalone-only. In a normal Safari tab the browser chrome already
+ * absorbs overscroll and provides the URL bar as an escape hatch; in a
+ * home-screen app there is no chrome, so a rubber-band bounce on the body
+ * exposes bare background and reads as a rendering fault. */
+@media (display-mode: standalone) {
+    body {
+        overscroll-behavior-y: none;
+    }
+}

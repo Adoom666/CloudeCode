@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/vendor/xterm/xterm.css">
+<style>html,body{margin:0;background:#000}#terminal{width:900px;height:560px}</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="/vendor/xterm/xterm.js"></script>
+<script src="/js/altscreen-scroll.js"></script>
+<script>
+// End-to-end harness. Real chromium, the app's own vendored xterm, the
+// real altscreen-scroll.js module, fed the real byte stream of a live
+// claude session running under `tui: fullscreen`. Nothing is stubbed
+// except the pty write, which the driver forwards to the real pane.
+window.__sent = [];
+window.__term = new Terminal({ cols: 100, rows: 30, allowProposedApi: true });
+window.__term.open(document.getElementById('terminal'));
+window.AltScreenScroll.init(
+    function () { return window.__term; },
+    function (d) { window.__sent.push(d); }
+);
+/** Feed raw pty bytes (as a latin1-safe array) into xterm. */
+window.__feed = function (bytes) {
+    return new Promise(function (res) {
+        window.__term.write(new Uint8Array(bytes), res);
+    });
+};
+/** Drain and return everything the module wrote to the pty. */
+window.__drain = function () {
+    var out = window.__sent.slice();
+    window.__sent.length = 0;
+    return out;
+};
+/** The first non-blank visible row, for before/after measurement. */
+window.__topLine = function () {
+    var b = window.__term.buffer.active;
+    for (var i = 0; i < window.__term.rows; i++) {
+        var l = b.getLine(b.viewportY + i);
+        var s = l ? l.translateToString(true).trim() : '';
+        if (s) return s;
+    }
+    return '';
+};
+</script>
+</body>
+</html>

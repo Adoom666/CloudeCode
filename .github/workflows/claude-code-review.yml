@@ -1,24 +1,38 @@
+
+# Automated Claude code review on pull requests.
+#
+# Triggers: pull_request (opened, synchronize, ready_for_review, reopened).
+#
+# DEGRADED-MODE BEHAVIOUR - this is the whole point of the guards below:
+#   * Pull request opened from a FORK -> the job does not run at all. A fork PR
+#     gets a read-only GITHUB_TOKEN, cannot read repository secrets, and cannot
+#     mint an OIDC token, so the review can never succeed there. Skipping is
+#     honest; attempting it produces a red check the contributor cannot fix.
+#   * secrets.CLAUDE_CODE_OAUTH_TOKEN not configured -> the job runs, emits a
+#     notice explaining what to set, and SUCCEEDS without reviewing.
+#
+# Both cases used to be hard failures. Six of six recent runs failed for
+# exactly these reasons, and a check that always fails teaches everyone to
+# ignore every check, including the tests and the secret scan. The review is
+# kept rather than deleted because it becomes useful the moment the maintainer
+# adds the secret, with no workflow change needed.
 name: Claude Code Review
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    name: claude review
+    # Same-repository pull requests only. See the degraded-mode note above.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read
@@ -26,13 +40,28 @@ jobs:
       id-token: write
 
     steps:
+      - name: Check review credentials
+        id: preflight
+        env:
+          CLAUDE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_OAUTH_TOKEN}" ]; then
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Claude review skipped::secrets.CLAUDE_CODE_OAUTH_TOKEN is not set. Add it under Settings > Secrets and variables > Actions to enable automated review. Skipping without failing."
+          else
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Checkout repository
+        if: steps.preflight.outputs.configured == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
         id: claude-review
+        if: steps.preflight.outputs.configured == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

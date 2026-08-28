@@ -1,0 +1,263 @@
+# Tests and syntax checks.
+#
+# Triggers: every push to any branch, and every pull_request (including from
+# forks). Needs no secrets at all, so it runs identically for outside
+# contributors.
+#
+# WHY TWO OPERATING SYSTEMS
+# -------------------------
+# CloudeCode ships as a macOS menu bar app AND as a Linux container (see
+# Dockerfile / docker-compose.yml). Those are two real deployment targets, so
+# a single-platform CI would be reporting a verdict it never measured:
+#
+#   - Linux-only CI can never execute ~/Library/Application Support,
+#     launchctl, security(1), LaunchAgents or .icns handling. Every macOS
+#     behaviour would have to be skipped, and a test skipped on the only
+#     platform CI runs is furniture - it can never go red.
+#   - macOS-only CI hides Linux portability defects. Concretely: restore_backup()
+#     in scripts/upgrade_lib/upgrade_rollback_common.sh matched its manifest
+#     with `grep '^BACKED_UP\tstate\t'`. BSD grep reads \t as a tab, GNU grep
+#     reads it as a literal `t`. On Linux that branch never fired, so restore
+#     silently restored zero state files and still reported success. Only the
+#     Linux leg of this matrix catches that class.
+#
+# This repository is public, so GitHub Actions minutes are free on every
+# runner type - the usual cost objection to macos-latest does not apply here.
+#
+# HOW A GREEN RESULT IS KEPT HONEST
+# ---------------------------------
+# 1. The v0.8.1 tag is fetched and its presence ASSERTED before pytest runs,
+#    so tests/test_session_meta_continuity.py's CANNOT-DETERMINE skip path can
+#    never become CI's quiet normal state.
+# 2. Every job prints its own skip count and every skipped test id.
+# 3. The `skip audit` job fails the build if any test was skipped on BOTH
+#    platforms - i.e. was never measured anywhere.
+#
+# See docs/ci.md for why each environment step exists.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# Only the newest run per ref matters; cancel superseded ones.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. This workflow never needs to write anything.
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch the v0.8.1 tag and prove it is here
+        # actions/checkout does a --depth=1 clone with no tags.
+        # tests/test_session_meta_continuity.py compiles v0.8.1's OWN
+        # Settings.get_session_metadata_path out of the tag with
+        # `git show v0.8.1:src/config.py`, so without the tag that whole
+        # comparison reports CANNOT DETERMINE.
+        #
+        # `fetch-depth: 0` would fix it by downloading the entire history.
+        # Fetching the one tag at depth 1 is enough and much cheaper:
+        # measured 2026-08-24 against a --depth=1 clone of this repo,
+        # `git fetch --depth=1 origin tag v0.8.1` took 0.97s and left .git
+        # at 35M. A shallow fetch of a tag still carries that commit's
+        # complete tree, which is all `git show <tag>:<path>` needs.
+        #
+        # The rev-parse is the point of the step, not the fetch. The test
+        # skips by design when the tag is absent (a shallow clone is a real
+        # environment, not a repository fault), so without this assertion a
+        # tag that stopped being fetchable would turn into a silent skip.
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin tag v0.8.1
+          git rev-parse --verify --quiet 'v0.8.1^{commit}' > /dev/null
+          echo "v0.8.1 -> $(git rev-parse 'v0.8.1^{commit}')"
+
+      - name: Set up python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the interpreter the project is developed against. The suite
+          # also passes on 3.14; 3.13 is chosen because every pinned wheel in
+          # requirements.txt has a prebuilt 3.13 artifact.
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install tmux and zsh (linux)
+        if: runner.os == 'Linux'
+        # tests/test_session_backend.py drives a REAL tmux server. Without the
+        # binary those tests fail rather than skip, so the runner must have it.
+        #
+        # zsh: get_agent_command builds `zsh -c 'source ~/.zshrc; ...'`, and
+        # test_get_agent_command_claude_model_shell_injection_defused actually
+        # EXECUTES it to prove a hostile model string cannot break out of the
+        # quoting. ubuntu-latest ships no zsh, so that test failed with
+        # FileNotFoundError on every push from 2026-08-14 to 2026-08-17 while
+        # local runs were green. Installing it is the right fix: skipping
+        # would retire the one test that proves the injection defence works.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends tmux zsh
+
+      - name: Install tmux and librsvg (macos)
+        if: runner.os == 'macOS'
+        # macOS ships zsh as the default login shell, so tmux is the only
+        # shell dependency missing.
+        #
+        # librsvg supplies rsvg-convert, which
+        # tests/test_dmg_artwork.py::test_the_generator_runs_end_to_end needs.
+        # Without it that test skipped on BOTH platforms and the skip audit
+        # correctly failed the build (measured, run 32737804938). It is
+        # installed on macOS only and on purpose: the same test then calls
+        # tiffutil to prove the background carries both a 1x and a 2x
+        # representation, and tiffutil is macOS-only. Installing rsvg on Linux
+        # would move the failure rather than fix it. macOS is also the only
+        # platform that can build the .dmg this artwork goes into, so this is
+        # the platform where the check means something.
+        run: brew install tmux librsvg
+
+      - name: Assert tmux indexes from zero
+        # tmux_backend.py addresses panes as "<session>:0.0". A tmux config
+        # setting base-index 1 makes every tmux test fail with "can't find
+        # window: 0", which looks like a code bug. Diagnose it up front.
+        run: scripts/ci/assert-tmux-defaults.sh
+
+      - name: Install python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --requirement requirements.txt
+
+      - name: Install playwright and its chromium
+        # tests/test_setup_wizard_renders.py is the only suite that measures
+        # PIXELS rather than DOM text, and it importorskips playwright. Left
+        # uninstalled it skipped on every platform, which the skip audit below
+        # correctly treats as a build failure: a render test that never runs
+        # anywhere is exactly the furniture this repo keeps finding. Playwright
+        # is deliberately NOT in requirements.txt - it is a test-time browser
+        # driver, not a runtime dependency of the server.
+        run: |
+          set -euo pipefail
+          python3 -m pip install playwright
+          # --with-deps installs the apt packages chromium needs; it is a
+          # Linux-only concept and errors on macOS runners.
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            python3 -m playwright install --with-deps chromium
+          else
+            python3 -m playwright install chromium
+          fi
+
+      - name: Create runtime config
+        # src/config.py refuses to load without config.json, and config.json is
+        # gitignored because a real one holds a project list and tunnel
+        # settings. The shipped example is a complete, valid config; the
+        # secrets that are NOT in it (TOTP_SECRET, JWT_SECRET) are supplied by
+        # the tests themselves via environment defaults.
+        run: cp config.example.json config.json
+
+      - name: Run pytest
+        # --junitxml is what the skip audit below reads. -rs prints the skip
+        # reasons inline in the log as well, so a human scrolling the job does
+        # not have to open an artifact to see what did not run.
+        run: python3 -m pytest -q -rs --junitxml=junit-${{ matrix.os }}.xml
+
+      - name: Report skipped tests
+        # Runs even when pytest failed: the skip list is diagnostic, and
+        # hiding it on failure is exactly when it is most wanted.
+        if: always()
+        run: |
+          python3 scripts/ci/skip-audit.py report \
+            "junit-${{ matrix.os }}.xml" \
+            --label "${{ matrix.os }}" \
+            --ids-out "skips-${{ matrix.os }}.txt"
+
+      - name: Upload this platform's skip list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skips-${{ matrix.os }}
+          path: skips-${{ matrix.os }}.txt
+          if-no-files-found: error
+
+  skip-audit:
+    name: skip audit
+    # A test skipped on every platform CI runs was never measured anywhere,
+    # which is strictly worse than failing: it looks fine. This job is the
+    # only thing standing between that and a green check mark.
+    needs: python
+    # !cancelled() rather than always(): a run cancelled by the concurrency
+    # group uploads no skip lists, and failing on their absence would be
+    # blaming the audit for a cancellation.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download every platform's skip list
+        uses: actions/download-artifact@v4
+        with:
+          pattern: skips-*
+          merge-multiple: true
+          path: skips
+
+      - name: Fail on tests skipped on every platform
+        run: |
+          set -euo pipefail
+          ls -l skips
+          python3 scripts/ci/skip-audit.py intersect skips/*.txt --require 2
+
+  javascript:
+    name: javascript syntax
+    # Node parses the same bytes on either OS, so this stays single-platform
+    # on purpose - there is no platform-dependent behaviour to measure.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Parse every client javascript file
+        # The client is served as static files with no bundler, so a syntax
+        # error would otherwise reach the browser unnoticed.
+        run: scripts/ci/check-js-syntax.sh
+
+      - name: Run every client javascript suite
+        # Each tests/*.node.mjs is a standalone node script with no
+        # test-runner dependency: it exits non-zero on failure and prints
+        # "ALL PASS" otherwise. Globbed rather than listed one step at a
+        # time, which is how the suite count outgrew the list - the
+        # integration that merged five branches arrived with fifteen of
+        # these and a workflow that ran two of them.
+        run: |
+          set -u
+          status=0
+          for suite in tests/*.node.mjs; do
+            echo "::group::$suite"
+            if node "$suite"; then
+              echo "PASS $suite"
+            else
+              echo "FAIL $suite"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"

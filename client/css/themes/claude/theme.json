@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#1e1e1e",
     "--color-bg-page": "#0a0a0a",
     "--color-bg-elevated": "#2d2d30",
@@ -16,9 +16,9 @@
     "--color-bg-overlay-soft": "rgba(0, 0, 0, 0.5)",
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.3)",
     "--color-fg": "#d4d4d4",
-    "--color-fg-muted": "#858585",
-    "--color-fg-subtle": "#666",
-    "--color-fg-faint": "#888",
+    "--color-fg-muted": "#959595",
+    "--color-fg-subtle": "#959595",
+    "--color-fg-faint": "#959595",
     "--color-border": "#3e3e42",
     "--color-border-subtle": "#2d2d30",
     "--color-accent": "#d77757",
@@ -96,5 +96,12 @@
     "brightMagenta": "#d670d6",
     "brightCyan": "#29b8db",
     "brightWhite": "#ffffff"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/dead-ship.m4a",
+    "srcFallback": "/static/assets/audio/dead-ship.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
   }
 }

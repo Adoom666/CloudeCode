@@ -1,4 +1,4 @@
-"""ntfy.sh push backend — plain module, NOT an ABC (YAGNI).
+"""ntfy.sh push backend - plain module, NOT an ABC (YAGNI).
 
 ntfy.sh API contract (https://docs.ntfy.sh/publish/):
 - POST to ``{base_url}/{topic}`` with body as plain text.
@@ -12,11 +12,11 @@ ntfy.sh API contract (https://docs.ntfy.sh/publish/):
 
 Privacy contract (Plan v3.1 correction #2):
 - Title/Body/Tags carry NO project name and NO session_slug.
-- The slug DOES appear in the Click URL — accepted trade-off.
+- The slug DOES appear in the Click URL - accepted trade-off.
 
 Failure policy:
 - Network errors, timeouts, 4xx, 5xx all caught and logged ONCE at
-  WARN. Never raised — fire-and-forget by contract.
+  WARN. Never raised - fire-and-forget by contract.
 - Topic unset → log once and refuse (caller is the router).
 """
 
@@ -47,7 +47,7 @@ _initialized: bool = False
 
 
 # --- Per-event presentation table ----------------------------------------
-# Generic Title — NEVER mention project name or session_slug. The Body
+# Generic Title - NEVER mention project name or session_slug. The Body
 # is also generic; we lean on the Click URL to take the user somewhere
 # that DOES have the context.
 #
@@ -106,13 +106,13 @@ async def init(base_url: str, topic: str) -> None:
 
     Args:
         base_url: e.g. ``"https://ntfy.sh"`` or self-hosted URL.
-        topic: ntfy topic name (treat as a secret — anyone with this
+        topic: ntfy topic name (treat as a secret - anyone with this
             string can read your notifications).
     """
     global _client, _base_url, _topic, _initialized
 
     if _client is not None:
-        # Re-init path — close old client to free the connection pool.
+        # Re-init path - close old client to free the connection pool.
         try:
             await _client.aclose()
         except Exception as e:  # pragma: no cover - defensive
@@ -120,7 +120,7 @@ async def init(base_url: str, topic: str) -> None:
 
     _base_url = base_url.rstrip("/")
     _topic = topic
-    # Connect timeout slightly longer than read timeout — TLS handshake
+    # Connect timeout slightly longer than read timeout - TLS handshake
     # to ntfy.sh over a flaky LAN can dawdle.
     _client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=5.0))
     _initialized = True
@@ -178,7 +178,7 @@ async def send(
             unset, the notification fires without a Click header.
     """
     if _client is None or not _initialized:
-        # init() was never called — should be impossible if the router
+        # init() was never called - should be impossible if the router
         # is in charge, but log loudly rather than crash.
         logger.warning("ntfy.send_called_before_init")
         return

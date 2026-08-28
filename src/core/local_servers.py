@@ -1,4 +1,4 @@
-"""Local servers detector — replaces the old auto-tunnel orchestrator.
+"""Local servers detector - replaces the old auto-tunnel orchestrator.
 
 Plan v3.2 demolition: Cloude Code used to spawn Cloudflare tunnels for any
 port number it scraped out of pane bytes. The detection regex was loose
@@ -7,20 +7,20 @@ and the system started binding tunnels for nonsense privileged ports. The
 whole tunnel system is gone; this module is its detection-only replacement.
 
 Behavior:
-    - ``record(session_name, port)`` — gated through ``is_valid_dev_port``
+    - ``record(session_name, port)`` - gated through ``is_valid_dev_port``
       and ``port_is_listening``. Adds a ``LocalServerInfo`` entry on success
       and broadcasts ``local_server_detected`` to every WS subscriber.
-    - ``forget(session_name, port)`` — drops the entry and broadcasts
+    - ``forget(session_name, port)`` - drops the entry and broadcasts
       ``local_server_lost``.
-    - ``clear_session(session_name)`` — used when a session is destroyed;
+    - ``clear_session(session_name)`` - used when a session is destroyed;
       forgets every entry owned by that session.
-    - ``list_for_session(session_name)`` — REST endpoint accessor.
-    - Async janitor (``_janitor_loop``) — sweeps every tracked port every
+    - ``list_for_session(session_name)`` - REST endpoint accessor.
+    - Async janitor (``_janitor_loop``) - sweeps every tracked port every
       ``JANITOR_INTERVAL_SECONDS`` and forgets entries whose listener has
       stopped responding.
 
 State is held in-memory only. The application restarts wipe the cache,
-which is the desired behavior — there is no persistence semantic for
+which is the desired behavior - there is no persistence semantic for
 "a server was running last week."
 """
 
@@ -44,7 +44,7 @@ from src.utils.patterns import (
 logger = structlog.get_logger()
 
 
-# Janitor cadence. 30s matches the spec — slow enough to be cheap on a
+# Janitor cadence. 30s matches the spec - slow enough to be cheap on a
 # busy session, fast enough that a stopped server disappears from the UI
 # within one screen-refresh of human attention.
 JANITOR_INTERVAL_SECONDS = 30.0
@@ -60,7 +60,7 @@ def _resolve_lan_host() -> str:
     Honors the configured bind ``HOST`` when it's a real address, else
     falls back to ``127.0.0.1``. The web client renders these URLs as
     clickable links, so the host has to be reachable from the browser
-    that opened the WebSocket — which is the same network the server
+    that opened the WebSocket - which is the same network the server
     is bound to.
     """
     host = (getattr(settings, "host", None) or "").strip()
@@ -87,7 +87,7 @@ class LocalServersTracker:
         self._loop = loop
         # session_name -> port -> LocalServerInfo
         self._state: Dict[str, Dict[int, LocalServerInfo]] = {}
-        # WS subscribers — one queue per active connection. Mirrors the
+        # WS subscribers - one queue per active connection. Mirrors the
         # pattern the old AutoTunnelOrchestrator used so client wiring
         # stays minimal.
         self._subscribers: Set[asyncio.Queue] = set()
@@ -259,7 +259,7 @@ class LocalServersTracker:
     def attach(self, log_monitor: Any, session_manager: Any) -> None:
         """Wire pattern-detection callbacks against ``log_monitor``.
 
-        Replaces what ``AutoTunnelOrchestrator.initialize`` used to do —
+        Replaces what ``AutoTunnelOrchestrator.initialize`` used to do -
         registers callbacks for the port-bearing patterns and dispatches
         each detected port to ``record()`` against the active session's
         tmux name. When no session is active the detection is dropped on
@@ -285,7 +285,7 @@ class LocalServersTracker:
         logger.info("local_servers_attached_to_log_monitor")
 
     async def _on_pattern_match(self, match: PatternMatch) -> None:
-        """Pattern callback — extract a port and record it under the active session."""
+        """Pattern callback - extract a port and record it under the active session."""
         if self._log_monitor is None or self._session_manager is None:
             return
 

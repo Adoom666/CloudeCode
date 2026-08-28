@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>home mechanics geometry harness</title>
+<!--
+  feat/home-screen-mechanics - MEASURE IT, DO NOT ASSERT IT.
+
+  Same pattern as tests/manual/project-tree-geometry-harness.html: loads
+  the REAL client/css/styles.css, the REAL client/js/launchpad.js and the
+  REAL header markup (fetched out of client/index.html at load time, so
+  this page cannot drift from the shipped header the way a pasted copy
+  would), stubs window.API with one canned fixture, runs the real render
+  path, and then reports real getComputedStyle / getBoundingClientRect
+  numbers through window.__homeMechanics().
+
+  Stylesheet ORDER here is the shipped order, and it matters: the themed
+  session row's left edge is decided by specificity against
+  session-theme-tint.css, which loads last. A harness that loaded them in
+  a different order would measure a rule the browser never applies.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/home-mechanics-geometry-harness.html
+  A file:// origin cannot fetch client/index.html for the header.
+
+  Poll window.__homeReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/status-dot.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+</head>
+<body>
+<div id="header-mount"></div>
+<div id="launchpad-screen" class="screen active"></div>
+<!-- A themed running-session row, mounted inside a .launchpad-container
+     exactly as the real one is, so the edge rules under test are the ones
+     the browser actually resolves for the home screen. It must now paint
+     NO inset layer at all: the row's box carries selection, and session
+     identity carries on a swatch inside the row instead. -->
+<div class="launchpad-container" id="tint-probe-host">
+  <div class="running-session-row owned" id="tint-probe"
+       data-session-theme="dracula"
+       style="--session-theme-accent: #bd93f9;">
+    <span class="running-session-name">probe</span>
+  </div>
+</div>
+
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+/**
+ * The one fixture: two projects, one with two attributed running
+ * sessions AND a description, one with a description and no sessions,
+ * so both foldable shapes exist on the page at once.
+ * @returns {object} {projects, presence, attachable, records}
+ */
+function fixture() {
+    return {
+        projects: [
+            { id: 1, name: 'cloudecode', path: '/Users/jsugamele/Development/CloudeCode', description: 'the app itself' },
+            { id: 2, name: 'scrolltest', path: '/Users/jsugamele/Development/scrolltest', description: 'a description and no sessions' },
+            { id: 3, name: 'bare', path: '/Users/jsugamele/Development/bare', description: '' },
+        ],
+        presence: {
+            status: 'ok',
+            projects: [
+                { id: 1, raw_path: '/Users/jsugamele/Development/CloudeCode', presence: 'present' },
+                { id: 2, raw_path: '/Users/jsugamele/Development/scrolltest', presence: 'present' },
+                { id: 3, raw_path: '/Users/jsugamele/Development/bare', presence: 'present' },
+            ],
+            detail: null,
+        },
+        attachable: [
+            { name: 'cloude_a', created_by_cloude: true, created_at_epoch: 1000, window_count: 1, status: 'running', unread: false },
+            { name: 'cloude_b', created_by_cloude: true, created_at_epoch: 1001, window_count: 1, status: 'idle', unread: false },
+        ],
+        records: [
+            { tmux_name: 'cloude_a', project_id: 1, project_attribution: 'path' },
+            { tmux_name: 'cloude_b', project_id: 1, project_attribution: 'path' },
+        ],
+    };
+}
+
+const fx = fixture();
+window.API.getProjects = async () => fx.projects;
+window.API.getProjectsPresence = async () => fx.presence;
+window.API.getProjectsAuthority = async () => ({ mode: 'db', degraded: false, disagreement: null });
+window.API.listAttachableSessions = async () => fx.attachable;
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => fx.records;
+
+window.__homeReady = false;
+
+/**
+ * Geometry for one project node: the node box, its description element
+ * and every child session row, each measured with getBoundingClientRect.
+ * @param {string} name - the project's data-project-name.
+ * @returns {?object} null when no node with that name is rendered.
+ */
+function nodeGeometry(name) {
+    const node = document.querySelector('.project-node[data-project-name="' + name + '"]');
+    if (!node) return null;
+    const nr = node.getBoundingClientRect();
+    const desc = node.querySelector('.project-description');
+    const sessions = node.querySelector('.project-node__sessions');
+    const rows = sessions
+        ? Array.from(sessions.querySelectorAll('.project-session-row')).map((row) => {
+            const r = row.getBoundingClientRect();
+            return {
+                name: row.dataset.name || null,
+                height: r.height, width: r.width, top: r.top, bottom: r.bottom,
+                insideParent: r.height > 0
+                    && r.top >= nr.top - 0.5 && r.bottom <= nr.bottom + 0.5
+                    && r.left >= nr.left - 0.5 && r.right <= nr.right + 0.5,
+            };
+        })
+        : [];
+    const toggle = node.querySelector('.project-node__toggle');
+    return {
+        name,
+        nodeHeight: nr.height,
+        hasToggle: !!toggle,
+        ariaExpanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+        sessionsHeight: sessions ? sessions.getBoundingClientRect().height : null,
+        descriptionHeight: desc ? desc.getBoundingClientRect().height : null,
+        descriptionPresent: !!desc,
+        childCount: rows.length,
+        children: rows,
+    };
+}
+
+/**
+ * Computed paint facts for one element: the two background layers, the
+ * four border colours and widths, and the resolved box-shadow.
+ * @param {string} selector - CSS selector for the element.
+ * @returns {?object} null when the element is absent.
+ */
+function paintOf(selector) {
+    const el = document.querySelector(selector);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return {
+        backgroundColor: cs.backgroundColor,
+        backgroundImage: cs.backgroundImage,
+        borderTopColor: cs.borderTopColor,
+        borderLeftColor: cs.borderLeftColor,
+        borderRightColor: cs.borderRightColor,
+        borderBottomColor: cs.borderBottomColor,
+        borderTopWidth: cs.borderTopWidth,
+        borderLeftWidth: cs.borderLeftWidth,
+        boxShadow: cs.boxShadow,
+        color: cs.color,
+    };
+}
+
+window.__homeMechanics = function () {
+    return {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        theme: document.documentElement.getAttribute('data-theme'),
+        nodes: ['cloudecode', 'scrolltest', 'bare'].map(nodeGeometry),
+        projectItemPaint: paintOf('.project-node[data-project-name="cloudecode"] .project-item'),
+        // The colours that are actually PAINTED as text. The card box's
+        // own computed `color` is inherited by nothing visible here (name,
+        // path and description each set their own), so scoring contrast
+        // against it would be scoring a colour the user never sees.
+        textPaint: {
+            name: paintOf('.project-node[data-project-name="cloudecode"] .project-name'),
+            path: paintOf('.project-node[data-project-name="cloudecode"] .project-path'),
+            description: paintOf('.project-node[data-project-name="cloudecode"] .project-description'),
+            sessionRowName: paintOf('.project-node[data-project-name="cloudecode"] .project-session-row__name'),
+        },
+        sessionRowPaint: paintOf('.project-node[data-project-name="cloudecode"] .project-session-row'),
+        tintProbePaint: paintOf('#tint-probe'),
+        pagePaint: {
+            html: getComputedStyle(document.documentElement).backgroundColor,
+            body: getComputedStyle(document.body).backgroundColor,
+        },
+        // The theme's DECLARED page colour. Several themes paint the root
+        // with a gradient background-IMAGE, whose computed
+        // background-color is transparent, so the token is the only
+        // honest backdrop to composite a translucent card against.
+        pageBg: (getComputedStyle(document.documentElement)
+            .getPropertyValue('--color-bg') || '#1e1e1e').trim(),
+        help: (function () {
+            const btn = document.getElementById('launchpad-help-btn');
+            const details = document.querySelector('#launchpad-screen .adopt-disclosure');
+            const summary = details ? details.querySelector('summary') : null;
+            const header = document.querySelector('.header');
+            return {
+                buttonPresent: !!btn,
+                buttonDisplay: btn ? getComputedStyle(btn).display : null,
+                buttonRect: btn ? btn.getBoundingClientRect().toJSON() : null,
+                headerRect: header ? header.getBoundingClientRect().toJSON() : null,
+                summaryDisplay: summary ? getComputedStyle(summary).display : null,
+                detailsOpen: details ? details.open : null,
+                detailsIsFirstChild: !!(details && details.parentElement
+                    && details.parentElement.firstElementChild === details),
+                // The DETAILS element's own box. A closed <details> in
+                // Chromium keeps its children in the box tree under
+                // content-visibility, so measuring the body element
+                // reports full height even while nothing is painted;
+                // the details box itself collapses to its summary, which
+                // is display:none here, so closed really is zero.
+                detailsHeight: details ? details.getBoundingClientRect().height : null,
+                bodyVisible: (function () {
+                    const b = details ? details.querySelector('.adopt-disclosure-body') : null;
+                    if (!b || typeof b.checkVisibility !== 'function') return null;
+                    return b.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true });
+                })(),
+            };
+        })(),
+        fabLabels: Array.from(document.querySelectorAll('#new-fab .new-fab__item')).map((it) => ({
+            action: it.getAttribute('data-action'),
+            label: (it.querySelector('.new-fab__label') || {}).textContent || '',
+            iconIsImage: !!it.querySelector('.new-fab__icon img'),
+            // naturalWidth is the only honest answer to "did the icon
+            // actually resolve": an <img> element exists whether or not
+            // its src 404s.
+            iconLoaded: (function () {
+                const img = it.querySelector('.new-fab__icon img');
+                return img ? (img.complete && img.naturalWidth > 0) : null;
+            })(),
+        })),
+    };
+};
+
+/**
+ * Click one project node's fold toggle by project name.
+ * @param {string} name - data-project-name.
+ * @returns {boolean} false when the node or its toggle is absent.
+ */
+window.__toggleNode = function (name) {
+    const t = document.querySelector('.project-node[data-project-name="' + name + '"] .project-node__toggle');
+    if (!t) return false;
+    t.click();
+    return true;
+};
+
+/** Re-run the real render pass, as the 5s poller does. @returns {void} */
+window.__rerender = function () { window.__lp.renderProjectList(); };
+
+(async () => {
+    // The REAL header, lifted out of the shipped client/index.html rather
+    // than copied, so this harness cannot pass against markup that no
+    // longer exists.
+    const html = await (await fetch('../../client/index.html')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const header = doc.querySelector('.header');
+    if (header) {
+        document.getElementById('header-mount').appendChild(document.importNode(header, true));
+        // app.js stamps this class on the launchpad screen; the harness
+        // does not boot app.js, so it stamps it here for the same reason.
+        document.querySelector('.header').classList.add('header--home');
+    }
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    await new Promise((r) => setTimeout(r, 60));
+    window.__homeReady = true;
+})();
+</script>
+</body>
+</html>

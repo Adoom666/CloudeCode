@@ -11,7 +11,14 @@ services:
     ports:
       # Bind to ${CLOUDE_BIND_IP} so only that interface exposes the port.
       # Default to 127.0.0.1 so an unset/misconfigured value does NOT leak to 0.0.0.0.
-      - "${CLOUDE_BIND_IP:-127.0.0.1}:8000:8000"
+      # ${PORT} comes from the SAME ./.env file the app itself loads via
+      # src/config.py's Settings (pydantic-settings, env_file=".env") -
+      # docker compose auto-loads a project-root .env for variable
+      # substitution, so this is the identical value, not a second
+      # configuration. Default 8000 mirrors Settings.port's field default;
+      # both sides of the mapping must move together or the container
+      # publishes a port nothing inside it is listening on.
+      - "${CLOUDE_BIND_IP:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"
     volumes:
       # Claude CLI credentials + MCP config
       - "${HOME}/.claude:/home/cloude/.claude"
@@ -29,7 +36,9 @@ services:
       TZ: ${TZ:-UTC}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      # ${PORT} - see the ports: comment above. Runs inside the container,
+      # where the app always listens on this same value.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${PORT:-8000}/health"]
       interval: 30s
       timeout: 5s
       retries: 3

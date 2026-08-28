@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>toast stacking harness</title>
+<!--
+  A BURST OF TOASTS MUST STAY LEGIBLE AND MUST NOT BURY THE SCREEN.
+
+  Toasts in this app are server-backed and ack-required - nothing
+  auto-dismisses - and the `Stop` hook fires once per assistant turn with
+  the literal title "Your turn". So a working session accumulates
+  identical cards until the user clicks every x. client/js/toast.js now
+  coalesces repeats into one counted card, caps the visible stack, and
+  exempts the one blocking kind (PermissionRequest) from that cap.
+
+  WHY THIS PAGE EXISTS RATHER THAN A DOM ASSERTION. tests/
+  test_toast_stacking.node.mjs already reads the element tree the module
+  builds, and that is not the same claim. This codebase has shipped three
+  visibly broken features through fully green suites that read markup: a
+  badge rendering the literal `~~claude`, an unstyled button whose "the
+  button exists" assertion passed, and a feature with 282 passing
+  assertions that drew zero pixels. So the cap, the count badge and the
+  overflow row are measured here as BOXES - real bounding rects in a real
+  Chromium that loaded the real stylesheets in the shipped order - and
+  the driver in scripts/verify_toast_stacking.py fails on the pixel, not
+  on the markup.
+
+  THE REAL MODULE, not a copy of what it is believed to emit. Every card
+  on this page is built by client/js/toast.js reacting to a synthetic
+  server-shape payload, exactly as it would to a toast.new frame. A
+  render path that stopped emitting a count badge could not keep this
+  page green.
+
+  POSITIVE CONTROL. Almost every verdict here has the shape "there are
+  at most N painted cards". A harness where the module never rendered
+  ANYTHING would satisfy every one of them while measuring nothing - a
+  false green manufactured inside the verification step, the worst place
+  for one. window.__control() adds exactly one toast and the driver
+  asserts it paints a non-zero box before any capping verdict is
+  believed; its failure is CANNOT DETERMINE for the whole run.
+
+  THEMES. `claude` (dark, orange accent - the shipped default) and
+  `terminal` (zeroes every radius token, so the count badge renders as a
+  hard-edged chip and must still be a measurable box there). gameboy and
+  matrix are deliberately not used: they set several tokens to the same
+  value, so a check can pass there for the wrong reason.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/toast-stacking-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__toastReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/toast.css" />
+<style>
+  body { margin: 0; padding: 0; min-height: 100vh; }
+</style>
+</head>
+<body>
+
+<!-- The SHIPPED container markup, id and all. client/js/toast.js
+     late-binds to this id; a page that invented its own container would
+     be testing a container the app does not have. -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- THE REAL EMITTER. -->
+<script src="../../client/js/toast.js"></script>
+
+<script>
+/**
+ * Apply one shipped theme by writing its manifest's cssVars onto :root,
+ * the same substitution the app performs at runtime.
+ *
+ * @param {string} id - a directory name under client/css/themes/.
+ * @returns {Promise<object>} the manifest's cssVars.
+ */
+window.__setTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    document.body.style.background = vars['--color-bg'] || '#000000';
+    return vars;
+};
+
+/** Drop every toast without touching the (absent) server. @returns {void} */
+window.__reset = function () {
+    window.ToastManager.clearAll();
+    // clearAll animates out over 220ms; strip the corpses so a following
+    // measurement cannot read a dismissing card as a live one.
+    const c = document.getElementById('toast-container');
+    while (c.firstChild) c.removeChild(c.firstChild);
+    window.ToastManager._byId.clear();
+    window.ToastManager._expanded = false;
+    window.__seq = 0;
+};
+
+window.__seq = 0;
+
+/**
+ * Feed the real module `n` synthetic server-shape toasts of one kind,
+ * exactly the payload a toast.new frame carries.
+ *
+ * @param {number} n - how many.
+ * @param {string} kind - Stop | Notification | PermissionRequest.
+ * @param {boolean} [vary] - give each a distinct body, so a `Stop` burst
+ *   is the real-world case (transcript tails differ) rather than a
+ *   byte-identical one that would coalesce for an easier reason.
+ * @returns {void}
+ */
+window.__burst = function (n, kind, vary) {
+    for (let i = 0; i < n; i++) {
+        window.__seq += 1;
+        window.ToastManager.add({
+            id: 'probe-' + window.__seq,
+            session_id: 'sess-probe',
+            kind: kind,
+            title: kind === 'Stop' ? 'Your turn'
+                 : kind === 'PermissionRequest' ? 'Permission needed'
+                 : 'Claude is waiting',
+            body: vary ? ('detail line ' + i) : 'a fixed body line',
+            color: null,
+            acknowledged: false,
+        });
+    }
+};
+
+/**
+ * POSITIVE CONTROL: exactly one toast, nothing else. The driver asserts
+ * it paints a real box before believing any "at most N cards" verdict.
+ * @returns {void}
+ */
+window.__control = function () {
+    window.__reset();
+    window.__burst(1, 'Stop');
+};
+
+/** Click the overflow row, if one is rendered. @returns {boolean} */
+window.__expand = function () {
+    const row = document.querySelector('.toast-overflow');
+    if (!row) return false;
+    row.click();
+    return true;
+};
+
+/**
+ * Measure what is actually PAINTED: one bounding rect per rendered card,
+ * plus the overflow row's box and the text it is showing.
+ *
+ * A card is counted only when its rect has non-zero width AND height and
+ * its computed visibility/display/opacity would let a human see it -
+ * "the element is in the DOM" is the assertion class this file exists to
+ * replace.
+ *
+ * @returns {object} the whole measurement bundle.
+ */
+window.__measure = function () {
+    const box = (el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return {
+            x: Math.round(r.x), y: Math.round(r.y),
+            w: Math.round(r.width), h: Math.round(r.height),
+            display: cs.display, visibility: cs.visibility,
+            opacity: parseFloat(cs.opacity),
+            painted: r.width > 0 && r.height > 0
+                     && cs.display !== 'none' && cs.visibility !== 'hidden'
+                     && parseFloat(cs.opacity) > 0.01,
+        };
+    };
+    const cards = Array.from(document.querySelectorAll('.toast')).map((el) => {
+        const badge = el.querySelector('.toast__count');
+        return {
+            kind: el.dataset.kind,
+            severity: el.dataset.severity,
+            role: el.getAttribute('role'),
+            title: (el.querySelector('.toast__title-text') || {}).textContent || '',
+            badgeText: badge ? badge.textContent : null,
+            badgeBox: badge ? box(badge) : null,
+            box: box(el),
+        };
+    });
+    const row = document.querySelector('.toast-overflow');
+    const container = document.getElementById('toast-container');
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        narrowMatches: window.matchMedia('(max-width: 640px)').matches,
+        ariaLive: container.getAttribute('aria-live'),
+        containerBox: box(container),
+        cards: cards,
+        overflow: row ? {
+            text: row.textContent,
+            hiddenCount: row.dataset.hiddenCount,
+            worstSeverity: row.dataset.worstSeverity,
+            box: box(row),
+        } : null,
+    };
+};
+
+/**
+ * Block until nothing is animating AND two consecutive frames agree.
+ *
+ * BOTH HALVES ARE LOAD BEARING, and the two-frame half alone was measured
+ * failing here. Cards transition in and out over 200ms
+ * (transform/opacity). getComputedStyle mid-transition returns the
+ * ANIMATED value, not the end value, so a read landing inside a running
+ * transition looks exactly like a rule that never applied. The usual
+ * remedy - poll until two frames agree - is not sufficient at the START
+ * of a transition: both frames can land at currentTime 0 and AGREE on the
+ * pre-transition value. Measured directly: three identical runs of the
+ * same twelve-toast burst returned opacity 0 / 0 / 1 with this function
+ * reporting settled every time. So the animations are drained first
+ * (Element.getAnimations, finish() rather than waiting out the wall
+ * clock) and the frame agreement is the second gate, not the only one.
+ *
+ * @returns {Promise<boolean>} false when paint never settled.
+ */
+window.__settle = async function () {
+    const running = () => Array.prototype.concat.apply([],
+        Array.from(document.querySelectorAll('.toast, .toast-overflow'))
+            .map((el) => el.getAnimations()))
+        .filter((a) => a.playState === 'running');
+    const snap = () => JSON.stringify(
+        Array.from(document.querySelectorAll('.toast, .toast-overflow')).map((el) => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return [Math.round(r.x), Math.round(r.y), Math.round(r.width),
+                    Math.round(r.height), cs.opacity, cs.transform,
+                    el.textContent].join('|');
+        }));
+    const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+    let prev = snap();
+    for (let i = 0; i < 120; i++) {
+        await frame();
+        const live = running();
+        if (live.length) { live.forEach((a) => a.finish()); prev = snap(); continue; }
+        const now = snap();
+        if (now === prev) { await frame(); if (!running().length && snap() === now) return true; }
+        prev = now;
+    }
+    return false;
+};
+
+(async function boot() {
+    await window.__setTheme('claude');
+    window.__toastReady = true;
+})();
+</script>
+</body>
+</html>

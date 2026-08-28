@@ -6,27 +6,71 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const { currentTotp, secondsUntilRollover } = require('./totp');
+const { terminateProcess, isAlive } = require('./process-teardown');
+const { decideAdoption } = require('./adoption-decision');
+const { decideLifecycleAction } = require('./ownership-policy');
+const { createSupervisor, SUPERVISOR_RESTART } = require('./supervisor-policy');
+const setupVerdict = require('./setup-verdict');
+const { resolvePublishedUrl } = require('./published-url');
 
 // Default bind host = 0.0.0.0 (listen on all interfaces). Matches the
 // pydantic Settings default in src/config.py; changing here without
 // changing there would cause a silent drift.
 const DEFAULT_BIND_HOST = '0.0.0.0';
 
-// macOS pseudo-interfaces that should NEVER appear in the Bind IP submenu.
-// awdl/llw = AirDrop/Apple Wireless Direct Link (link-local IPv6 only).
-// utun = VPN tunnels (link-local IPv6 usually; user-bound VPN, not a LAN
-// binding target). anpi/ap1 = internal radios on Apple Silicon. Skip them
-// wholesale by name — they never carry routable IPv4 even if one shows up.
-const PSEUDO_IFACE_PATTERNS = [
-  /^awdl/i, /^llw/i, /^utun/i, /^anpi/i, /^ap\d/i,
-];
+// Default server port. Matches the pydantic Settings default in
+// src/config.py (Settings.port: int = 8000) - the single documented
+// default for this whole app. Used ONLY when .env has no PORT= override,
+// which is exactly when Settings.port would resolve to this same value on
+// the Python side. Never used as a silent fallback for a malformed PORT=
+// value - see getPort() below.
+const DEFAULT_PORT = 8000;
+
+const { listBindableIps, isTailscaleIp } = require('./network-interfaces');
+
+// Interface selection lives in network-interfaces.js. Interfaces are chosen
+// by the ADDRESS they carry, not by a blocklist of names; see that file for
+// why the old name-based filter was wrong and what it cost.
 
 class ServerManager {
   constructor() {
     this.process = null;
     this.processPid = null;
     this.ownedProcess = false; // true if we spawned the server, false if adopted
+    // The version an ADOPTED server reported, when one was adopted. Null for
+    // a server we spawned (its version is ours by construction) and null when
+    // nothing is running. Display only - the decision it came from has
+    // already been made in start().
+    this.adoptedVersion = null;
+
+    // Set when start() REFUSED to adopt whatever holds the port. It exists
+    // because refusing is not enough on its own: main.js re-probes health
+    // right after start() and used to promote any healthy response back to
+    // state 'running'. That probe cannot tell our server from the stranger we
+    // just declined to adopt, so without this flag the refusal was undone one
+    // line later and the stale server was effectively adopted anyway - the
+    // defect surviving its own fix. Cleared by a successful start or stop.
+    this.startBlockedReason = null;
+
+    // Bounded auto-recovery. Before this, ANY server death was permanent:
+    // spawn/adopt only happen inside start(), and nothing called start() again
+    // after an unexpected exit, so the app sat there with a menu bar that did
+    // not say it was dead. Measured on 2026-08-25 at 22 seconds and counting.
+    // The budget and the reasoning are in macOS/supervisor-policy.js.
+    this.supervisor = createSupervisor();
+    this.supervisorTimer = null;
+    this.quitting = false;
     this.logStream = null;
+
+    // Crash tracking. `state` stays a three-value machine
+    // (stopped/starting/running) so no existing menu logic changes; the
+    // question "was the last exit OUR idea" is tracked separately here and
+    // read by the tray to tell a deliberate stop apart from a crash. Without
+    // it, a server that died on its own shows the same calm icon as one the
+    // user stopped himself.
+    this.stopRequested = false;
+    this.lastExitUnexpected = false;
+    this.lastExit = null;
 
     // Determine base directory based on whether app is packaged
     if (app.isPackaged) {
@@ -35,14 +79,25 @@ class ServerManager {
       this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = path.join(app.getAppPath(), '..');
     } else {
-      // In development: running from macOS/ folder
-      this.baseDir = path.join(__dirname, '..');
+      // In development (`npm start`): main.js's runBootstrap() always
+      // preps venv/.env/copied src+client under userData/server (see
+      // main.js's `serverDir` constant), regardless of app.isPackaged.
+      // baseDir must match that, or ensureServerFiles()/getPort() look
+      // for .env in the repo root, which bootstrap never touches, and
+      // startup fails with "Configuration validation failed: .env file
+      // not found" even though bootstrap just finished successfully.
+      this.baseDir = path.join(app.getPath('userData'), 'server');
       this.appResourcesPath = this.baseDir;
     }
 
     // Auto-detect Python installation
     this.pythonPath = this.findPython();
-    this.port = 8000;
+    // Port is NOT cached on the instance - it is resolved fresh from .env
+    // on every read via getPort(), the same way getBindHost() is fresh
+    // from settings on every read. Caching it here previously meant a
+    // user-edited PORT= in .env was silently ignored by the whole app
+    // (health probes, port-in-use checks, "Open in Browser") while the
+    // Python server itself honored it - see getPort()'s docstring.
     // Use userData/logs for persistent logging
     const logDir = path.join(app.getPath('userData'), 'logs');
     if (!fs.existsSync(logDir)) {
@@ -56,6 +111,18 @@ class ServerManager {
     // Lives in userData root — small, atomic-written, one object deep.
     this.settingsPath = path.join(app.getPath('userData'), 'menubar-settings.json');
     this._settings = this._loadSettings();
+
+    // What the SERVER says it is actually bound to, and its setup verdict,
+    // both read from GET /health. Null means "not asked yet", which is a
+    // third outcome and never rendered as either answer.
+    //
+    // These exist because the configured bind host and the real one can
+    // legitimately disagree: while setup is incomplete the server pins
+    // itself to 127.0.0.1 regardless of configuration (see
+    // src/core/setup_state.py). Showing the configured value in that window
+    // would put an address in the menu that nothing is listening on.
+    this.reportedBind = null;
+    this.reportedSetupStatus = null;
   }
 
   // ---------------------------------------------------------------------
@@ -93,10 +160,140 @@ class ServerManager {
   }
 
   /**
+   * Path to the config.json the Python server reads.
+   *
+   * feat/settings-gui put the bind preference there, so both surfaces
+   * that can change it - the web app's settings screen and this tray
+   * menu - are writing one value in one place. Two files each claiming
+   * to hold the preference is how a menu ends up disagreeing with the
+   * screen that set it.
+   *
+   * @returns {string} absolute path to config.json.
+   */
+  getConfigPath() {
+    return path.join(this.baseDir, 'config.json');
+  }
+
+  /**
+   * Read the bind preference out of config.json.
+   *
+   * Three outcomes, and the third is not a value: a missing file, a
+   * missing block, or unreadable JSON all return null, meaning "config
+   * expresses no preference", which is different from "config says
+   * loopback". The caller falls back rather than treating an unreadable
+   * file as an answer.
+   *
+   * @returns {?string} the stored address, or null when none is stored.
+   */
+  readConfigBindHost() {
+    try {
+      const raw = fs.readFileSync(this.getConfigPath(), 'utf8');
+      const parsed = JSON.parse(raw);
+      const prefs = parsed && parsed.server_prefs;
+      const host = prefs && prefs.bind_host;
+      return (typeof host === 'string' && host.trim()) ? host.trim() : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Persist the bind preference into config.json.
+   *
+   * Read-modify-write with a tmp file and a rename, matching the atomic
+   * convention src/config.py already uses on this same file, so no crash
+   * mid-write can leave a torn config. It re-reads immediately before
+   * writing so it MERGES into whatever is on disk rather than replacing
+   * it - a settings-screen save that landed a moment ago survives.
+   *
+   * The honest limitation: read-modify-write leaves a lost-update window
+   * of microseconds against a simultaneous write from the Python side.
+   * Closing it properly needs a lock this codebase does not have, and the
+   * two writers here are both a human physically choosing a menu item, so
+   * the window is stated rather than papered over.
+   *
+   * @param {string} ip - the address to store.
+   * @returns {boolean} whether the write happened.
+   */
+  writeConfigBindHost(ip) {
+    const configPath = this.getConfigPath();
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      parsed.server_prefs = Object.assign({}, parsed.server_prefs, { bind_host: ip });
+      const tmp = configPath + '.menubar.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(parsed, null, 2), 'utf8');
+      fs.renameSync(tmp, configPath);
+      return true;
+    } catch (err) {
+      console.warn('[bind-host] could not write config.json:', err.message);
+      return false;
+    }
+  }
+
+  /**
    * Current bind host ('0.0.0.0' | '127.0.0.1' | specific LAN IP).
+   *
+   * config.json wins, because that is where the settings screen writes
+   * and where the user was told the preference lives. menubar-settings
+   * .json remains the fallback for an install that predates the settings
+   * screen, so nobody's existing choice is silently reset to the default
+   * by this change.
    */
   getBindHost() {
-    return this._settings.bind_host || DEFAULT_BIND_HOST;
+    return this.readConfigBindHost()
+      || this._settings.bind_host
+      || DEFAULT_BIND_HOST;
+  }
+
+  /**
+   * Resolve the configured server port by reading PORT= from the server's
+   * .env - the same file uvicorn/pydantic-settings load (src/config.py's
+   * Settings.port), so this is guaranteed to agree with what the Python
+   * process actually binds to. This is the single place in the Electron
+   * app that knows how to answer "what port is the server on"; every
+   * other method calls this instead of holding its own copy.
+   *
+   * Three-outcome contract (this repo's governing standard - see
+   * CLAUDE.md "THE THREE-OUTCOME RULE"):
+   *   - .env absent, or present with no PORT= line -> DEFAULT_PORT. This
+   *     is a real, fully-determined answer ("no override configured"),
+   *     identical to what Settings.port's own field default resolves to
+   *     inside the server - not a guess.
+   *   - PORT= present and a valid 1-65535 integer -> that value.
+   *   - PORT= present but not a valid integer -> throws. This is the
+   *     "could not determine" outcome. It must never be silently coerced
+   *     to DEFAULT_PORT and reported as success - that is precisely the
+   *     false-green class documented in CLAUDE.md hazard list (a script
+   *     that cannot measure something must say so, not guess).
+   *
+   * @returns {number} the resolved port (1-65535).
+   * @throws {Error} when .env exists and cannot be read, or its PORT=
+   *   value is not a valid port number.
+   */
+  getPort() {
+    const envPath = path.join(this.baseDir, '.env');
+    if (!fs.existsSync(envPath)) {
+      return DEFAULT_PORT;
+    }
+    let envText;
+    try {
+      envText = fs.readFileSync(envPath, 'utf8');
+    } catch (err) {
+      throw new Error(`could not read .env to resolve PORT: ${err.message}`);
+    }
+    const m = envText.match(/^PORT=(.*)$/m);
+    if (!m) {
+      return DEFAULT_PORT;
+    }
+    const raw = m[1].trim().replace(/^['"]|['"]$/g, '').trim();
+    if (raw === '') {
+      return DEFAULT_PORT;
+    }
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+      throw new Error(`PORT in .env is not a valid port number: "${raw}"`);
+    }
+    return parsed;
   }
 
   /**
@@ -107,13 +304,21 @@ class ServerManager {
     if (!ip || typeof ip !== 'string') {
       throw new Error(`invalid bind host: ${ip}`);
     }
-    if (this._settings.bind_host === ip) {
+    // Compared against the EFFECTIVE value, not the menubar mirror. With
+    // config.json as the source of truth, the mirror can legitimately be
+    // stale, and comparing against it would refuse a change that has not
+    // actually been made.
+    if (this.getBindHost() === ip) {
       console.log(`[bind-host] already set to ${ip}, no-op`);
       return;
     }
     console.log(`[bind-host] change: ${this._settings.bind_host} -> ${ip}`);
     this._settings.bind_host = ip;
     this._saveSettings();
+    // config.json is the source of truth the settings screen reads, so a
+    // tray pick has to land there too or the two surfaces disagree about
+    // what the user last chose.
+    this.writeConfigBindHost(ip);
 
     // Full restart is required — uvicorn binds at startup and has no
     // in-place rebind. tmux sessions survive because the tmux server is
@@ -128,28 +333,12 @@ class ServerManager {
    * Returns: [{iface: 'en0', ip: '192.168.1.250'}, ...]
    */
   getLocalInterfaceIps() {
-    const results = [];
-    let ifaces;
     try {
-      ifaces = os.networkInterfaces();
+      return listBindableIps();
     } catch (err) {
       console.warn('[bind-host] networkInterfaces() failed:', err.message);
       return [];
     }
-    for (const [name, addrs] of Object.entries(ifaces || {})) {
-      if (PSEUDO_IFACE_PATTERNS.some((rx) => rx.test(name))) continue;
-      if (!Array.isArray(addrs)) continue;
-      for (const a of addrs) {
-        if (!a || a.family !== 'IPv4') continue;
-        if (a.internal) continue;
-        if (typeof a.address !== 'string') continue;
-        if (a.address.startsWith('169.254.')) continue; // link-local
-        results.push({ iface: name, ip: a.address });
-      }
-    }
-    // Stable ordering by interface name (en0 before en13 etc.)
-    results.sort((a, b) => a.iface.localeCompare(b.iface));
-    return results;
   }
 
   /**
@@ -167,14 +356,33 @@ class ServerManager {
    * host. Tunnel URL resolution is not done here because the /tunnels
    * endpoint is auth-gated and the Electron app has no JWT — users with
    * tunnels active get the LAN URL as a sensible fallback.
+   *
+   * Returns null (never a URL built from a guessed port) when getPort()
+   * cannot determine the configured port - see getPort()'s three-outcome
+   * docstring. Callers must treat null as "unknown", not retry with
+   * DEFAULT_PORT themselves.
    */
   getPublishedUrl() {
-    const host = this.getBindHost();
-    if (host === '0.0.0.0') {
-      const lan = this.getPrimaryLanIp();
-      return `http://${lan || '127.0.0.1'}:${this.port}`;
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getPublishedUrl: ${err.message}`);
+      return null;
     }
-    return `http://${host}:${this.port}`;
+    // The rule itself lives in macOS/published-url.js - a pure module with
+    // no imports, so the node suites (which run with no dependencies
+    // installed) can test it without dragging in axios and electron. Read
+    // its header for why an UNMEASURED bind must not resolve to a LAN
+    // address: during the setup lockdown, which is the state every fresh
+    // install is in, the server listens only on loopback and a LAN URL is
+    // connection-refused.
+    return resolvePublishedUrl({
+      port,
+      configuredHost: this.getBindHost(),
+      measuredHost: this.getEffectiveBindHost(),
+      lanIp: this.getPrimaryLanIp(),
+    });
   }
 
   /**
@@ -199,10 +407,40 @@ class ServerManager {
   /**
    * Fully-qualified base URL for internal HTTP probes. Replaces the old
    * hardcoded `this.apiUrl = 'http://127.0.0.1:8000'` — that constant broke
-   * the moment the user chose a non-loopback bind host.
+   * the moment the user chose a non-loopback bind host. The port half of
+   * this had the identical bug (a hardcoded `this.port = 8000` that never
+   * read a user's PORT= override) until getPort() replaced it.
+   *
+   * Returns null when getPort() cannot determine the configured port -
+   * see getPort()'s three-outcome docstring. A null-built URL is an
+   * obviously-broken one, which is the correct outcome here: it must
+   * never silently probe DEFAULT_PORT and let a caller believe that
+   * probe result describes the user's actual configuration.
+   */
+  probeHostCandidates() {
+    const candidates = [this.getLocalProbeHost()];
+    // The setup lockdown can put the server on loopback while configuration
+    // names a LAN address. Probing only the configured address in that state
+    // returns ECONNREFUSED forever and the tray reports a healthy server as
+    // dead - a false negative manufactured by our own security feature.
+    if (!candidates.includes('127.0.0.1')) candidates.push('127.0.0.1');
+    return candidates;
+  }
+
+  /**
+   * Base URL the Electron app should use for internal probes.
+   *
+   * @returns {string|null} The URL, or null when the port is undeterminable.
    */
   getLocalApiUrl() {
-    return `http://${this.getLocalProbeHost()}:${this.port}`;
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getLocalApiUrl: ${err.message}`);
+      return null;
+    }
+    return `http://${this.getLocalProbeHost()}:${port}`;
   }
 
   /**
@@ -471,10 +709,14 @@ class ServerManager {
   }
 
   /**
-   * Check if port is in use
+   * Check if the configured port is in use.
+   * @param {number} [port] - port to probe. Defaults to getPort() -
+   *   evaluated lazily so a malformed PORT= in .env throws here rather
+   *   than silently probing DEFAULT_PORT (three-outcome contract, see
+   *   getPort()'s docstring).
    * @returns {Promise<boolean>}
    */
-  async isPortInUse() {
+  async isPortInUse(port = this.getPort()) {
     return new Promise((resolve) => {
       const server = net.createServer();
 
@@ -491,7 +733,7 @@ class ServerManager {
         resolve(false);
       });
 
-      server.listen(this.port, '0.0.0.0');
+      server.listen(port, '0.0.0.0');
     });
   }
 
@@ -535,36 +777,102 @@ class ServerManager {
       throw new Error(errorMsg);
     }
 
-    // Check if port is already in use
-    const portInUse = await this.isPortInUse();
+    // Check if port is already in use. validateEnvFile() above already
+    // confirmed getPort() resolves without throwing, so this call is safe.
+    const port = this.getPort();
+    const portInUse = await this.isPortInUse(port);
     if (portInUse) {
-      console.log(`Port ${this.port} already in use, checking if it's our server...`);
+      console.log(`Port ${port} already in use, checking if it's our server...`);
       const health = await this.getHealth();
       if (health) {
-        console.log('Server already running on port, adopting it');
+        // A HEALTHY CLOUDE CODE SERVER IS NOT NECESSARILY *THIS* CLOUDE CODE
+        // SERVER.
+        //
+        // This branch used to adopt unconditionally. That is right when
+        // Electron crashed and left its own healthy server behind, and wrong
+        // across an upgrade - and on 2026-08-25 it was wrong: a v1.0.2 server
+        // orphaned onto launchd (ppid 1) was adopted by a v1.0.3 bundle,
+        // which then ran the older server's code for four hours.
+        //
+        // The gate is version equality, decided in adoption-decision.js.
+        // `health.version` comes from the UNAUTHENTICATED GET /api/v1/health
+        // (the auth-gated /api/v1/version is unusable here - nobody has logged
+        // in yet) and is frozen at the server's own startup rather than
+        // re-resolved, because bootstrap.js rewrites the on-disk VERSION file
+        // on every packaged launch.
+        //
+        // FOUR outcomes, and only one of them adopts. A server that does not
+        // report a version at all - which is every server built before this
+        // change, including the orphan - is CANNOT DETERMINE and is refused.
+        const bundleVersion = this.getBundleVersion();
+        const verdict = decideAdoption({
+          runningVersion: health && health.version,
+          bundleVersion,
+        });
+        const holderPid = await this.findPortHolderPid(port);
+
+        if (!verdict.adopt) {
+          console.log(
+            `Refusing to adopt server on port ${port}: ${verdict.outcome}`
+          );
+          this.state = 'stopped';
+          this.startBlockedReason = verdict.outcome;
+          const err = new Error(
+            `${verdict.reason}\n\n` +
+              `Cloude Code did not start this server` +
+              (holderPid ? ` (PID ${holderPid})` : '') +
+              `, so it will not stop it without being told to.`
+          );
+          // Structured so main.js can offer a real choice instead of a dead
+          // end. A refusal the user cannot act on is just a different silence.
+          err.code = 'ADOPTION_REFUSED';
+          err.outcome = verdict.outcome;
+          err.runningVersion = verdict.runningVersion;
+          err.bundleVersion = verdict.bundleVersion;
+          err.pid = holderPid;
+          err.port = port;
+          throw err;
+        }
+
+        console.log(
+          `Adopting server on port ${port}: ${verdict.reason}`
+        );
         this.state = 'running';
         this.startTime = Date.now(); // Approximate
-        this.ownedProcess = false; // We didn't spawn this — don't kill it on quit
-
-        // Try to capture the PID of the existing process (for display only)
-        try {
-          exec(`lsof -ti:${this.port}`, (err, stdout) => {
-            if (!err && stdout) {
-              const pid = parseInt(stdout.trim());
-              if (!isNaN(pid)) {
-                console.log(`Adopted existing server process PID: ${pid}`);
-                this.processPid = pid;
-              }
-            }
-          });
-        } catch (e) {
-          console.warn('Could not determine PID of running server:', e.message);
+        this.ownedProcess = false; // We didn't spawn this, so we don't kill it
+        this.adoptedVersion = verdict.runningVersion;
+        this.startBlockedReason = null;
+        if (holderPid) {
+          console.log(`Adopted existing server process PID: ${holderPid}`);
+          this.processPid = holderPid;
         }
 
         return;
       } else {
-        console.error(`Port ${this.port} in use by another process!`);
-        return;
+        // Something that is NOT a Cloude Code server holds the port.
+        //
+        // We deliberately do not kill it. The holder could be anything the
+        // user cares about, and silently killing a stranger's process is not
+        // a decision this app gets to make.
+        //
+        // We also do not fall back to a free port. The port is not a private
+        // detail of this process: it comes from getPort() (PORT= in .env,
+        // or DEFAULT_PORT - see getPort()'s docstring), and stop.sh /
+        // reset.sh / nuke.sh resolve the SAME value the SAME way, so
+        // whatever this app reports here is exactly what those scripts will
+        // go looking for too. Moving the listener without moving all of
+        // those turns one visible failure into several invisible ones.
+        //
+        // So: report it. This previously logged to a console nobody reads and
+        // returned, leaving the menu bar showing no error at all.
+        const holder = await this.describePortHolder();
+        this.state = 'stopped';
+        throw new Error(
+          `Port ${port} is already in use by ${holder}, which is not a ` +
+            `Cloude Code server.\n\n` +
+            `Cloude Code needs port ${port}. Quit that process, then choose ` +
+            `Start Server from the Cloude Code menu.`
+        );
       }
     }
 
@@ -573,6 +881,12 @@ class ServerManager {
     console.log(`Python path: ${this.pythonPath}`);
     console.log(`Log file: ${this.logFile}`);
 
+    // A new start clears any previous crash, so the tray shows the
+    // current attempt rather than the last failure forever. A flag that
+    // never clears is furniture, not a signal.
+    this.lastExitUnexpected = false;
+    this.stopRequested = false;
+    this.startBlockedReason = null;
     this.state = 'starting';
 
     // Create log file stream
@@ -661,11 +975,25 @@ class ServerManager {
         this.logStream = null;
       }
 
+      // An exit we did not ask for is a crash, whatever the code says. A
+      // uvicorn that loses its port exits non-zero; one the OOM killer takes
+      // exits on a signal. Both matter to the user, and neither is
+      // distinguishable from a clean stop once state collapses to 'stopped'.
+      this.lastExit = { code, signal, at: Date.now() };
+      this.lastExitUnexpected = !this.stopRequested;
+      const wasExpected = this.stopRequested;
+      this.stopRequested = false;
+
       this.process = null;
       this.processPid = null;
       this.ownedProcess = false;
       this.state = 'stopped';
       this.startTime = null;
+
+      // A death nobody asked for gets a bounded restart. A deliberate stop
+      // does not, or there would be no way to turn the server off, and neither
+      // does a death during quit, which would recreate the orphan.
+      this.superviseDown({ expected: wasExpected });
     });
 
     // Handle process errors
@@ -679,6 +1007,11 @@ class ServerManager {
         this.logStream = null;
       }
 
+      // Failing to spawn at all is never something the user asked for.
+      this.lastExit = { code: null, signal: null, error: err.message, at: Date.now() };
+      this.lastExitUnexpected = true;
+      this.stopRequested = false;
+
       this.process = null;
       this.processPid = null;
       this.ownedProcess = false;
@@ -690,31 +1023,281 @@ class ServerManager {
   }
 
   /**
-   * Kill process by PID
+   * This bundle's own version.
+   *
+   * Wrapped rather than called inline because `app.getVersion()` can throw in
+   * a half-initialised Electron, and the adoption gate must be able to tell
+   * "1.0.3" apart from "I could not find out". Returning a plausible-looking
+   * fallback here would be the whole defect in miniature: the gate would
+   * compare against a number nobody measured.
+   *
+   * @returns {string} The version, or "" when it could not be determined.
    */
-  killByPid(pid, signal = 'SIGTERM') {
+  getBundleVersion() {
+    try {
+      return app.getVersion() || '';
+    } catch (err) {
+      console.warn('Could not resolve this bundle version:', err.message);
+      return '';
+    }
+  }
+
+  /**
+   * The pid currently listening on a port, if it can be determined.
+   *
+   * Promisified deliberately. The shipped adoption path fired an `exec` and
+   * returned WITHOUT awaiting it, assigning this.processPid from inside the
+   * callback some time later - so for an indeterminate window after adoption
+   * the manager had adopted a server whose pid it did not yet know, and
+   * anything reading processPid in that window read null. The pid is part of
+   * the decision now (it is named in the refusal the user is shown), so it is
+   * awaited.
+   *
+   * @param {number} port - Port to look up.
+   * @returns {Promise<number|null>} The pid, or null when lsof says nothing
+   *   usable. Null is CANNOT DETERMINE, not "nothing is listening".
+   */
+  findPortHolderPid(port) {
     return new Promise((resolve) => {
-      exec(`kill -${signal === 'SIGTERM' ? '15' : '9'} ${pid}`, (error) => {
-        if (error) {
-          console.log(`Failed to kill PID ${pid}:`, error.message);
+      exec(`lsof -ti:${port}`, (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
         }
-        resolve();
+        const first = String(stdout || '').trim().split('\n')[0];
+        const pid = parseInt(first, 10);
+        resolve(Number.isNaN(pid) ? null : pid);
       });
     });
   }
 
   /**
-   * Kill any process using port 8000
+   * Tell the supervisor the server went down, and act on its answer.
+   *
+   * @param {object} [event] - Context.
+   * @param {boolean} [event.expected] - True when the stop was deliberate.
+   * @returns {object} The supervisor's decision, for logging and tests.
    */
-  killByPort() {
+  superviseDown(event = {}) {
+    const decision = this.supervisor.recordDown({
+      expected: event.expected === true,
+      quitting: this.quitting === true,
+    });
+    console.log(`[supervisor] ${decision.message}`);
+
+    if (decision.action !== SUPERVISOR_RESTART) return decision;
+
+    if (this.supervisorTimer) clearTimeout(this.supervisorTimer);
+    this.supervisorTimer = setTimeout(async () => {
+      this.supervisorTimer = null;
+      if (this.quitting) return;
+      try {
+        await this.start();
+        this.supervisor.recordUp();
+      } catch (err) {
+        // A failed automatic restart is itself a death, and it must spend
+        // budget. Without this the timer path could retry indefinitely while
+        // the budget the exit path maintains never moves.
+        console.error(`[supervisor] restart failed: ${err.message}`);
+        this.superviseDown({ expected: false });
+      }
+    }, decision.delayMs);
+
+    return decision;
+  }
+
+  /**
+   * Call from whatever already polls health.
+   *
+   * Two jobs. It clears the restart budget once the server has been
+   * continuously up for the healthy window - coming up is not staying up, and
+   * conflating them turns a bounded retry into an unbounded one. And it is the
+   * ONLY thing that can notice an ADOPTED server dying: an adopted process
+   * emits no 'exit' event here, because we never spawned it, so without a poll
+   * its death is invisible. That is exactly the case that stayed down for 22
+   * seconds on 2026-08-25.
+   *
+   * @param {boolean} healthy - Whether the server just answered a health probe.
+   * @returns {void}
+   */
+  superviseTick(healthy) {
+    if (this.quitting) return;
+    if (healthy) {
+      this.supervisor.noteStillUp();
+      return;
+    }
+    // Not healthy. Only act if we BELIEVED it was running - otherwise this is
+    // a server the user stopped, or one that never started, and restarting it
+    // would override a decision somebody already made.
+    if (this.state !== 'running') return;
+    if (this.startBlockedReason) return;
+    this.state = 'stopped';
+    this.superviseDown({ expected: false });
+  }
+
+  /**
+   * Clear the restart budget, including a give-up.
+   *
+   * For an explicit user-initiated start only. Having given up must never lock
+   * the user out of trying again.
+   *
+   * @returns {void}
+   */
+  resetSupervisor() {
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
+    this.supervisor.reset();
+  }
+
+  /**
+   * What the supervisor is doing, for the menu to render.
+   *
+   * A supervisor nobody can see is the masking failure mode this design is
+   * meant to avoid: an automatic restart the user is not told about is
+   * indistinguishable from nothing happening.
+   *
+   * @returns {{attempts: number, maxAttempts: number, gaveUp: boolean,
+   *   message: string, pending: boolean}} Status, always renderable.
+   */
+  getSupervisorStatus() {
+    return {
+      ...this.supervisor.status(),
+      pending: this.supervisorTimer !== null,
+    };
+  }
+
+  /**
+   * Note that the app is shutting down.
+   *
+   * Set before any teardown so a stop cannot be undone by the supervisor
+   * racing it, which would leave a brand new orphan behind at the exact moment
+   * the app is going away.
+   *
+   * @returns {void}
+   */
+  beginQuit() {
+    this.quitting = true;
+    if (this.supervisorTimer) {
+      clearTimeout(this.supervisorTimer);
+      this.supervisorTimer = null;
+    }
+  }
+
+  /**
+   * Wait until nothing is listening on a port.
+   *
+   * A pid being gone and a port being free are two different facts. A dying
+   * process releases its socket asynchronously, and on macOS a listener in
+   * TIME_WAIT can keep a bind failing for a moment after its owner is reaped.
+   * Spawning into that window fails with a bind error that reads like a
+   * completely different problem.
+   *
+   * @param {number} port - Port to watch.
+   * @param {number} [budgetMs=5000] - How long to wait.
+   * @param {number} [pollMs=150] - Interval between checks.
+   * @returns {Promise<boolean>} True when free, false on timeout. False is a
+   *   real answer the caller must handle, not a reason to proceed anyway.
+   */
+  async waitForPortFree(port, budgetMs = 5000, pollMs = 150) {
+    const deadline = Date.now() + budgetMs;
+    for (;;) {
+      if (!(await this.isPortInUse(port))) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
+  /**
+   * Terminate whatever holds the port and start our own server in its place.
+   *
+   * THIS IS ONLY EVER CALLED AFTER THE USER SAYS SO. start() refuses to adopt
+   * a server it cannot prove is running this bundle's code, and refusing is
+   * where its authority ends: killing a process this app did not start is not
+   * a decision it gets to make on its own. The refusal names the pid and the
+   * two versions, main.js turns that into a choice, and this runs only if the
+   * user picks "replace".
+   *
+   * Every step is confirmed rather than assumed - the pid is confirmed gone
+   * via the kernel (see process-teardown.js), and the PORT is then confirmed
+   * free, which is a separate fact from the pid being gone.
+   *
+   * @returns {Promise<void>} Resolves once the replacement server is starting.
+   * @throws {Error} If the holder cannot be identified, cannot be killed, or
+   *   the port does not come free. Each is reported as itself; none of them
+   *   silently falls through to a spawn that will fail confusingly later.
+   */
+  async takeOverPort() {
+    const port = this.getPort();
+    const pid = await this.findPortHolderPid(port);
+    if (!pid) {
+      throw new Error(
+        `Could not determine which process is holding port ${port}, so ` +
+          `Cloude Code will not try to stop it. Quit it yourself and choose ` +
+          `Start Server.`
+      );
+    }
+
+    console.log(`Taking over port ${port} from PID ${pid} (user approved)...`);
+    const result = await terminateProcess(pid, { graceMs: 5000 });
+    if (!result.terminated) {
+      throw new Error(
+        `Could not stop the process on port ${port} (PID ${pid}): ` +
+          `${result.outcome}. Nothing was started.`
+      );
+    }
+
+    if (!(await this.waitForPortFree(port))) {
+      throw new Error(
+        `PID ${pid} exited but port ${port} is still held. Nothing was ` +
+          `started - something else may have taken the port.`
+      );
+    }
+
+    this.startBlockedReason = null;
+    this.adoptedVersion = null;
+    await this.start();
+  }
+
+  /**
+   * Human-readable description of whatever currently holds the configured
+   * port.
+   *
+   * Exists purely to make the port-in-use error actionable. "Port 8000 is in
+   * use" tells the user nothing they can do; "PID 4312 (node)" tells them
+   * exactly what to quit.
+   *
+   * Never throws: this runs on an error path, and failing to name the holder
+   * must not replace a useful error with a confusing one. If getPort()
+   * itself can't determine the port, that is reported as "another process"
+   * rather than crashing this diagnostic helper - the caller (start()'s
+   * port-in-use branch) already has a port number of its own to report.
+   *
+   * @returns {Promise<string>} e.g. `PID 4312 (node)`, `PID 4312`, or the
+   *   generic `another process` when lsof and ps both tell us nothing.
+   */
+  describePortHolder() {
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      return Promise.resolve('another process');
+    }
     return new Promise((resolve) => {
-      exec(`lsof -ti:${this.port} | xargs kill -9`, (error) => {
-        if (error) {
-          console.log('No process found on port', this.port);
-        } else {
-          console.log('Killed process on port', this.port);
+      exec(`lsof -ti:${port}`, (err, stdout) => {
+        const pid = parseInt(String(stdout || '').trim().split('\n')[0], 10);
+        if (err || Number.isNaN(pid)) {
+          resolve('another process');
+          return;
         }
-        resolve();
+        exec(`ps -p ${pid} -o comm=`, (psErr, psOut) => {
+          const name = String(psOut || '').trim();
+          // A full path is normal from ps; the basename is what the user sees
+          // in Activity Monitor.
+          const base = name ? name.split('/').pop() : '';
+          resolve(base ? `PID ${pid} (${base})` : `PID ${pid}`);
+        });
       });
     });
   }
@@ -727,37 +1310,82 @@ class ServerManager {
    * (SIGTERM → 3s grace → SIGKILL). No HTTP shutdown call — the /api/v1/shutdown
    * endpoint now requires auth, and signaling a PID we own is strictly simpler.
    */
-  async stop() {
+  async stop(options = {}) {
     console.log('Stopping server...');
 
-    // Adopted server: we didn't start it, we don't stop it.
-    if (!this.ownedProcess) {
-      console.log('Server was adopted, not owned — leaving it running.');
-      // Clear our local references so menu reflects "stopped" from app's POV.
-      this.processPid = null;
-      this.state = 'stopped';
-      this.startTime = null;
-      return;
+    // ADOPTED SERVER: WE DID NOT START IT, SO WE DO NOT STOP IT - AND WE DO
+    // NOT LIE ABOUT IT EITHER.
+    //
+    // This branch used to log to a console nobody reads, set
+    // `this.state = 'stopped'`, and return. Two defects in four lines. The
+    // refusal was invisible, so from the menu it was indistinguishable from a
+    // dead click and got reported as a broken menu item. And the state it set
+    // was false: the server was still serving every request while the tray,
+    // which renders this exact field, reported it stopped.
+    //
+    // The guard itself is right and stays. What changes is that the refusal
+    // is now returned to the caller so the menu can show it, the state is
+    // taken from a MEASUREMENT rather than asserted, and an explicit
+    // `takeOwnership: true` from the user can override it. See
+    // macOS/ownership-policy.js for the argument.
+    const verdict = decideLifecycleAction({
+      action: 'stop',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      // Measured, not assumed. null when we could not tell, which leaves the
+      // state alone rather than inventing one.
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to stop: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        stopped: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
     }
 
-    // Owned server: SIGTERM via process ref or PID, then SIGKILL after grace period.
-    if (this.process && !this.process.killed) {
-      console.log('Sending SIGTERM to owned server process...');
-      this.process.kill('SIGTERM');
+    // Everything from here on is a deliberate stop, so the exit handler must
+    // not report it as a crash. Set BEFORE any kill is issued, because the
+    // exit event can land before this function returns.
+    this.stopRequested = true;
+    this.lastExitUnexpected = false;
 
-      // Give uvicorn ~3s to flush connections, then force kill.
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      if (this.process && !this.process.killed) {
-        console.log('Server did not exit on SIGTERM, sending SIGKILL');
-        this.process.kill('SIGKILL');
+    // Owned server: terminate by PID and CONFIRM from the kernel.
+    //
+    // This used to branch on `this.process.killed` to decide whether to
+    // escalate to SIGKILL. That property means "a signal was successfully
+    // SENT", not "the process is dead", so the SIGTERM one line above set it
+    // and the SIGKILL branch was unreachable. A uvicorn that declined to exit
+    // on SIGTERM was never escalated against, outlived the app, got
+    // reparented to launchd, and was then ADOPTED by the next version - which
+    // is the whole 2026-08-25 incident. See macOS/process-teardown.js.
+    //
+    // Both old branches (process ref, bare pid) collapse into one: a pid is a
+    // pid, and the kernel is the only thing that knows whether it is gone.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    let outcome = 'no-pid';
+    if (pid) {
+      console.log(`Terminating owned server PID ${pid}...`);
+      const result = await terminateProcess(pid, { graceMs: 3000 });
+      outcome = result.outcome;
+      if (result.escalated) {
+        console.log(`PID ${pid} ignored SIGTERM; escalated to SIGKILL`);
       }
-    } else if (this.processPid) {
-      // Process object lost but we have PID (edge case: app restart mid-lifecycle).
-      console.log(`Sending SIGTERM to owned PID ${this.processPid}...`);
-      await this.killByPid(this.processPid, 'SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await this.killByPid(this.processPid, 'SIGKILL');
+      if (!result.terminated) {
+        // Say so out loud. The caller's next move - deciding whether the port
+        // is free, whether to respawn - is wrong if this is assumed.
+        console.error(
+          `Could not confirm PID ${pid} exited (${result.outcome}). ` +
+          `The port may still be held.`
+        );
+      }
     }
 
     // Close log stream
@@ -766,22 +1394,67 @@ class ServerManager {
       this.logStream = null;
     }
 
-    // Wait briefly for exit event to fire, then clean up state if it didn't.
+    // Wait briefly for the exit event to fire, then clean up state if it did
+    // not. Only claim 'stopped' when the process is actually gone: the state
+    // this sets is what the tray renders, and a tray that says stopped about
+    // a live server is the same class of false claim as the escalation bug.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (!this.process) {
-      this.processPid = null;
-      this.ownedProcess = false;
-      this.state = 'stopped';
-      this.startTime = null;
+    if (pid && isAlive(pid)) {
+      console.error(`PID ${pid} is still alive after stop(); not reporting stopped.`);
+      return { stopped: false, outcome, pid };
     }
+
+    this.process = null;
+    this.processPid = null;
+    this.ownedProcess = false;
+    this.state = 'stopped';
+    this.startTime = null;
+    return { stopped: true, outcome, pid };
   }
 
   /**
    * Restart the server
    */
-  async restart() {
+  async restart(options = {}) {
     console.log('Restarting server...');
+
+    // Ask BEFORE doing anything, rather than discovering the refusal halfway
+    // through stop() and returning from there. restart() used to delegate
+    // wholesale to stop(), so when stop() refused, restart() carried on to
+    // start() - which found the still-healthy adopted server on the port and
+    // went straight back down the adoption path. The user got no restart, no
+    // error, and no way to tell the difference.
+    const verdict = decideLifecycleAction({
+      action: 'restart',
+      owned: this.ownedProcess,
+      takeOwnership: options.takeOwnership === true,
+      serverResponding: this.processPid ? isAlive(this.processPid) : null,
+    });
+
+    if (!verdict.permitted) {
+      console.log(`Refusing to restart: ${verdict.reason}`);
+      if (verdict.stateAfterRefusal) {
+        this.state = verdict.stateAfterRefusal;
+      }
+      return {
+        restarted: false,
+        refused: true,
+        reason: verdict.reason,
+        offerTakeOwnership: verdict.offerTakeOwnership,
+        pid: this.processPid,
+      };
+    }
+
+    if (!this.ownedProcess && options.takeOwnership === true) {
+      // Consented takeover of an adopted server: terminate the holder,
+      // confirm the port is free, then spawn ours. takeOverPort() does all
+      // three and refuses to spawn if any of them could not be confirmed.
+      await this.takeOverPort();
+      console.log('Server restarted under new ownership');
+      return { restarted: true, refused: false, tookOwnership: true };
+    }
+
     await this.stop();
 
     // Wait a bit before restarting
@@ -789,6 +1462,7 @@ class ServerManager {
 
     await this.start();
     console.log('Server restarted');
+    return { restarted: true, refused: false, tookOwnership: false };
   }
 
   /**
@@ -796,18 +1470,109 @@ class ServerManager {
    * @returns {Promise<Object|null>} Server stats or null if unhealthy
    */
   async getHealth() {
+    let port;
     try {
-      // Probe the actual bound interface, not a hardcoded 127.0.0.1 —
-      // uvicorn binds exclusively, so loopback is unreachable when the
-      // user picks a specific LAN IP. See getLocalProbeHost() for rule.
-      const response = await axios.get(`${this.getLocalApiUrl()}/api/v1/health`, {
-        timeout: 3000
-      });
-      return response.data;
+      port = this.getPort();
     } catch (err) {
-      // Server not responding
+      console.error(`[port] getHealth: ${err.message}`);
       return null;
     }
+
+    // Probe the actual bound interface, not a hardcoded 127.0.0.1 - uvicorn
+    // binds exclusively, so loopback is unreachable when the user picks a
+    // specific LAN IP. But the setup lockdown can also put the server on
+    // loopback while configuration names a LAN address, so both are tried.
+    for (const host of this.probeHostCandidates()) {
+      const base = `http://${host}:${port}`;
+      let stats;
+      try {
+        const response = await axios.get(`${base}/api/v1/health`, { timeout: 3000 });
+        stats = response.data;
+      } catch (err) {
+        continue;
+      }
+
+      // Read the EFFECTIVE bind from the server's own mouth rather than
+      // inferring it from configuration. GET /health (the unauthenticated
+      // root one, not /api/v1/health) reports what it really bound.
+      try {
+        const exposure = await axios.get(`${base}/health`, { timeout: 3000 });
+        const bind = exposure.data && exposure.data.bind;
+        this.reportedBind = bind || null;
+        this.reportedSetupStatus =
+          (exposure.data && exposure.data.setup_status) || null;
+      } catch (err) {
+        // The health probe succeeded, so the server is up; only the exposure
+        // detail could not be read. Say we do not know rather than keeping a
+        // stale answer that would go on being displayed as current.
+        this.reportedBind = null;
+        this.reportedSetupStatus = null;
+      }
+      return stats;
+    }
+    return null;
+  }
+
+  /**
+   * A URL built ONLY from the address the server measured itself onto.
+   *
+   * The difference from getPublishedUrl() is deliberate and is the whole
+   * point. getPublishedUrl() is for NAVIGATION - open the browser at the
+   * best URL available - and a best-effort answer is right there. This one
+   * is for DISPLAY and for the clipboard, where a best-effort answer is a
+   * dead address the user pastes somewhere and believes. It never falls back
+   * to configuration; when the bind was not measured the answer is null and
+   * the caller must say so rather than substitute a plausible one.
+   *
+   * @returns {string|null} The URL, or null when either the effective bind
+   *   or the port could not be determined.
+   */
+  getMeasuredUrl() {
+    const host = this.getEffectiveBindHost();
+    if (!host) return null;
+    let port;
+    try {
+      port = this.getPort();
+    } catch (err) {
+      console.error(`[port] getMeasuredUrl: ${err.message}`);
+      return null;
+    }
+    if (host === '0.0.0.0') {
+      const lan = this.getPrimaryLanIp();
+      return `http://${lan || '127.0.0.1'}:${port}`;
+    }
+    return `http://${host}:${port}`;
+  }
+
+  /**
+   * The address the server is ACTUALLY listening on, when it has said.
+   *
+   * @returns {string|null} The effective host, or null when unknown. Never
+   *   falls back to the configured value: reporting an aspiration as a
+   *   measurement is the exact defect this method exists to prevent.
+   */
+  getEffectiveBindHost() {
+    return (this.reportedBind && this.reportedBind.effective_host) || null;
+  }
+
+  /**
+   * Whether the server is pinned to loopback because setup is unfinished.
+   *
+   * @returns {boolean|null} True/false when known, null when unmeasured.
+   */
+  isBindLockedDown() {
+    if (!this.reportedBind) return null;
+    return Boolean(this.reportedBind.locked_down);
+  }
+
+  /**
+   * The server's setup verdict, as it reported it.
+   *
+   * @returns {string|null} 'complete', 'incomplete', 'undetermined', or null
+   *   when the server has not been asked yet.
+   */
+  getSetupStatus() {
+    return this.reportedSetupStatus;
   }
 
   /**
@@ -832,29 +1597,22 @@ class ServerManager {
    * @returns {boolean}
    */
   isProcessRunning() {
-    // If we spawned the process ourselves, check the process object
-    if (this.process && !this.process.killed) {
-      return true;
-    }
-
-    // If we have a PID (either spawned or adopted), verify it's still alive
-    if (this.processPid) {
-      try {
-        // Sending signal 0 doesn't actually send a signal, just checks if process exists
-        process.kill(this.processPid, 0);
-        return true;
-      } catch (err) {
-        if (err.code === 'ESRCH') {
-          // No such process - it died
-          this.processPid = null;
-          return false;
-        }
-        // Other error (e.g., permission denied) - assume it's not running
-        console.warn('Error checking process PID:', err.message);
-        return false;
-      }
-    }
-
+    // Ask the KERNEL, always. This used to short-circuit on
+    // `this.process && !this.process.killed` and only fall through to a real
+    // liveness check when that was false. `killed` means "a signal was sent",
+    // so the shortcut answered "running" for a process nobody had measured -
+    // the same false claim that made stop()'s SIGKILL branch unreachable,
+    // pointing the other way. There is no cheaper source of truth worth
+    // having here: process.kill(pid, 0) is a syscall, not an expense.
+    //
+    // isAlive() also keeps EPERM apart from ESRCH. Only a live process can
+    // produce EPERM; the old code treated it as "not running", which would
+    // report a healthy server as stopped the moment it was out of reach.
+    const pid = this.processPid || (this.process && this.process.pid) || null;
+    if (!pid) return false;
+    if (isAlive(pid)) return true;
+    // Confirmed gone. Drop the stale pid so nothing else reports on it.
+    this.processPid = null;
     return false;
   }
 
@@ -924,81 +1682,87 @@ class ServerManager {
       result.errors.push(`Empty required fields: ${result.emptyRequired.join(', ')}`);
     }
 
+    // PORT= is optional (DEFAULT_PORT applies when absent), but if present
+    // it must be a valid port number. This is the choke point that makes
+    // the three-outcome contract in getPort()'s docstring bite for the one
+    // path that matters most: refusing to spawn a server whose port we
+    // could not determine, instead of silently trying DEFAULT_PORT and
+    // reporting success.
+    try {
+      this.getPort();
+    } catch (err) {
+      result.isValid = false;
+      result.errors.push(err.message);
+    }
+
     return result;
   }
 
   /**
-   * Check if configuration is complete
-   * @returns {Object} Status object with isConfigured flag and details
+   * Whether this instance is set up, and who says so.
+   *
+   * The SERVER is the authority. This asks it first and uses its answer
+   * whenever it has one. The local evaluation below runs only when there is
+   * no server to ask - a genuine case on a first run - and it reads the same
+   * facts src/core/setup_state.py reads, guarded by an antijoin in
+   * tests/test_setup_verdict_authority.node.mjs.
+   *
+   * This method used to be checkConfiguration(), which had its own private
+   * definition of "configured" requiring CLOUDFLARE_API_TOKEN,
+   * CLOUDFLARE_ZONE_ID and CLOUDFLARE_DOMAIN. Those belong to a tunnel
+   * feature removed in plan v3.2, nothing writes them any more, and the
+   * owner's freshly set-up install was therefore judged unconfigured
+   * permanently - the menu offered "Run Setup Script" after a setup that had
+   * succeeded, and no amount of re-running it could have helped.
+   *
+   * @returns {{status: string, source: string, reason: string,
+   *   checks: Array<object>}} status is 'complete', 'incomplete' or
+   *   'undetermined'. Undetermined means the question could not be answered
+   *   and MUST NOT be rendered as incomplete: a stopped server is not an
+   *   unconfigured one.
    */
-  checkConfiguration() {
-    const envPath = path.join(this.baseDir, '.env');
-    const configPath = path.join(this.baseDir, 'config.json');
-    const setupScriptPath = path.join(this.baseDir, 'setup_auth.py');
+  getSetupVerdict() {
+    const local = setupVerdict.evaluateLocalSetup(this.readSetupFacts());
+    const resolved = setupVerdict.resolveSetupVerdict({
+      serverStatus: this.getSetupStatus(),
+      local,
+    });
+    return { ...resolved, checks: local.checks };
+  }
 
-    const status = {
-      isConfigured: true,
-      missingFiles: [],
-      missingEnvVars: [],
-      details: []
+  /**
+   * Read the raw files the setup evaluation needs.
+   *
+   * Kept separate from the evaluation so the decision logic stays pure and
+   * node-testable without a filesystem. A read that FAILS is reported as
+   * null rather than as an absent file where the difference matters: an
+   * unreadable pairing sentinel is "could not tell", while a missing one is
+   * "not paired yet".
+   *
+   * @returns {{envText: (string|null), configText: (string|null),
+   *   pairedExists: (boolean|null)}} Raw facts for evaluateLocalSetup.
+   */
+  readSetupFacts() {
+    const read = (file) => {
+      try {
+        return fs.readFileSync(path.join(this.baseDir, file), 'utf8');
+      } catch (err) {
+        return null;
+      }
     };
 
-    // Check if .env exists
-    if (!fs.existsSync(envPath)) {
-      status.isConfigured = false;
-      status.missingFiles.push('.env');
-      status.details.push('.env file not found');
-    } else {
-      // Check required env vars
-      const envContent = fs.readFileSync(envPath, 'utf8');
-      const requiredVars = [
-        'TOTP_SECRET',
-        'JWT_SECRET',
-        'CLOUDFLARE_API_TOKEN',
-        'CLOUDFLARE_ZONE_ID',
-        'CLOUDFLARE_DOMAIN'
-      ];
-
-      requiredVars.forEach(varName => {
-        // Check if var exists and has a non-empty value
-        const regex = new RegExp(`${varName}=(.+)`, 'm');
-        const match = envContent.match(regex);
-
-        if (!match || !match[1] || match[1].trim() === '' || match[1].trim() === '""') {
-          status.isConfigured = false;
-          status.missingEnvVars.push(varName);
-        }
-
-        // Check for placeholder values in CLOUDFLARE_DOMAIN
-        if (varName === 'CLOUDFLARE_DOMAIN' && match && match[1]) {
-          const domain = match[1].trim();
-          if (domain.includes('example.com') ||
-            domain.includes('yourdomain.com') ||
-            domain.includes('your-subdomain') ||
-            domain.includes('mydomain.nyc')) {
-            status.isConfigured = false;
-            status.details.push('CLOUDFLARE_DOMAIN contains placeholder value. Run setup to configure.');
-          }
-        }
-      });
-
-      if (status.missingEnvVars.length > 0) {
-        status.details.push(`Missing env vars: ${status.missingEnvVars.join(', ')}`);
-      }
+    let pairedExists;
+    try {
+      pairedExists = fs.existsSync(path.join(this.baseDir, '.totp_paired'));
+    } catch (err) {
+      pairedExists = null;
     }
 
-    // Check if config.json exists
-    if (!fs.existsSync(configPath)) {
-      status.missingFiles.push('config.json');
-      status.details.push('config.json not found (optional)');
-    }
-
-    // Check if setup script exists
-    if (!fs.existsSync(setupScriptPath)) {
-      status.details.push('setup_auth.py not found');
-    }
-
-    return status;
+    return {
+      envText: read('.env'),
+      configText: read('config.json'),
+      pairedExists,
+    };
   }
 
   /**

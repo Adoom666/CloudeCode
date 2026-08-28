@@ -1,0 +1,149 @@
+/* global-audio.css - the one audio on/off control, styled for both bars
+ * it can be re-parented into (client/js/globalAudioToggle.js).
+ * ----------------------------------------------------------------------
+ * SELF-CONTAINED ON PURPOSE. This file never edits `.home-bar` or `.info`
+ * geometry, only adds rules scoped under `.global-audio-btn` and its two
+ * ancestor contexts (`.home-bar .global-audio-btn`, `.info
+ * .global-audio-btn`), so it cannot collide with home-bar.css,
+ * terminal-tools.css or styles.css - all three own bars/geometry this
+ * control is a guest inside, not a co-owner of.
+ *
+ * SEVEN STATES, ONE GLYPH, THREE VISUAL SIGNALS. data-audio-state drives
+ * colour AND which of the SVG's three paths is visible - the speaker
+ * body is always drawn, the sound-wave arcs only when audio is actually
+ * reaching the speaker (`on-playing`), and a diagonal slash only when
+ * the user's stored choice is off. A theme with no track, a track that
+ * failed to load, and a genuinely playing track are three different
+ * colours AND three different aria-label/title strings (set in JS) - the
+ * colour is a hint for a sighted user glancing at the bar, the label is
+ * the actual distinguishing signal, including for assistive tech.
+ */
+
+.global-audio-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.global-audio-btn svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+/* Sound-wave arcs: visible only while audio is confirmed reaching the
+ * speaker. Every other state - including on-but-not-yet-confirmed
+ * (on-settling) - hides them, so the animated-looking pair of arcs is
+ * never shown as a promise the control has not verified. */
+.global-audio-btn__waves {
+    opacity: 0;
+}
+
+.global-audio-btn[data-audio-state="on-playing"] .global-audio-btn__waves {
+    opacity: 1;
+}
+
+/* The mute slash: visible only when the user's stored choice is off.
+ * Every "on" state, including the broken ones, hides it - a slash reads
+ * as "you turned this off", not "something is wrong", and those are
+ * different messages this control must not conflate. */
+.global-audio-btn__slash {
+    opacity: 0;
+}
+
+.global-audio-btn[data-audio-state="off"] .global-audio-btn__slash {
+    opacity: 1;
+}
+
+.global-audio-btn[data-audio-state="off"] {
+    color: var(--color-fg-muted);
+}
+
+.global-audio-btn[data-audio-state="on-playing"] {
+    color: var(--color-success);
+}
+
+.global-audio-btn[data-audio-state="on-settling"] {
+    color: var(--color-warning);
+}
+
+/* No track declared for this theme, or nothing to play on the home
+ * screen: on, but there was never anything here to fail. Neutral, not a
+ * warning colour - `on-error` below is reserved for an actual fault. */
+.global-audio-btn[data-audio-state="on-no-track"],
+.global-audio-btn[data-audio-state="on-no-session"] {
+    color: var(--color-fg-muted);
+}
+
+.global-audio-btn[data-audio-state="on-error"] {
+    color: var(--color-danger);
+}
+
+/* COULD-NOT-EVALUATE. Deliberately its own colour, never reused from the
+ * six states above - collapsing "I could not read the state" into either
+ * "on" or "off" is exactly the false-green failure mode this control
+ * exists to avoid at the UI layer. */
+.global-audio-btn[data-audio-state="unknown"] {
+    color: var(--color-warning);
+}
+
+.global-audio-btn[data-audio-state="on-error"]::after,
+.global-audio-btn[data-audio-state="unknown"]::after {
+    content: "";
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    transform: translate(7px, -7px);
+}
+
+.global-audio-btn {
+    position: relative;
+}
+
+.global-audio-btn:hover,
+.global-audio-btn:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    outline: none;
+}
+
+.global-audio-btn:focus-visible {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+/* ---- Home bar placement: matches .home-bar__btn's own geometry rules
+ * (home-bar.css) by composition rather than by importing that class,
+ * so this file stays a guest and home-bar.css stays the one owner of
+ * that bar's tap-target size. */
+.home-bar .global-audio-btn {
+    width: var(--home-bar-h, 36px);
+    height: var(--home-bar-h, 36px);
+    border-radius: var(--radius-md, 6px);
+}
+
+/* ---- Terminal `.info` bar placement: `.info` is a slim 12px-font
+ * strip (styles.css), not a 36px tap-target bar, so this control is
+ * sized to match its siblings (#sessionInfo, .terminal-bar__status)
+ * rather than reusing the home bar's larger geometry. */
+.info .global-audio-btn {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    margin: 0 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .global-audio-btn {
+        transition: none;
+    }
+}

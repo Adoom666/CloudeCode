@@ -1,0 +1,126 @@
+/* =====================================================================
+ * Paste fallback - the surface the user pastes INTO when the browser
+ * will not let the page read the clipboard (any non-secure origin, which
+ * is every LAN address). Pairs with client/js/paste-fallback.js, the
+ * only thing that builds this markup.
+ *
+ * Same overlay treatment and the same semantic tokens as the copy sheet
+ * next door, so a per-session theme restyles it with the terminal. Every
+ * hit area is a thumb-sized 44px and the whole thing fits at 390px.
+ * ===================================================================== */
+
+.paste-fallback {
+    position: fixed;
+    inset: 0;
+    /* z-index is written inline by paste-fallback.js from OVERLAY_Z. It
+     * sits above both fab menus (10001) and below FabMenu.NOTICE_Z
+     * (10005), so a result reported while this is open lands on top. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-overlay);
+    padding: 16px;
+}
+
+.paste-fallback__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 560px;
+    padding: 16px;
+    border-radius: 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 10px 40px var(--color-bg-overlay-soft);
+}
+
+.paste-fallback__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-fg);
+}
+
+.paste-fallback__hint {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-fg-muted);
+}
+
+/* The field iOS has to be willing to focus and paste into: a real,
+ * writable textarea with real dimensions and selectable text. iOS
+ * ignores select() on a readonly input and refuses a zero-size or
+ * `user-select: none` target, so none of those shortcuts are taken
+ * here. The 16px minimum is what stops Safari zooming the page in on
+ * focus, which on a phone reads as the layout breaking. */
+.paste-fallback__input {
+    width: 100%;
+    min-height: 96px;
+    resize: vertical;
+    padding: 10px;
+    font-family: var(--font-mono);
+    font-size: 16px;
+    line-height: 1.4;
+    color: var(--color-fg);
+    background: var(--color-bg-page);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.paste-fallback__input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.paste-fallback__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.paste-fallback__btn {
+    min-height: 44px;
+    min-width: 88px;
+    padding: 0 16px;
+    font-family: inherit;
+    font-size: 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-fg);
+    cursor: pointer;
+}
+
+.paste-fallback__btn--primary {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.paste-fallback__btn:hover:not(:disabled),
+.paste-fallback__btn:focus-visible {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+/* At phone width the buttons take the full row rather than huddling in
+ * the corner, and the panel becomes a bottom sheet like the copy one. */
+@media (max-width: 480px) {
+    .paste-fallback {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .paste-fallback__panel {
+        max-width: none;
+        border-radius: 12px 12px 0 0;
+        padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .paste-fallback__btn {
+        flex: 1;
+    }
+}

@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#9bbc0f",
     "--color-bg-page": "#9bbc0f",
     "--color-bg-elevated": "#8bac0f",
@@ -16,9 +16,9 @@
     "--color-bg-overlay-soft": "rgba(15, 56, 15, 0.06)",
     "--color-bg-overlay-faint": "rgba(15, 56, 15, 0.06)",
     "--color-fg": "#0f380f",
-    "--color-fg-muted": "#306230",
-    "--color-fg-subtle": "#306230",
-    "--color-fg-faint": "#306230",
+    "--color-fg-muted": "#1e3d1e",
+    "--color-fg-subtle": "#1e3d1e",
+    "--color-fg-faint": "#1e3d1e",
     "--color-border": "#306230",
     "--color-border-subtle": "#8bac0f",
     "--color-accent": "#0f380f",
@@ -36,10 +36,10 @@
     "--color-accent-glow-strong": "rgba(15, 56, 15, 0.06)",
     "--color-accent-shadow-soft": "rgba(15, 56, 15, 0.06)",
     "--color-on-accent": "#9bbc0f",
-    "--color-success": "#306230",
-    "--color-warning": "#306230",
+    "--color-success": "#244b24",
+    "--color-warning": "#244b24",
     "--color-danger": "#0f380f",
-    "--color-info": "#306230",
+    "--color-info": "#244b24",
     "--color-danger-bg": "rgba(15, 56, 15, 0.06)",
     "--color-danger-bg-hover": "rgba(15, 56, 15, 0.06)",
     "--color-danger-border": "rgba(15, 56, 15, 0.06)",
@@ -96,5 +96,12 @@
     "brightMagenta": "#8bac0f",
     "brightCyan": "#8bac0f",
     "brightWhite": "#9bbc0f"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/out-there.m4a",
+    "srcFallback": "/static/assets/audio/out-there.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
   }
 }

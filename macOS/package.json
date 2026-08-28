@@ -1,6 +1,6 @@
 {
   "name": "cloude-code-menubar",
-  "version": "0.8.1",
+  "version": "1.0.31",
   "description": "macOS menu bar app for Cloude Code remote control",
   "main": "main.js",
   "scripts": {
@@ -21,27 +21,40 @@
     "electron-builder": "^24.9.1"
   },
   "dependencies": {
-    "axios": "^1.6.2"
+    "axios": "^1.6.2",
+    "qrcode": "^1.5.4"
   },
   "build": {
     "appId": "com.cloudecode.menubar",
     "productName": "Cloude Code",
+    "afterPack": "scripts/adhoc-sign.js",
     "directories": {
       "output": "dist"
     },
     "files": [
-      "**/*"
+      "**/*",
+      "!scripts/**"
     ],
     "extraResources": [
       {
         "from": "../src",
         "to": "src",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.DS_Store"
+        ]
       },
       {
         "from": "../client",
         "to": "client",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.DS_Store"
+        ]
       },
       {
         "from": "../requirements.txt",
@@ -67,12 +80,16 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
+      "extendInfo": {
+        "LSUIElement": true
+      },
       "target": [
         "dmg"
       ]
     },
     "dmg": {
       "title": "Cloude Code ${version}",
+      "background": "assets/dmg/background.tiff",
       "window": {
         "width": 540,
         "height": 380
@@ -94,5 +111,8 @@
       "iconTextSize": 14,
       "format": "UDZO"
     }
+  },
+  "allowScripts": {
+    "electron@28.3.3": true
   }
 }

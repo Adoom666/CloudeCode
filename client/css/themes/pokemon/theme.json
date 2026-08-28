@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#0B1E3F",
     "--color-bg-page": "#081730",
     "--color-bg-elevated": "#14305C",
@@ -17,12 +17,12 @@
     "--color-bg-overlay-faint": "rgba(8, 23, 48, 0.35)",
     "--color-fg": "#FFFFFF",
     "--color-fg-muted": "#A8B8D8",
-    "--color-fg-subtle": "#5A6B8C",
-    "--color-fg-faint": "#7080A0",
+    "--color-fg-subtle": "#8b99b4",
+    "--color-fg-faint": "#8c99b2",
     "--color-border": "#1F4287",
     "--color-border-subtle": "#142F60",
     "--color-accent": "#FFCB05",
-    "--color-accent-strong": "#3B4CCA",
+    "--color-accent-strong": "#8994df",
     "--color-accent-bg-soft": "rgba(255, 203, 5, 0.08)",
     "--color-accent-bg-faint": "rgba(255, 203, 5, 0.10)",
     "--color-accent-bg": "rgba(255, 203, 5, 0.15)",
@@ -38,7 +38,7 @@
     "--color-on-accent": "#0B1E3F",
     "--color-success": "#4DAD5B",
     "--color-warning": "#FFCB05",
-    "--color-danger": "#EE1515",
+    "--color-danger": "#f24848",
     "--color-info": "#3B8FE8",
     "--color-danger-bg": "rgba(238, 21, 21, 0.10)",
     "--color-danger-bg-hover": "rgba(238, 21, 21, 0.20)",
@@ -60,7 +60,7 @@
     "--color-badge-owned-bg": "#1A3A2A",
     "--color-badge-owned-fg": "#7BD389",
     "--color-badge-tmux-bg": "#1F2C5C",
-    "--color-badge-tmux-fg": "#6B7DE8",
+    "--color-badge-tmux-fg": "#8191eb",
     "--color-badge-external-bg": "#4A3A1A",
     "--color-badge-external-fg": "#FFCB05",
     "--badge-color-claude": "#FFCB05",
@@ -96,5 +96,12 @@
     "brightMagenta": "#D98AED",
     "brightCyan": "#7FE0F0",
     "brightWhite": "#FFFFFF"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/observing-the-star.m4a",
+    "srcFallback": "/static/assets/audio/observing-the-star.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
   }
 }

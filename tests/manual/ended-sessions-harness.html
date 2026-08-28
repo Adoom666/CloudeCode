@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ended sessions harness</title>
+<!--
+  feat/ended-sessions-visibility - MEASURE THE ENDED ROW, DO NOT EYEBALL IT.
+
+  Same pattern as tests/manual/project-tree-geometry-harness.html: loads
+  the REAL client/js/launchpad.js, the REAL client/css/styles.css and
+  session-sidebar.css, stubs window.API with a canned fixture, and runs
+  the real render path. Nothing here reimplements a renderer.
+
+  It exists because a Node process has no CSSOM, and the three claims
+  that matter most about this feature are all claims about pixels:
+
+    1. the ENDED marker occupies a real box a human can see;
+    2. the `stopped` status dot is DISTINGUISHABLE from the `idle` dot -
+       which cannot be measured from markup, and which two dots in this
+       app were already once found to be pixel-identical because their
+       two colour tokens resolve to the same value under a theme;
+    3. clicking an ended row does not attach.
+
+  `?theme=` applies one theme's cssVars onto :root the way the app's own
+  theme layer does. Two themes are exercised by the verifier because a
+  single theme cannot show that a difference survives a palette change -
+  and `claude` is specifically the theme where --color-fg-faint and
+  --color-fg-subtle are the SAME value (#959595), so a colour-based
+  distinction would pass in `terminal` and be invisible here.
+
+  The fixture holds one LIVE session, one ENDED session and one DELETED
+  session, all attributed to the same project, so one page exercises
+  every branch: shown-and-marked, shown-plain, and hidden.
+
+  Open over http://127.0.0.1:<port>/tests/manual/ended-sessions-harness.html
+  from the repo root and read #out, or read window.__endedReport() from
+  the console once window.__endedReady is true.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/status-dot.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 38vw;
+         max-height: 90vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px;
+         /* The debug pane must never intercept a click aimed at the UI
+            under test. Without this it sits over the tree and Playwright
+            reports "element intercepts pointer events" - a harness
+            artefact that reads exactly like a broken control. */
+         pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<pre id="out">rendering...</pre>
+
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const themeName = params.get('theme') || 'claude';
+
+/**
+ * Apply one theme's cssVars onto :root, the way the app's theme layer
+ * does at runtime. Awaited before the first render so nothing is
+ * measured against the default palette by accident.
+ * @param {string} name - theme directory name under client/css/themes/.
+ * @returns {Promise<boolean>} true when the manifest was applied.
+ */
+async function applyTheme(name) {
+    const resp = await fetch(`../../client/css/themes/${name}/theme.json`);
+    if (!resp.ok) return false;
+    const manifest = await resp.json();
+    const vars = manifest && manifest.cssVars;
+    if (!vars) return false;
+    for (const [key, value] of Object.entries(vars)) {
+        document.documentElement.style.setProperty(key, value);
+    }
+    document.body.style.background = vars['--color-bg'] || '#1e1e1e';
+    return true;
+}
+
+const PROJECT_PATH = '/Users/jsugamele/Development/Media';
+
+const fixture = {
+    projects: [{ name: 'Media', path: PROJECT_PATH, description: 'his real case' }],
+    presence: {
+        status: 'ok',
+        projects: [{ id: 1, raw_path: PROJECT_PATH, presence: 'present' }],
+        detail: null,
+    },
+    // Only the LIVE one is attachable - that is the whole point: the
+    // ended session has no tmux instance for any probe to name.
+    attachable: [
+        { name: 'cloude_live', created_by_cloude: true, created_at_epoch: 2000,
+          window_count: 1, status: 'idle', unread: false },
+    ],
+    records: [
+        { session_uuid: 'u-live', tmux_name: 'cloude_live', owned: true,
+          lifecycle: 'running', project_id: 1, project_attribution: 'derived_deepest',
+          working_dir: PROJECT_PATH, archived_at: null, title: 'live one' },
+        { session_uuid: 'u-ended', tmux_name: 'cloude_media', owned: true,
+          lifecycle: 'stopped', project_id: 1, project_attribution: 'derived_deepest',
+          working_dir: PROJECT_PATH, archived_at: null, title: 'Media' },
+        { session_uuid: 'u-deleted', tmux_name: 'cloude_deleted', owned: true,
+          lifecycle: 'stopped', project_id: 1, project_attribution: 'derived_deepest',
+          working_dir: PROJECT_PATH, archived_at: '2026-08-20T00:00:00Z',
+          title: 'deleted one' },
+    ],
+};
+
+/** Records the uuids DELETE was called with, so the click can be proved. */
+window.__deleteCalls = [];
+/** Records attach attempts, so "an ended row does not attach" is measurable. */
+window.__attachCalls = [];
+
+window.API.getProjects = async () => fixture.projects;
+window.API.getProjectsPresence = async () => fixture.presence;
+window.API.listAttachableSessions = async () => fixture.attachable;
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({
+    state: 'ok',
+    sessions: fixture.records.filter(
+        (r) => r.lifecycle === 'stopped' && !r.archived_at
+    ),
+    notice: null,
+});
+window.API.listSessionRecords = async () => fixture.records;
+window.API.deleteSessionRecord = async (uuid) => {
+    window.__deleteCalls.push(uuid);
+    const row = fixture.records.find((r) => r.session_uuid === uuid);
+    if (row) row.archived_at = '2026-08-26T00:00:00Z';
+    return { success: true, message: 'Session deleted from your lists (the record is kept)' };
+};
+window.API.adoptSession = async (name) => {
+    window.__attachCalls.push(name);
+    throw new Error('harness: attach must not be reached from an ended row');
+};
+
+window.__endedReady = false;
+
+/**
+ * Measured report for one rendered tree.
+ *
+ * Every number is a getBoundingClientRect() or a getComputedStyle()
+ * read off the live document. `null` where an element is absent, so the
+ * verifier can tell "measured and wrong" from "not there to measure" -
+ * a zero would conflate them.
+ * @returns {object} measurements.
+ */
+function report() {
+    const q = (sel) => document.querySelector(sel);
+    const box = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return {
+            width: r.width, height: r.height, top: r.top, left: r.left,
+            opacity: cs.opacity,
+            backgroundColor: cs.backgroundColor,
+            color: cs.color,
+            display: cs.display,
+            visibility: cs.visibility,
+            text: (el.textContent || '').trim(),
+        };
+    };
+    const endedRow = q('.project-session-row--ended');
+    const liveRow = q('.project-session-row:not(.project-session-row--ended):not(.project-session-row--attention)');
+    return {
+        theme: themeName,
+        hidden: document.hidden,
+        innerWidth: window.innerWidth,
+        endedRow: box(endedRow),
+        endedRowName: endedRow ? endedRow.dataset.name : null,
+        endedRowCursor: endedRow ? getComputedStyle(endedRow).cursor : null,
+        endedRowHasButtonRole: endedRow ? endedRow.hasAttribute('role') : null,
+        endedBadge: box(q('.project-session-row--ended .badge-ended')),
+        endedDot: box(q('.project-session-row--ended .status-dot--stopped')),
+        liveRow: box(liveRow),
+        liveRowName: liveRow ? liveRow.dataset.name : null,
+        liveDot: box(q('.project-session-row:not(.project-session-row--ended) .status-dot')),
+        deleteBtn: box(q('.project-session-row--ended .ended-session-delete')),
+        restartBtn: box(q('.project-session-row--ended .ended-session-restart')),
+        recentDot: box(q('#recent-sessions-list .status-dot--stopped')),
+        recentDeleteBtn: box(q('#recent-sessions-list .ended-session-delete')),
+        // Every session name currently rendered anywhere in the tree,
+        // so "the deleted one is absent" is an assertion about the whole
+        // surface rather than about one selector that might have moved.
+        treeNames: Array.from(document.querySelectorAll('#project-list [data-name]'))
+            .map((el) => el.dataset.name),
+        projectCountText: (q('#project-list .project-node__count') || {}).textContent || null,
+        deleteCalls: window.__deleteCalls.slice(),
+        attachCalls: window.__attachCalls.slice(),
+    };
+}
+window.__endedReport = report;
+
+/**
+ * Click the ENDED row's own body (not its buttons) and report whether
+ * anything tried to attach. Exposed for the verifier so the click is a
+ * REAL browser click on a REAL element.
+ * @returns {Promise<string[]>} attach attempts seen after the click.
+ */
+window.__clickEndedRowBody = async function () {
+    const row = document.querySelector('.project-session-row--ended');
+    if (!row) return ['NO-ENDED-ROW'];
+    const name = row.querySelector('.project-session-row__name');
+    (name || row).click();
+    await new Promise((r) => setTimeout(r, 60));
+    return window.__attachCalls.slice();
+};
+
+(async () => {
+    window.__themeApplied = await applyTheme(themeName);
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    await lp.loadRecentSessions();
+    // loadProjects() fires loadRunningSessions() without awaiting it, and
+    // that chain awaits loadSessionAttribution() before its own final
+    // renderProjectList() - let it settle before measuring.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    window.__endedReady = true;
+    document.getElementById('out').textContent =
+        'theme=' + themeName + '\n' + JSON.stringify(report(), null, 1);
+})();
+</script>
+</body>
+</html>

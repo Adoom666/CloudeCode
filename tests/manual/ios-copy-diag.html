@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<!--
+  WebKit clipboard probe. Isolates the execCommand copy tier from the rest
+  of the app so each gate can be read off the wire on a real iPhone.
+
+  WHY IT EXISTS: the Chromium harness (copy-output-harness.html, driven by
+  verify_copy_output.py) passed 12 checks while the same code reported
+  success on iOS Safari 26.1 and left the clipboard EMPTY. A passing
+  Chromium test is not evidence for WebKit, so the WebKit gates need their
+  own readout.
+
+  HOW TO DRIVE IT (measured 2026-08-16, iPhone 16e simulator, iOS 26.1):
+
+    1. serve the repo root over http on the LAN address, NOT localhost -
+       localhost is a secure context and hides the whole bug.
+    2. safaridriver -p 4444, session with safari:useSimulator true.
+    3. ACTIVATE THE BUTTONS WITH THE KEYBOARD (focus, then Enter).
+       safaridriver on the simulator delivers touchstart/touchend and
+       pointerdown/pointerup but NEVER synthesizes a click, so a
+       WebDriver tap runs no handler at all. Keyboard activation is a
+       genuine user activation and does reach the handler.
+    4. read the result from OUTSIDE the page:
+       xcrun simctl pbpaste <udid>. On an insecure origin there is no
+       clipboard READ api in any browser, so the page cannot check its
+       own work, and a success message is exactly what is not trustworthy.
+    5. seed a sentinel first (xcrun simctl pbcopy) - a copy that empties
+       the clipboard is a different failure from one that never ran.
+    6. RE-READ BEFORE BELIEVING AN EMPTY pbpaste. Measured over 30 runs
+       on 2026-08-16, `xcrun simctl pbpaste` returned '' twice for a
+       clipboard that a second read immediately showed holding all 108
+       characters. The reader itself is flaky, so a single empty reading
+       is not evidence that a copy failed.
+
+  Each button beacons its measurements to /diag?d=<json>, for a server
+  that logs them. A 404 there is harmless - the same readings are printed
+  on the page.
+
+  WHAT IT MEASURED:
+    A  the shipped 1px contenteditable: selection held all 108 chars,
+       copy event fired, setData succeeded, getData read back a match,
+       execCommand true, pbpaste returned the full url.
+    D  no setData at all: the native selection copy is also correct, which
+       is why NOT preventing the default is a safe fallback when the
+       injected write cannot be proven.
+    E  nothing selected: WebKit STILL fires the copy event, still honours
+       setData, and still lands the full value. So an empty selection is
+       not by itself a failure on iOS, and the confirmation gate has to
+       accept a proven injected write on its own.
+  Without user activation (a script-driven click) execCommand returns
+  false and no copy event fires at all, selection intact - so the failure
+  under investigation was never an activation problem.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ios copy diag</title>
+<style>
+ body { font: 16px monospace; padding: 8px; }
+ button { display: block; width: 95%; min-height: 52px; margin: 8px 0; font-size: 16px; }
+ #log { white-space: pre-wrap; font-size: 12px; }
+</style>
+</head>
+<body>
+<h3 id="env">env</h3>
+<button id="a" type="button">A shipped contenteditable, setData path</button>
+<button id="d" type="button">D native selection, no setData</button>
+<button id="e" type="button">E no selection at all</button>
+<div id="log"></div>
+<script>
+(function () {
+'use strict';
+
+var TEXT = 'https://claude.ai/oauth/authorize?code=true&client_id=9d1c3f7a' +
+    '&scope=user%3Ainference&state=abcdef0123456789';
+var log = document.getElementById('log');
+
+/**
+ * Record one reading in the page and beacon it to the server.
+ *
+ * @param {object} reading - the measurements for one run.
+ * @returns {void}
+ */
+function beacon(reading) {
+    var text = JSON.stringify(reading);
+    log.textContent += text + '\n';
+    var img = new Image();
+    img.src = '/diag?d=' + encodeURIComponent(text) + '&t=' + Date.now();
+}
+
+document.getElementById('env').textContent =
+    'secure=' + window.isSecureContext + ' clipboard=' + (typeof navigator.clipboard);
+
+/**
+ * Build the throwaway contenteditable holding a real text node.
+ *
+ * @param {string} css - inline style for the element.
+ * @returns {HTMLDivElement} appended to the body.
+ */
+function makeSource(css) {
+    var el = document.createElement('div');
+    el.setAttribute('contenteditable', 'true');
+    el.style.cssText = css;
+    el.appendChild(document.createTextNode(TEXT));
+    document.body.appendChild(el);
+    return el;
+}
+
+/**
+ * Focus the element and put the document selection over its contents.
+ *
+ * @param {HTMLElement} el - the copy source.
+ * @returns {void}
+ */
+function selectAll(el) {
+    try { el.focus({ preventScroll: true }); } catch (err) { el.focus(); }
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+/**
+ * Run one variant and report every gate the copy passes through.
+ *
+ * @param {string} name - variant label.
+ * @param {string} css - inline style for the copy source.
+ * @param {boolean} select - whether to select the source first.
+ * @param {boolean} inject - whether to setData inside the copy event.
+ * @returns {void}
+ */
+function run(name, css, select, inject) {
+    var reading = { variant: name };
+    var el = makeSource(css);
+    var fired = 0;
+
+    /**
+     * @param {ClipboardEvent} e - the in-flight copy event.
+     * @returns {void}
+     */
+    function onCopy(e) {
+        fired++;
+        reading.selAtCopy = String(window.getSelection() || '').length;
+        reading.hasClipboardData = !!e.clipboardData;
+        if (!inject || !e.clipboardData) return;
+        try {
+            e.clipboardData.setData('text/plain', TEXT);
+            reading.setData = 'ok';
+            reading.readback = e.clipboardData.getData('text/plain') === TEXT
+                ? 'MATCH' : 'MISMATCH';
+        } catch (err) {
+            reading.setData = err.name;
+            reading.readback = 'n/a';
+        }
+        if (reading.readback === 'MATCH') {
+            e.preventDefault();
+            reading.prevented = e.defaultPrevented;
+        }
+    }
+
+    document.addEventListener('copy', onCopy, true);
+    try {
+        if (select) selectAll(el);
+        var sel = window.getSelection();
+        reading.selBefore = String(sel || '').length;
+        reading.wanted = TEXT.length;
+        reading.active = document.activeElement ? document.activeElement.tagName : 'none';
+        reading.activation = navigator.userActivation
+            ? navigator.userActivation.isActive : 'n/a';
+        reading.execReturned = document.execCommand('copy');
+    } catch (err) {
+        reading.threw = err.name + ': ' + err.message;
+    } finally {
+        document.removeEventListener('copy', onCopy, true);
+        reading.copyEvents = fired;
+        var after = window.getSelection();
+        if (after) after.removeAllRanges();
+        el.remove();
+    }
+    beacon(reading);
+}
+
+var HIDDEN = 'position:fixed;top:0;left:0;max-width:1px;max-height:1px;' +
+    'overflow:hidden;padding:0;border:none;outline:none;opacity:0.01;' +
+    'font-size:16px;white-space:pre;-webkit-user-select:text;user-select:text;';
+
+document.getElementById('a').addEventListener('click', function () {
+    run('A', HIDDEN, true, true);
+});
+document.getElementById('d').addEventListener('click', function () {
+    run('D', HIDDEN, true, false);
+});
+document.getElementById('e').addEventListener('click', function () {
+    run('E', HIDDEN, false, true);
+});
+}());
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 {
   "id": "claw",
   "name": "Claw",
-  "description": "OpenClaw cosmic dark — deep purple-black with a coral red accent and starfield wash.",
+  "description": "OpenClaw cosmic dark - deep purple-black with a coral red accent and starfield wash.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -16,8 +16,8 @@
     "--color-header-bg": "#0a0810",
     "--color-fg": "#e6e6ea",
     "--color-fg-muted": "#a8a8b0",
-    "--color-fg-subtle": "#7a7a82",
-    "--color-fg-faint": "#65656d",
+    "--color-fg-subtle": "#7e7e85",
+    "--color-fg-faint": "#7e7e87",
     "--color-border": "#2a2438",
     "--color-border-subtle": "#1a1726",
     "--color-accent": "#ff5b5b",
@@ -91,5 +91,11 @@
     "brightCyan": "#a3eeed",
     "brightWhite": "#ffffff"
   },
-  "themeCss": "theme.css"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
+    "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+    "volume": 0.5,
+    "fadeMs": 2000
+  }
 }

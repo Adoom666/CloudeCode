@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>theme picker overflow harness</title>
+<link rel="stylesheet" href="../../client/css/styles.css">
+<link rel="stylesheet" href="../../client/css/terminal-tools.css">
+<style>
+  /* Harness-only scaffolding, not part of the app. */
+  #settings-theme-slot { max-width: 480px; margin: 20px; }
+  #anchor-btn { margin: 20px; }
+</style>
+</head>
+<body>
+  <div id="header-controls" class="controls" style="display:flex; gap:8px; align-items:center; padding:8px;"></div>
+  <div id="settings-theme-slot"></div>
+  <button id="anchor-btn" type="button">open session theme picker</button>
+
+  <script>
+    // Minimal window.Themes stub built from the REAL 23 bundled theme
+    // manifests (id/name only - overflow depends on name length, not
+    // colors) so both real pickers mount with the real theme count.
+    var THEMES = [{"id": "acid_trip", "name": "Acid Trip"}, {"id": "alien", "name": "Alien"}, {"id": "black_market", "name": "Black Market"}, {"id": "blade_runner", "name": "Blade Runner"}, {"id": "calming", "name": "Calming"}, {"id": "cannabis", "name": "Cannabis"}, {"id": "claude", "name": "Claude"}, {"id": "claw", "name": "Claw"}, {"id": "codex", "name": "Codex"}, {"id": "corporate_v2", "name": "Corporate Modern v2.0"}, {"id": "dracula", "name": "Dracula"}, {"id": "gameboy", "name": "Game Boy"}, {"id": "green_crt", "name": "Green CRT"}, {"id": "hermes", "name": "Hermes"}, {"id": "jagermeister", "name": "J\u00e4germeister"}, {"id": "legacy_apple", "name": "Legacy Apple"}, {"id": "legacy_windows", "name": "Legacy Windows"}, {"id": "lovecraft", "name": "HP Lovecraft"}, {"id": "matrix", "name": "Matrix"}, {"id": "metal", "name": "Metal"}, {"id": "pokemon", "name": "Pokemon"}, {"id": "snes", "name": "SNES"}, {"id": "terminal", "name": "Terminal"}];
+    window.Themes = {
+      listAll: function () { return THEMES; },
+      getActiveGlobal: function () { return THEMES[0]; },
+      getActiveSession: function () { return 'demo-session'; },
+      DEFAULT_THEME_ID: THEMES[0].id,
+      applyGlobal: function (id) { window.__lastApplied = id; }
+    };
+  </script>
+  <script src="../../client/js/anchor-popover.js"></script>
+  <script src="../../client/js/themes/themeSelector.js"></script>
+  <script src="../../client/js/session-theme-menu.js"></script>
+  <script>
+    window.ThemeSelector.mount(document.getElementById('header-controls'));
+    window.ThemeSelector.mount(document.getElementById('settings-theme-slot'));
+    document.getElementById('anchor-btn').addEventListener('click', function (e) {
+      window.SessionThemeMenu.open(e.currentTarget);
+    });
+  </script>
+</body>
+</html>

@@ -1,11 +1,11 @@
 {
   "id": "green_crt",
   "name": "Green CRT",
-  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel — distinct from Matrix.",
+  "description": "P1 phosphor green on warm CRT black. Scanlines, 60Hz pulse, amber warnings. The physical hardware feel - distinct from Matrix.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#020a04",
     "--color-bg-page": "#010604",
     "--color-bg-elevated": "#04140a",
@@ -17,8 +17,8 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.3)",
     "--color-fg": "#33FF33",
     "--color-fg-muted": "#1faa1f",
-    "--color-fg-subtle": "#0e5e0e",
-    "--color-fg-faint": "#0e5e0e",
+    "--color-fg-subtle": "#169116",
+    "--color-fg-faint": "#169116",
     "--color-border": "#0e5e0e",
     "--color-border-subtle": "#062c06",
     "--color-accent": "#33FF33",
@@ -96,5 +96,12 @@
     "brightMagenta": "#5cffb8",
     "brightCyan": "#5cffb8",
     "brightWhite": "#aaffaa"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.m4a",
+    "srcFallback": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
   }
 }

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>header icons and menu harness</title>
+<!--
+  fix/header-icons-and-menu - MEASURE IT, DO NOT ASSERT IT.
+
+  Same pattern as tests/manual/home-mechanics-geometry-harness.html: loads
+  the REAL client/css/styles.css, the REAL client/js/launchpad.js and the
+  REAL header markup (fetched out of client/index.html at load time, so
+  this page cannot drift from the shipped header the way a pasted copy
+  would), stubs window.API with one canned fixture, runs the real render
+  path, and reports real getComputedStyle / getBoundingClientRect numbers.
+
+  WHAT THIS PAGE EXISTS TO CATCH, and why a DOM test could not:
+  the help button rendered as a near-white user-agent square while its
+  markup, its class list, its aria and its inline SVG were all correct.
+  Nothing readable in the DOM was wrong. The only honest witness is the
+  COMPUTED background/border/radius in a real engine, which is what
+  window.__headerIcons() returns.
+
+  This harness DELIBERATELY shows #session-sidebar-toggle. app.js's
+  showLaunchpad() calls SessionSidebar.show(), which strips `.hidden`
+  off it - the harness does not boot app.js, so it does the same thing
+  here for the same reason it stamps `.header--home`. A harness that left
+  the toggle hidden would measure a header the user never sees.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/header-icons-and-menu-harness.html
+  A file:// origin cannot fetch client/index.html for the header.
+
+  Poll window.__headerReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+</head>
+<body>
+<div id="header-mount"></div>
+<div id="launchpad-screen" class="screen active"></div>
+
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+/**
+ * The fixture: four running sessions covering every (ownership,
+ * session_id) combination the rename affordance has to answer for, plus
+ * a console session shaped like the user's real `console-<base36>` row.
+ *
+ * `listSessions` returns ONLY the first one, which is what gives exactly
+ * one row a `session_id`: that field is populated by the /sessions/list
+ * merge and is therefore a statement about "currently open", not about
+ * ownership. Reproducing that split is the whole point of the fixture -
+ * it is the shape in which a TMUX-badged row has no id.
+ *
+ * @returns {object} {projects, presence, attachable, live, records}
+ */
+function fixture() {
+    return {
+        projects: [
+            { id: 1, name: 'cloudecode', path: '/Users/jsugamele/Development/CloudeCode', description: 'the app itself' },
+        ],
+        presence: {
+            status: 'ok',
+            projects: [{ id: 1, raw_path: '/Users/jsugamele/Development/CloudeCode', presence: 'present' }],
+            detail: null,
+        },
+        attachable: [
+            // OPEN + OURS -> live pencil.
+            { name: 'cloude_open', created_by_cloude: true, created_at_epoch: 1000, window_count: 1, status: 'running', unread: false, agent_family: 'claude', agent_family_source: 'wrapper' },
+            // OURS BUT NOT OPEN -> the reported bug: badged TMUX, no id.
+            { name: 'cloude_fs2', created_by_cloude: true, created_at_epoch: 1001, window_count: 1, status: 'idle', unread: false, agent_family: 'claude', agent_family_source: 'wrapper' },
+            // EXTERNAL -> adopt first.
+            { name: 'someone_else', created_by_cloude: false, created_at_epoch: 1002, window_count: 1, status: 'idle', unread: false, agent_family: null, agent_family_source: 'unknown' },
+            // OWNERSHIP GENUINELY UNKNOWN. server_status.py fills this
+            // field with ownership_by_name.get(name), which is None for a
+            // name the map never answered for. Null is not False.
+            { name: 'console-msw4z3m5', created_by_cloude: null, created_at_epoch: 1003, window_count: 1, status: 'idle', unread: false, agent_family: null, agent_family_source: 'unknown' },
+        ],
+        live: [
+            { tmux_session: 'cloude_open', id: 'sid-open', activity_status: 'running', unread: false, created_by_cloude: true, agent_family: 'claude', agent_family_source: 'wrapper' },
+        ],
+        records: [],
+    };
+}
+
+const fx = fixture();
+window.API.getProjects = async () => fx.projects;
+window.API.getProjectsPresence = async () => fx.presence;
+window.API.getProjectsAuthority = async () => ({ mode: 'db', degraded: false, disagreement: null });
+window.API.listAttachableSessions = async () => fx.attachable;
+window.API.listSessions = async () => fx.live;
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => fx.records;
+
+window.__headerReady = false;
+
+/**
+ * Computed paint + box for one element.
+ * @param {string} sel - CSS selector.
+ * @returns {?object} null when the element is absent.
+ */
+function paint(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return {
+        backgroundColor: cs.backgroundColor,
+        backgroundImage: cs.backgroundImage,
+        borderTopWidth: cs.borderTopWidth,
+        borderLeftWidth: cs.borderLeftWidth,
+        borderLeftColor: cs.borderLeftColor,
+        borderStyle: cs.borderStyle,
+        borderRadius: cs.borderRadius,
+        appearance: cs.appearance,
+        display: cs.display,
+        opacity: cs.opacity,
+        cursor: cs.cursor,
+        color: cs.color,
+        boxShadow: cs.boxShadow,
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height, top: r.top, left: r.left, right: r.right, bottom: r.bottom },
+    };
+}
+
+/**
+ * Outer width of an element including horizontal margins, or 0 when it
+ * is absent or `display: none`. Mirrors header-title-fit.js's own
+ * outerWidth so the two cannot disagree about the flank arithmetic.
+ * @param {string} sel - CSS selector.
+ * @returns {number} width in CSS pixels.
+ */
+function outerW(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return 0;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none') return 0;
+    return el.getBoundingClientRect().width
+        + (parseFloat(cs.marginLeft) || 0)
+        + (parseFloat(cs.marginRight) || 0);
+}
+
+/**
+ * Every measurement this change is judged on, from one real layout pass.
+ * @returns {object} the measurement bundle.
+ */
+window.__headerIcons = function () {
+    const rows = Array.from(document.querySelectorAll('#running-sessions-list .running-session-row'))
+        .map((row) => {
+            const cs = getComputedStyle(row);
+            const badge = row.querySelector('.badge');
+            return {
+                name: row.dataset.name,
+                classes: row.className,
+                borderLeftColor: cs.borderLeftColor,
+                borderLeftWidth: cs.borderLeftWidth,
+                boxShadow: cs.boxShadow,
+                badge: badge ? badge.textContent.trim() : null,
+                livePencil: !!row.querySelector('.running-session-rename'),
+                deadPencil: !!row.querySelector('.running-session-rename-unavailable'),
+                pencilTitle: (row.querySelector('.running-session-rename-unavailable')
+                    || row.querySelector('.running-session-rename') || {}).title || null,
+            };
+        });
+    const title = document.getElementById('header-title-text');
+    const help = document.getElementById('launchpad-help-btn');
+    const tr = title ? title.getBoundingClientRect() : null;
+    const hr = help ? help.getBoundingClientRect() : null;
+    return {
+        innerWidth: window.innerWidth,
+        theme: document.documentElement.getAttribute('data-theme'),
+        helpPaint: paint('#launchpad-help-btn'),
+        // The look the help button is SUPPOSED to have, read off a
+        // sibling that never lost it. Comparing the two is a stronger
+        // statement than any hardcoded colour: it keeps holding when
+        // the theme changes.
+        siblingPaint: paint('#configEditorBtn'),
+        // The help control's position RELATIVE TO THE TITLE - the actual
+        // thing being asked for. A gap measured from the title's right
+        // edge, and a vertical centre delta, are the two numbers that say
+        // "beside it, in the middle"; an absolute x says nothing.
+        helpVsTitle: (tr && hr) ? {
+            gapFromTitleRight: hr.left - tr.right,
+            helpCentreY: hr.top + hr.height / 2,
+            titleCentreY: tr.top + tr.height / 2,
+            verticalCentreDelta: (hr.top + hr.height / 2) - (tr.top + tr.height / 2),
+            helpIsRightOfTitle: hr.left >= tr.right,
+            sharesParentWithTitle: help.parentElement === title.parentElement,
+        } : null,
+        togglePaint: paint('#session-sidebar-toggle'),
+        headerRect: (function () {
+            const h = document.querySelector('.header');
+            if (!h) return null;
+            const r = h.getBoundingClientRect();
+            const cs = getComputedStyle(h);
+            return { left: r.left, right: r.right, width: r.width,
+                     paddingLeft: parseFloat(cs.paddingLeft) || 0,
+                     paddingRight: parseFloat(cs.paddingRight) || 0 };
+        })(),
+        // THE INVARIANT, not the numbers. Both flanks are measured the
+        // same way and compared to each other, so this keeps holding if
+        // any of the underlying widths is retuned.
+        flanks: {
+            left: outerW('.header-home-spacer') + outerW('#session-sidebar-toggle'),
+            right: outerW('.controls'),
+            spacer: outerW('.header-home-spacer'),
+            toggle: outerW('#session-sidebar-toggle'),
+        },
+        titleRect: tr ? { left: tr.left, right: tr.right, width: tr.width } : null,
+        titleTextFull: title ? title.textContent : null,
+        rows,
+        fab: Array.from(document.querySelectorAll('#new-fab .new-fab__item')).map((i) => ({
+            action: i.getAttribute('data-action'),
+            label: (i.querySelector('.new-fab__label') || {}).textContent || '',
+        })),
+    };
+};
+
+/**
+ * Open the "new claude project" chooser and report its options.
+ * @returns {Promise<object[]>} [{key, label, sub}] as rendered.
+ */
+window.__newProjectChoices = async function () {
+    window.__lp.startNewClaudeProject();
+    await new Promise((r) => setTimeout(r, 80));
+    return Array.from(document.querySelectorAll('.folder-picker-item')).map((el) => ({
+        key: el.dataset.choiceKey || null,
+        text: el.textContent.replace(/\s+/g, ' ').trim(),
+    }));
+};
+
+/**
+ * Dock the sidebar the way session-sidebar-pin.js does, so the docked
+ * header geometry can be measured without booting the pin module.
+ * @param {boolean} on - true to dock.
+ * @returns {void}
+ */
+window.__setDocked = function (on) {
+    document.body.classList.toggle('session-sidebar-pinned', !!on);
+};
+
+(async () => {
+    const html = await (await fetch('../../client/index.html')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const header = doc.querySelector('.header');
+    if (header) {
+        document.getElementById('header-mount').appendChild(document.importNode(header, true));
+        // app.js stamps this on .header-row for the launchpad.
+        const row = document.querySelector('.header-row');
+        if (row) row.classList.add('header--home');
+        // SessionSidebar.show() strips `.hidden` off the toggle on the
+        // home screen. Reproduced here for the same reason.
+        const tog = document.getElementById('session-sidebar-toggle');
+        if (tog) tog.classList.remove('hidden');
+        // header-menu.js permanently re-parents logout/settings into its
+        // overflow panel, leaving exactly two inline controls. The
+        // harness does not boot it, so it does the same thing here -
+        // otherwise `.controls` would measure four buttons wide and the
+        // flank comparison would be against a header nobody ships.
+        ['logoutBtn', 'settingsBtn'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        });
+        const controls = document.querySelector('.controls');
+        if (controls && !document.getElementById('header-menu-toggle')) {
+            const kebab = document.createElement('button');
+            kebab.id = 'header-menu-toggle';
+            kebab.className = 'btn-icon header-menu-toggle';
+            kebab.type = 'button';
+            controls.appendChild(kebab);
+        }
+        const cfg = document.getElementById('configEditorBtn');
+        if (cfg) cfg.classList.remove('hidden');
+    }
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    await new Promise((r) => setTimeout(r, 60));
+    window.__headerReady = true;
+})();
+</script>
+</body>
+</html>

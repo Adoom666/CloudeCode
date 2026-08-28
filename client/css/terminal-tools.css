@@ -1,0 +1,430 @@
+/* =====================================================================
+ * Terminal-screen session controls: the two FAB menus and the per-session
+ * theme picker one of them opens. The copy-output sheet the "copy output"
+ * row opens lives in copy-output.css.
+ *
+ * TWO MENUS, ON PURPOSE, WITH A LEARNABLE RULE.
+ *   .terminal-tools-fab   moves content across the terminal's boundary:
+ *                         copy output, paste from clipboard, attach image
+ *   .session-editor-fab   configures the session itself: theme, music
+ * They share their look and their machinery (.fab-menu-btn here,
+ * fab-menu.js there) and differ only in glyph, rows and placement.
+ *
+ * Everything here is theme-aware through the same semantic tokens the
+ * rest of the chrome uses, so a per-session theme restyles these
+ * controls along with the terminal itself.
+ *
+ * Web-first and mobile-first at once: every row is already a thumb-sized
+ * 44px at every width.
+ * ===================================================================== */
+
+/* ---------------------------------------------------------------------
+ * FAB triggers
+ *
+ * NO STRIP OVER THE TERMINAL'S TOP EDGE. A folded three-icon tool strip
+ * used to sit over the top-right corner and cover output across its
+ * whole width; it is gone entirely, not hidden. The session editor is
+ * pinned back over that corner as ONE 45px button, which is what was
+ * asked for; the strip is not coming back.
+ *
+ * GEOMETRY IS SHARED, NOT RESTATED. The old paperclip sat at
+ * `right: 16px` with a 44px box while `.dpad-float-button` sat at
+ * `right: 20px` with a 45px box, so their centres were 4.5px apart. The
+ * numbers now live in --fab-size / --fab-edge / --fab-gap in styles.css
+ * and every floating button derives from them. Appearance lives once on
+ * .fab-menu-btn; the per-button rules below carry ONLY a position.
+ * ------------------------------------------------------------------- */
+.fab-menu-btn {
+    display: flex;
+    position: fixed;
+    /* The bottom row with the d-pad, hovering over the command line.
+     * .session-editor-fab overrides this with `bottom: auto` and a top
+     * offset - it is on the top-right rail, not in this row. */
+    bottom: var(--fab-edge);
+    width: var(--fab-size);
+    height: var(--fab-size);
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-full, 999px);
+    /* Opaque: they float over live terminal output. */
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    z-index: 60;
+    box-shadow: var(--shadow-modal);
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+/* Terminal-only. `#launchpad-screen.active` is set by app.js#showLaunchpad
+ * and cleared by hideAllScreens() before any other screen is activated,
+ * so this reliably scopes both buttons to live sessions. Neither one
+ * names anything on a screen with no session attached. */
+body:has(#launchpad-screen.active) .fab-menu-btn,
+body:has(#auth-screen.active) .fab-menu-btn {
+    display: none !important;
+}
+
+.fab-menu-btn:hover:not(:disabled),
+.fab-menu-btn:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+.fab-menu-btn:active {
+    transform: scale(0.95);
+}
+
+.fab-menu-btn[aria-expanded="true"] {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, var(--color-bg-elevated));
+}
+
+/* Slot 0, the right edge. Shown at EVERY pointer type: the paperclip it
+ * replaces was coarse-pointer only because it was an iOS paste
+ * workaround, but this button also owns the copy sheet, which desktop
+ * used to reach through the strip that is gone. */
+.terminal-tools-fab {
+    right: var(--fab-slot-0);
+}
+
+/* THE TOP-RIGHT RAIL, NOT A BOTTOM SLOT.
+ *
+ * The session editor configures the session rather than acting on its
+ * output, so it is the one control that does not belong in the row of
+ * things you reach for while working. It is back in the top-right
+ * corner, where it was before the bottom row was unified.
+ *
+ * ONE BUTTON, AND IT STAYS ONE. The wide three-icon strip that used to
+ * live here covered terminal output and removing it uncovered the
+ * terminal's top edge, which was a real gain. This is a single 45px
+ * target on the same right rail as the terminal-tools button below it
+ * (both take --fab-slot-0), so the two read as one column rather than
+ * two loose corners.
+ *
+ * `bottom: auto` is REQUIRED, not decorative: .fab-menu-btn above sets
+ * `bottom: var(--fab-edge)`, and a box with both top and bottom set and
+ * a fixed height honours top and ignores bottom only because height is
+ * declared - stating auto is what makes that explicit rather than
+ * accidental. ios-chrome.css has the matching pair for standalone mode.
+ *
+ * No breakpoint. The bottom row needed one because desktop hides the
+ * d-pad and left a hole in the middle of it; a rail of one control has
+ * no hole to close, so the same rule serves phone and desktop. */
+.session-editor-fab {
+    top: var(--fab-top-edge);
+    bottom: auto;
+    right: var(--fab-slot-0);
+}
+
+/* ---------------------------------------------------------------------
+ * THE CONNECTION-LIGHT BAR.
+ *
+ * The status light is out of the top header for good, and it is out from
+ * under the session tools too - it used to sit one slot below
+ * .session-editor-fab on the same right-hand rail, which read as a third
+ * FAB stacked under the other two rather than as state. It used to live
+ * in a `position: fixed` chip pinned to the bottom-left corner after
+ * that - floating OVER live terminal output, not part of any bar. That
+ * chip is gone. The light now lives in `.info` (client/index.html,
+ * styled below and in styles.css) - a real, in-flow bar that has always
+ * spanned the terminal screen's full width at the bottom holding the
+ * session id/PID readout. Same visual language as the home screen's
+ * `.home-bar`: a shrinkable item on the left, a spacer, a shrinkable
+ * status group (dot + label) on the right - just a different box,
+ * because `.info` already existed and already had a place to grow into
+ * rather than needing the screen restructured the way home-bar.css did.
+ * ------------------------------------------------------------------- */
+.terminal-bar__spacer {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.terminal-bar__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.terminal-bar__status-text {
+    font-size: 0.7rem;
+    color: var(--color-fg-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.terminal-bar__status .status {
+    flex-shrink: 0;
+}
+
+/* The tooltip is centred under the dot and grows DOWNWARD by default
+ * (`.status::after` in styles.css: `bottom: -30px`). `.info` sits at the
+ * bottom edge of the viewport, so downward would run off screen - same
+ * fix as before, just re-anchored: the status group sits near the RIGHT
+ * edge of the bar now (session id is on the left), so the tooltip grows
+ * from the dot's right edge leftward instead of centred, which is what
+ * kept it on screen when the dot sat near the left edge. Capped at the
+ * viewport width either way for a long string ("server unreachable -
+ * Failed to fetch"). */
+.terminal-bar__status .status::after {
+    bottom: auto;
+    top: -34px;
+    left: auto;
+    right: 0;
+    transform: none;
+    max-width: calc(100vw - 24px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------
+ * The menus themselves. Placed by client/js/anchor-popover.js, so only
+ * the box is described here. Both menus carry `.fab-menu` plus their own
+ * class, so the shared look cannot drift between them.
+ * ------------------------------------------------------------------- */
+.fab-menu {
+    position: fixed;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    max-width: min(280px, calc(100vw - 16px));
+    border-radius: 8px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 8px 28px var(--color-bg-overlay-soft);
+    overflow: hidden;
+}
+
+/* WIDTH, HEIGHT AND JUSTIFY ARE DECLARED ON PURPOSE. styles.css carries a
+ * bare `button { width: var(--control-size); height: var(--control-size);
+ * justify-content: center; }`
+ * base rule. A class selector outranks it, but ONLY for the properties
+ * the class actually declares - so a menu row that did not mention width
+ * came out 36px wide with its icon hanging outside its own box, measured
+ * in Chrome 2026-08-16. Same failure mode as a `stroke-width` rule losing
+ * to a presentation attribute: check the COMPUTED value, not the rule you
+ * wrote. `.cloude-session-theme__item` below carries these for the same
+ * reason. */
+.fab-menu__item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    width: 100%;
+    height: auto;
+    min-height: 44px;
+    border-radius: 0;
+    padding: 0 12px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.fab-menu__item svg {
+    flex: 0 0 auto;
+    color: var(--color-fg-muted);
+}
+
+.fab-menu__item:hover,
+.fab-menu__item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+.fab-menu__item:hover svg,
+.fab-menu__item:focus-visible svg {
+    color: var(--color-accent);
+}
+
+/* A row that is actively doing something, currently only the music
+ * opt-in. Matches the accent treatment the old strip used. */
+.fab-menu__item.is-on,
+.fab-menu__item.is-on svg {
+    color: var(--color-accent);
+}
+
+/* A row that leaves the session, currently only "detach session". It is
+ * fenced off from the rows above rather than sitting flush against them,
+ * because a mis-tap on the row above costs a theme change and a mis-tap
+ * here costs the attachment. The rule, not the colour, is what carries
+ * that: the colour alone is invisible to a colour-blind user and to
+ * anyone reading it at arm's length. */
+.fab-menu__item--separated {
+    margin-top: 4px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+}
+
+.fab-menu__item--danger,
+.fab-menu__item--danger svg {
+    color: var(--color-danger, var(--color-fg));
+}
+
+.fab-menu__item--danger:hover,
+.fab-menu__item--danger:focus-visible,
+.fab-menu__item--danger:hover svg,
+.fab-menu__item--danger:focus-visible svg {
+    color: var(--color-danger, var(--color-fg));
+}
+
+/* A row whose control is ON but is not achieving anything - currently only
+ * "stop music" while no sound is reaching the speaker. The reason lives in
+ * the title/aria-label; this only marks that there IS one to read, because
+ * the row would otherwise look identical to a working one. Warning colour,
+ * not danger: nothing here is destructive. */
+.fab-menu__item--warn,
+.fab-menu__item--warn svg {
+    color: var(--color-warning, var(--color-fg));
+}
+
+.fab-menu__item--warn:hover,
+.fab-menu__item--warn:focus-visible,
+.fab-menu__item--warn:hover svg,
+.fab-menu__item--warn:focus-visible svg {
+    color: var(--color-warning, var(--color-fg));
+}
+
+/* One line per row. A wrapped label turns a 44px row into a 90px one and
+ * the menu stops looking like a list. */
+.fab-menu__label {
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------
+ * Per-session theme picker, opened by the session editor's theme row.
+ * ------------------------------------------------------------------- */
+.cloude-session-theme {
+    position: fixed;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    max-width: min(280px, calc(100vw - 16px));
+    border-radius: 8px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 8px 28px var(--color-bg-overlay-soft);
+    overflow: hidden;
+}
+
+.cloude-session-theme__head {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    /* A tmux session name can be long; keep the header one line. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 60dvh so a large theme library scrolls inside the menu rather than
+ * running off the viewport. Dynamic, not raw `vh`: on iOS the large
+ * viewport is 739px against 699px visible, so `60vh` quietly bought 24px
+ * of height that was never on screen. */
+.cloude-session-theme__list {
+    display: flex;
+    flex-direction: column;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow-y: auto;
+}
+
+/* See the note on .fab-menu__item: without an explicit width, height and
+ * justify-content these rows inherit 36x36 centred from the bare `button`
+ * rule in styles.css. */
+.cloude-session-theme__item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    /* Flex-column children size to their MAX-CONTENT width during the
+     * parent's shrink-to-fit pass (`.cloude-session-theme` has no fixed
+     * width, only min/max-width), and a run of text with no break
+     * opportunity - one long word, or an id-fallback name joined by
+     * underscores like `black_market` - has a max-content width equal to
+     * its full unbroken length. That inflated preferred width pushes
+     * `.cloude-session-theme__list` past its own clamped box, and because
+     * the list sets `overflow-y: auto` the UA is spec-required to resolve
+     * the omitted `overflow-x` to `auto` too (not `visible`) - so the
+     * overflow doesn't just clip, it becomes a genuine horizontal scroll
+     * inside the picker. `overflow-wrap: anywhere` gives the browser a
+     * break opportunity everywhere, which both lets the label actually
+     * wrap onto a second line AND, just as importantly, caps the
+     * intrinsic width calculation itself so the container never inflates
+     * past its max-width in the first place. min-width: 0 is the flex-item
+     * half of the same fix - without it a flex child's automatic minimum
+     * size is its content's min-content width, which for unbreakable text
+     * is that same full length, so the wrap alone isn't enough. */
+    min-width: 0;
+    height: auto;
+    min-height: 44px;
+    border-radius: 0;
+    padding: 0 12px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+
+/* Ancestor-qualified on purpose, not `.cloude-session-theme__item:hover`
+ * alone. styles.css's bare `button:hover:not(:disabled)` (specificity
+ * 0,2,1 - element + :hover + the :disabled inside :not()) applies
+ * `transform: scale(1.05)` plus a glow box-shadow to every button on the
+ * page, this row included, and this class never opted out because it
+ * never had to declare `transform` before. A plain `.cloude-session-
+ * theme__item:hover` is only 0,2,0 - LOWER than the button rule - so
+ * even adding `transform: none` there loses the cascade outright, not
+ * just visually; verified by hovering a real row and reading its
+ * computed `transform`, which stayed `matrix(1.05, 0, 0, 1.05, 0, 0)`
+ * with that weaker selector in place. Qualifying with the list ancestor
+ * raises this to 0,3,0, which beats the button rule on specificity alone
+ * with no `!important` and no source-order dependence.
+ *
+ * The scale mattered because a row already sized to the picker's
+ * clamped max-width grows 5% on hover, and CSS gives a transformed
+ * element its own scrollable overflow region - that growth alone pushed
+ * `.cloude-session-theme__list` past its own width and, because the
+ * list is already `overflow-y: auto`, resolved the list's omitted
+ * overflow-x to a genuine horizontal scrollbar. That scrollbar only
+ * ever existed while a row was hovered or focused, which is why the
+ * resting-state measurement in the original overflow investigation came
+ * back clean. Cancelling the scale keeps the background swap - the
+ * actual hover affordance - without growing the row past its box; the
+ * glow box-shadow is left alone since it does not affect layout or
+ * contribute to scrollWidth. */
+.cloude-session-theme__list .cloude-session-theme__item:hover,
+.cloude-session-theme__list .cloude-session-theme__item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+    transform: none;
+}
+
+.cloude-session-theme__item.is-active {
+    color: var(--color-accent);
+}
+
+.cloude-session-theme__item.is-active::after {
+    content: ' *';
+}

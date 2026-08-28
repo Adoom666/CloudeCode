@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#1A0838",
     "--color-bg-page": "#0e0420",
     "--color-bg-elevated": "#2a1248",
@@ -17,8 +17,8 @@
     "--color-bg-overlay-faint": "rgba(26, 8, 56, 0.4)",
     "--color-fg": "#FFEE00",
     "--color-fg-muted": "#aa9a00",
-    "--color-fg-subtle": "#5a5400",
-    "--color-fg-faint": "#7a7000",
+    "--color-fg-subtle": "#938900",
+    "--color-fg-faint": "#958900",
     "--color-border": "#FF00C8",
     "--color-border-subtle": "#8a006e",
     "--color-accent": "#00FFE0",
@@ -96,5 +96,12 @@
     "brightMagenta": "#FF55D5",
     "brightCyan": "#66FFEE",
     "brightWhite": "#ffffff"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/dungeon-ambience.m4a",
+    "srcFallback": "/static/assets/audio/dungeon-ambience.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
   }
 }

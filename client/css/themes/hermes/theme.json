@@ -1,7 +1,7 @@
 {
   "id": "hermes",
   "name": "Hermes",
-  "description": "8-bit amber-on-black retro terminal — gold accents, CRT glow.",
+  "description": "8-bit amber-on-black retro terminal - gold accents, CRT glow.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -16,8 +16,8 @@
     "--color-header-bg": "#000000",
     "--color-fg": "#ffaa00",
     "--color-fg-muted": "#cc8800",
-    "--color-fg-subtle": "#996600",
-    "--color-fg-faint": "#7a5200",
+    "--color-fg-subtle": "#a36d00",
+    "--color-fg-faint": "#a26d00",
     "--color-border": "#553a00",
     "--color-border-subtle": "#332300",
     "--color-accent": "#ffcc00",
@@ -91,5 +91,11 @@
     "brightCyan": "#88ccdd",
     "brightWhite": "#ffe699"
   },
-  "themeCss": "theme.css"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/out-there.m4a",
+    "srcFallback": "/static/assets/audio/out-there.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
+  }
 }

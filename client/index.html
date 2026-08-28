@@ -2,11 +2,56 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- viewport-fit=cover lets the page paint edge to edge on a notched
+         iPhone instead of letterboxing between two grey bars. It hands us
+         responsibility for the insets in exchange; client/css/ios-chrome.css
+         pays that with env(safe-area-inset-*). Both values are inert on a
+         desktop browser, so this does not change the web-first layout. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>☁️ Cloude Code</title>
 
-    <!-- xterm.js CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <!-- iOS home-screen app chrome.
+         WHAT THIS ACTUALLY BUYS OVER PLAIN HTTP: iOS "Add to Home Screen"
+         reads these tags with no secure-context requirement, so the icon,
+         the standalone (chrome-less) window and the status bar style all
+         work on a Tailscale http:// origin. What does NOT work over plain
+         http is anything gated on window.isSecureContext - service
+         workers, Cache API, and therefore any offline/background story.
+         There is deliberately NO service worker registered here: it would
+         fail to register on this origin, and a registration that silently
+         never takes is worse than none. See docs/ios-standalone.md. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <!-- black-translucent puts our own background under the status bar,
+         which is why ios-chrome.css must pad the header by the top inset. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Cloude">
+    <!-- The app version, stamped server-side by src/main.py's
+         `{{VERSION}}` substitution. It used to be a `<span class="version">`
+         chip inside the header `<h1>`; it now renders in the home screen's
+         bottom bar, which is built by launchpad.js at runtime and so has
+         no server-rendered markup of its own to stamp. A meta tag is the
+         handoff: main.py's replace() is a plain string substitution and
+         does not care where the token lives, and Launchpad reads it back
+         with one querySelector. Empty content means the version could not
+         be resolved, and the chip renders nothing at all. -->
+    <meta name="cloude-app-version" content="{{VERSION}}">
+    <meta name="theme-color" content="#0a0a0a">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <!-- iOS ignores manifest icons and reads this instead. PNG only. -->
+    <link rel="apple-touch-icon" href="/static/assets/icons/icon-180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/assets/icons/icon-192.png">
+
+    <!-- Vendored xterm.js CSS (see client/vendor/xterm/VERSION.md) - served
+         from this app's own origin instead of cdn.jsdelivr.net. A CDN
+         request blocked or delayed by an ad blocker (Brave Shields on
+         mobile, confirmed) leaves xterm's character-measurement element
+         without its rules; the backend pane size still comes out right,
+         so only the on-device render breaks. Same-origin removes the
+         failure class instead of hoping the CDN answers. Must load in
+         <head>, before styles.css, so app CSS can still override xterm's
+         defaults. -->
+    <link rel="stylesheet" href="/static/vendor/xterm/xterm.css" />
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/styles.css" />
@@ -14,10 +59,92 @@
          theme CSS custom properties (--color-accent, etc.) are available
          as fallbacks for the per-toast accent border. -->
     <link rel="stylesheet" href="/static/css/toast.css" />
+    <!-- Session sidebar. Loaded after styles.css for the same
+         token-availability reason as toast.css. -->
+    <link rel="stylesheet" href="/static/css/session-sidebar.css" />
+    <!-- The status dot, in its own file because it is SHARED by three
+         surfaces - the sidebar, the launchpad's running-sessions list
+         and the home project tree - so a file named for one of them was
+         never its home. Its vocabulary is defined in
+         client/js/session-status-ui.js. -->
+    <link rel="stylesheet" href="/static/css/status-dot.css" />
+    <!-- Row density, the per-row reorder/pin controls, and the two
+         three-outcome blocks the list can render instead of rows. Its own
+         file so session-sidebar.css stays under the 500-line convention;
+         it must load AFTER it, because the density rules override the
+         base row padding there. -->
+    <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
+    <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
+    <!-- Session tools button + menu and the per-session theme picker.
+         After styles.css so it inherits the theme vars, AND so its
+         explicit width/height beat the bare `button` base rule there. -->
+    <link rel="stylesheet" href="/static/css/terminal-tools.css" />
+    <!-- The copy-output sheet those tools open. Split from
+         terminal-tools.css at the 500-line limit; same load reasoning. -->
+    <link rel="stylesheet" href="/static/css/copy-output.css" />
+    <!-- The paste fallback the "paste from clipboard" tool opens when the
+         origin is not a secure context. Same load reasoning again. -->
+    <link rel="stylesheet" href="/static/css/paste-fallback.css" />
+    <!-- Stacked-modal chrome (scroll lock + what a COVERED modal looks
+         like). Must load before the two config-editor stylesheets, which
+         style the modals that stack. -->
+    <link rel="stylesheet" href="/static/css/modal-stack.css" />
+    <link rel="stylesheet" href="/static/css/config-editor.css" />
+    <!-- The file browser's BOX: right-hand drawer geometry, the docked
+         (pinned) layout and the pin control. Must load AFTER
+         config-editor.css, which owns everything inside the drawer. -->
+    <link rel="stylesheet" href="/static/css/config-drawer.css" />
+    <link rel="stylesheet" href="/static/css/config-editor-modal.css" />
+    <!-- Mobile header dropdown (client/js/header-menu.js) and iOS
+         safe-area chrome. Both load after styles.css: the first needs the
+         theme custom properties, the second must win on equal specificity
+         where it re-pads the header. -->
+    <link rel="stylesheet" href="/static/css/header-menu.css" />
+    <!-- The home screen's thin bottom bar. Must load BEFORE ios-chrome.css,
+         which overrides its --home-bar-inset token with the real
+         env(safe-area-inset-bottom) and excludes #launchpad-screen from the
+         generic `.screen` bottom inset. -->
+    <link rel="stylesheet" href="/static/css/home-bar.css" />
+    <!-- STAGE C: the session-attribution prompt card. Loaded with the
+         other home-screen stylesheets, before the theme tint and the
+         screen chrome, so both can still win at equal specificity. -->
+    <link rel="stylesheet" href="/static/css/attribution-prompt.css" />
+    <link rel="stylesheet" href="/static/css/ios-chrome.css" />
+    <!-- Two-line common-command chips. After styles.css, which owns the
+         base .command-button rule this narrows. -->
+    <link rel="stylesheet" href="/static/css/slash-command-chips.css" />
 
-    <!-- Phase 2: dynamic href slot for bundled themes' optional theme.css.
-         Phase 3 will populate this when the user picks a non-Claude theme. -->
-    <link rel="stylesheet" id="theme-css" />
+    <!-- The settings panel's music volume slider. After styles.css, which
+         owns the .settings-field rules this builds on. -->
+    <link rel="stylesheet" href="/static/css/settings-audio.css" />
+
+    <!-- The global audio on/off control (client/js/globalAudioToggle.js),
+         re-parented between .home-bar and .info by app.js. Self-contained:
+         it never edits home-bar.css/terminal-tools.css/styles.css, only
+         adds rules scoped under its own .global-audio-btn class. -->
+    <link rel="stylesheet" href="/static/css/global-audio.css" />
+
+    <!-- The home bar's server-status panel. After styles.css, which owns
+         the .modal-overlay / .modal-header / .modal-body chrome it rides
+         on and the bare `button` reset its controls have to escape. -->
+    <link rel="stylesheet" href="/static/css/server-status.css" />
+
+    <!-- Session rows painted in their own session's theme colours. MUST be
+         the last of the app stylesheets: it competes at equal specificity
+         with the row backgrounds in styles.css and session-sidebar.css, so
+         source order is what decides whether the wash survives a hover. -->
+    <link rel="stylesheet" href="/static/css/session-theme-tint.css" />
+
+    <!-- Authenticated-only chrome, hidden by default. Deliberately near
+         the end so nothing later in the app's own stylesheets can win at
+         equal specificity; see the file for why the default is inverted
+         rather than enumerated in app.js. -->
+    <link rel="stylesheet" href="/static/css/screen-chrome.css" />
+
+    <!-- Terminal surface translucency (matches the animated theme
+         background's status attribute; see the file for why this wins
+         over styles.css's `#terminal` rule by specificity, not order). -->
+    <link rel="stylesheet" href="/static/css/terminal-opacity.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -25,36 +152,396 @@
     <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
 
     <div class="header">
+        <!-- HOME-HEADER-CONSOLIDATION: `.header-row` wraps the original
+             three header children (toggle / title / controls) so
+             `#home-subheader` below can be a second row of `.header`
+             WITHOUT becoming a sibling h1 has to measure itself against.
+             header-title-fit.js's slotWidth() walks h1's actual parent's
+             children to compute the title's shrink budget, on the
+             documented assumption that every sibling there is
+             fixed-size and in the same row (see its doc comment). Before
+             this wrapper existed, `#home-subheader` WAS that parent's
+             child too, and its outerWidth (a full-width second row) was
+             being subtracted from the budget, driving it negative — the
+             function's `avail > 0` guard then silently fell back to
+             "assume it fits" and CSS `text-overflow: ellipsis` alone was
+             left to truncate mid-word ("Cloude Code L…" at 390px,
+             confirmed by screenshot, not caught by the numeric centring
+             check because a 2-character remainder still centres at 0px
+             offset). The wrapper keeps h1's actual parent to exactly the
+             three original elements, restoring the function's own stated
+             invariant instead of teaching it a second layout mode. -->
+        <div class="header-row">
+        <!-- HOME-HEADER-CONSOLIDATION: real, visible (but
+             visibility:hidden — takes layout space, invisible to the eye
+             AND to a screen reader) spacer, exactly mirroring `.controls`'
+             width. `display:none` outside `.header--home` so it never
+             touches the terminal/auth layout.
+             WHY A REAL ELEMENT INSTEAD OF A CSS GRID COLUMN: CSS Grid's
+             `minmax(X, 1fr)` reserves X of track space with NO element
+             sitting in it, which header-title-fit.js's slotWidth() cannot
+             see — it walks `.header-row`'s actual DOM children and sums
+             their rendered widths, so an empty grid track is invisible to
+             it. That mismatch once let the JS module conclude the full
+             title fit (its math never subtracted the reserved-but-empty
+             column) while the grid rendered it only 160px of room —
+             CSS `text-overflow: ellipsis` silently clipped the DOM's
+             correct, untruncated text to "Cloude Code L…" and nothing
+             in the DOM said so. A real sibling element is not just seen
+             by the browser's layout, it is seen by this exact code path,
+             so the two can never disagree. -->
+        <div class="header-home-spacer" aria-hidden="true"></div>
+        <!-- Session sidebar hamburger - top-left of the terminal screen
+             header. Hidden on auth/launchpad (toggled by app.js exactly
+             like logoutBtn/destroyBtn). A real <button> with
+             aria-expanded/aria-controls per the accessibility pattern
+             already established for header controls in this file. -->
+        <button type="button" id="session-sidebar-toggle" class="session-sidebar-toggle hidden"
+                data-auth-only
+                aria-expanded="false" aria-controls="session-sidebar-panel"
+                aria-label="Conversations" title="conversations">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <line x1="3" y1="12" x2="21" y2="12"/>
+                <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+        </button>
         <h1 id="appTitle">
-            <span id="header-icon" class="header-icon" aria-hidden="true">☁️</span>
+            <!-- fix/icon-consistency — ships the real brand mark inline so
+                 it is correct on FIRST PAINT, before app.js (loaded near
+                 the end of body) has run. app.js's HEADER_BRAND_ICON_URL /
+                 HEADER_BRAND_ICON_URL_2X are the single source of truth
+                 for the paths; this src/srcset is a literal copy of them
+                 and tests/test_icon_assets.py asserts they match.
+                 fix/real-app-icon-art — these are raster PNGs cropped
+                 straight from macOS/assets/AppIcon-1024.png (the real
+                 rendered cloud + pixel-face artwork), not the vector
+                 approximation that used to live at
+                 client/assets/cloude-icon.svg. aria-hidden because the
+                 adjacent #header-title-text span already names the app in
+                 text for assistive tech — the icon is a decorative echo of
+                 that name, not an independent label. data-brand-icon lets
+                 setHeaderIdentity() (app.js) recognise this is already the
+                 real mark and skip re-writing it. -->
+            <span id="header-icon" class="header-icon" aria-hidden="true"><img data-brand-icon src="/static/assets/icons/header-icon.png" srcset="/static/assets/icons/header-icon.png 1x, /static/assets/icons/header-icon@2x.png 2x" alt="" /></span>
             <span id="header-title-text">Cloude Code</span>
-            <span class="version">{{VERSION}}</span>
+            <!-- LAUNCHER HELP, BESIDE THE TITLE. Moved here out of
+                 `.controls` (see the note there). It toggles the SAME
+                 help div it always did - the <details> that is still the
+                 first child of `.launchpad-container`, still rendered by
+                 launchpad.js, still exactly where it was on screen. Only
+                 the control moved; the panel did not.
+                 WHY INSIDE THE h1 RATHER THAN A SIBLING OF IT: `#appTitle`
+                 is the flex box that `.header--home` centres, so a child
+                 of it rides that centring for free and stays glued to the
+                 title text at every width. A sibling would be centred
+                 independently and would drift away from the text as the
+                 title shrank.
+                 `flex-shrink: 0` in styles.css keeps it off the title's
+                 elision budget, and header-title-fit.js subtracts every
+                 non-shrinking element inside `#appTitle` from that budget
+                 (see its slotWidth()), so the text still middle-elides at
+                 the right width instead of being silently clipped.
+                 Carries `.btn-icon` - see the white-square note in
+                 styles.css. Home screen only, still gated on
+                 `.header--home` there, so no screen-switch code has to
+                 remember it. -->
+            <button type="button" id="launchpad-help-btn" class="btn-icon" aria-label="help" title="help" data-tooltip="Help" aria-expanded="false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/>
+                    <line x1="12" y1="17.5" x2="12" y2="17.5"/>
+                </svg>
+            </button>
+            <!-- NO VERSION CHIP HERE ANY MORE. It moved to the home
+                 screen's bottom bar (client/css/home-bar.css). It was a
+                 fixed-width, flex-shrink: 0 sibling of the title, so every
+                 pixel it occupied came straight off the title's truncation
+                 budget on every screen including the terminal, where the
+                 title is a session name that needs the room. See
+                 client/js/header-title-fit.js, which subtracts each
+                 non-shrinking sibling from the budget and therefore
+                 recovers this width with no code change. -->
         </h1>
         <div class="controls">
-            <!-- v0.7.0+ — per-theme background music toggle. Muted by default.
-                 Click is the required user-gesture that grants the AudioContext
-                 autoplay permission for the rest of the page lifetime. -->
-            <button type="button" id="audioToggleBtn" class="header-audio-toggle" aria-pressed="false" aria-label="Enable theme music" title="Enable theme music" data-tooltip="Enable theme music">🔇</button>
-            <button onclick="window.TerminalController.destroySession()" id="destroySessionBtn" class="danger hidden" aria-label="Destroy session" title="Destroy session" data-tooltip="Destroy Session">
+            <!-- Logout: door frame (three-sided bracket, open on the right)
+                 with an arrow passing all the way THROUGH and past it — the
+                 near-universal "log out" glyph. Deliberately different from
+                 detach above (see its comment). -->
+            <!-- NO INLINE onclick HERE, AND ADDING ONE BACK BREAKS THE
+                 BUTTON SILENTLY. src/main.py stamps
+                 `script-src 'self'` on every response, which forbids
+                 inline event handlers. This button carried
+                 `onclick="App.logout()"` from the initial commit and
+                 kept it when CSP landed, so from that day the click did
+                 nothing at all: the browser refused to run the handler
+                 and logged a CSP violation, which is not an exception,
+                 not a visible error, and not something any DOM test can
+                 see. The element was present, sized, visible and
+                 unobstructed the whole time. It is wired in
+                 client/js/app.js's setupEventListeners() now, exactly
+                 like #settingsBtn and #configEditorBtn beside it.
+                 scripts/verify_logout_chrome.py drives this against the
+                 REAL server so the CSP header is actually present - a
+                 static harness has no CSP and passes either way. -->
+            <button id="logoutBtn" class="hidden" aria-label="Logout" title="logout" data-tooltip="Logout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M8 3L12 9H4L8 3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                    <path d="M4 11H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M7 2.5H3.75C3.05964 2.5 2.5 3.05964 2.5 3.75V12.25C2.5 12.9404 3.05964 13.5 3.75 13.5H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M6.25 8H13.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M10.5 5.25L13.25 8L10.5 10.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <button onclick="App.logout()" id="logoutBtn" class="hidden" aria-label="Logout" title="Logout" data-tooltip="Logout">
+            <!-- Settings: gear/cog — a ring with six radial teeth, the one
+                 icon in this family built from a circle rather than a
+                 closed silhouette (house/box/door/trash) or an open
+                 speaker-shape, so it reads as structurally distinct from
+                 all five neighbors at a glance. Opens SettingsPanel (see
+                 client/js/settings-panel.js), which now owns the theme
+                 chooser that used to live directly in this header — see
+                 that file for why it mounts ThemeSelector into the panel
+                 instead of `.header .controls`. Always visible (not
+                 gated behind session state like home/detach/logout)
+                 because settings apply whether or not a session is open. -->
+            <button type="button" id="settingsBtn" class="hidden" aria-label="Settings" title="settings" data-tooltip="Settings">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M6 14H3C2.44772 14 2 13.5523 2 13V3C2 2.44772 2.44772 2 3 2H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    <path d="M11 11L14 8M14 8L11 5M14 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="8" cy="8" r="4.2" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="8" cy="8" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M8 3.8V2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11.64 5.9L13.02 5.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M11.64 10.1L13.02 10.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M8 12.2V13.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M4.36 10.1L2.98 10.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M4.36 5.9L2.98 5.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </button>
-            <span class="status" id="statusText" data-status="Ready" role="status" aria-live="polite" aria-label="Ready"></span>
+            <!-- Config editor: browse/edit ~/.claude (+ the active project's
+                 .claude/) — see client/js/config-editor-panel.js. Same
+                 always-visible treatment as settingsBtn: config applies
+                 whether or not a session is open. Icon is an open folder,
+                 distinct from settings' gear-circle and every other glyph
+                 in this row. -->
+            <button type="button" id="configEditorBtn" class="btn-icon hidden" aria-label="File editor" title="file editor" data-tooltip="file editor" aria-expanded="false" aria-controls="config-editor-panel">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <!-- THE LAUNCHER HELP BUTTON IS NOT IN THIS ROW ANY MORE.
+                 It now sits inside #appTitle, immediately right of the
+                 title text - see there. It was moved out of .controls on
+                 purpose and must not be put back: .controls is the
+                 header's RIGHT flank, and .header--home sizes
+                 #header-home-spacer to mirror that flank's width so the
+                 title lands on the real centre. The flank token
+                 (--home-header-flank-w) budgets TWO inline controls
+                 (#configEditorBtn and the kebab #header-menu-toggle);
+                 a third inline child here on the home screen made the
+                 right flank wider than the spacer it was supposed to
+                 equal, which pushed the title off centre by half the
+                 difference. -->
+            <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
+                 the last child here. It is now a bottom-bar control,
+                 never a header one - see .info near the end of this file
+                 (#terminal-bar-status inside it) and App._placeStatusLight().
+                 Do not put it back: the header row is actions, and the
+                 light is state. -->
         </div>
+        </div><!-- /.header-row -->
+        <!-- HOME-HEADER-CONSOLIDATION: launchpad-only second header row.
+             Replaces the standalone `.launchpad-header` / `.launchpad-prompt`
+             block that used to sit at the top of `.launchpad-container` —
+             the title moved into the header itself (see #appTitle above,
+             painted "Cloude Code Launcher" by App.showLaunchpad()) and this
+             is its subheading, directly below. Hidden and un-classed
+             (`.header--home` off) on every other screen by
+             setHeaderIdentity() in app.js — see its doc comment. Spans the
+             full header width and is centred by `.header--home` grid rules
+             in styles.css, not by a fixed margin, so it stays centred at
+             every viewport width including under the FAB/controls cluster
+             at 390px. -->
+        <div id="home-subheader" class="home-subheader" hidden></div>
     </div>
     <!-- New-action speed-dial FAB markup is now injected inline into the
-         launchpad's "recent projects" section heading by launchpad.js
+         launchpad's "running sessions" section heading by launchpad.js
          (renderLaunchpadUI). The full-screen click-outside backdrop stays
          here at top-level so it can blanket the viewport when open. -->
     <div class="new-fab__backdrop" id="new-fab-backdrop" hidden></div>
+
+    <!-- Session sidebar - conversation switcher for the terminal view.
+         Markup lives at body level (not inside #terminal-screen) so it can
+         slide over the full viewport; visibility is CSS-driven by the
+         .session-sidebar-panel--open class (client/js/session-sidebar.js). -->
+    <div class="session-sidebar-backdrop" id="session-sidebar-backdrop" hidden></div>
+    <aside id="session-sidebar-panel" class="session-sidebar-panel" aria-hidden="true"
+           aria-label="Conversations" data-density="cozy">
+        <div class="session-sidebar-header">
+            <!-- THE HEADING IS A CLUSTER, NOT A TITLE PLUS STRAYS.
+                 "we need to push it closer to the title conversations we
+                 will probably add more icons later on." The density
+                 control used to carry `margin-left: auto` and float away
+                 to the far right beside the panel's own pin and close
+                 buttons, so it read as panel chrome rather than as a
+                 control over the list. It now sits inside
+                 `.session-sidebar-tools`, immediately after the title.
+
+                 ADDING THE NEXT CONTROL IS ONE ELEMENT, NOT A LAYOUT
+                 CHANGE: append another sibling inside
+                 `.session-sidebar-tools`. The cluster is a flex row with
+                 its own gap, the heading owns `min-width: 0` so the title
+                 gives way before the tools do, and `.session-sidebar-
+                 actions` on the right takes the leftover space - so no
+                 `margin-left: auto` has to be moved from one control to
+                 another the way it did last time. See
+                 client/css/session-sidebar-groups.css. -->
+            <div class="session-sidebar-heading">
+                <span class="session-sidebar-title">conversations</span>
+                <div class="session-sidebar-tools" role="group" aria-label="List controls">
+            <!-- Row detail (density). "a little icon dropdown for how
+                 verbose" - thin rows to see more, or more per row. The
+                 three modes and the persistence live in
+                 client/js/session-sidebar-density.js; the menu below is
+                 keyboard-operable (arrows move, Enter chooses, Escape
+                 leaves) because a control only reachable by mouse is not
+                 a control this list can rely on. -->
+            <div class="session-sidebar-density-wrap">
+                <button type="button" id="session-sidebar-density" class="session-sidebar-density"
+                        aria-haspopup="true" aria-expanded="false"
+                        aria-controls="session-sidebar-density-menu"
+                        aria-label="Row detail: cozy. Change how much each session row shows."
+                        title="row detail: cozy">
+                    <!-- A DENSITY GLYPH, NOT A SECOND HAMBURGER. This was
+                         three evenly stroked lines - byte-for-byte the
+                         same mark as #session-sidebar-toggle, the button
+                         that OPENS this panel, sitting 300px away in the
+                         same viewport. Two different controls drawn
+                         identically is not a weak icon, it is a wrong
+                         one.
+                         This is three FILLED bars of decreasing height:
+                         rows getting thinner, which is literally what the
+                         control does. Authored here, generic, and
+                         deliberately not a trace of anyone's mark. Filled
+                         rather than stroked so it cannot be confused with
+                         the stroked hamburger even at a glance. -->
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"
+                         aria-hidden="true">
+                        <rect x="3" y="4" width="18" height="5" rx="1.5"/>
+                        <rect x="3" y="11.25" width="18" height="3.5" rx="1.2"/>
+                        <rect x="3" y="17" width="18" height="2" rx="1"/>
+                    </svg>
+                </button>
+                <div id="session-sidebar-density-menu" class="session-sidebar-density-menu"
+                     role="menu" aria-label="Row detail" hidden>
+                    <button type="button" role="menuitemradio" aria-checked="false"
+                            data-density-mode="compact" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">compact</span>
+                        <span class="session-sidebar-density-item__hint">thinnest rows, most sessions on screen</span>
+                    </button>
+                    <button type="button" role="menuitemradio" aria-checked="true"
+                            data-density-mode="cozy" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">cozy</span>
+                        <span class="session-sidebar-density-item__hint">the default row</span>
+                    </button>
+                    <button type="button" role="menuitemradio" aria-checked="false"
+                            data-density-mode="detailed" class="session-sidebar-density-item">
+                        <span class="session-sidebar-density-item__label">detailed</span>
+                        <span class="session-sidebar-density-item__hint">adds agent family and age on a second line</span>
+                    </button>
+                </div>
+            </div>
+            <!-- NEW GROUP. Sits beside the density control rather than
+                 inside the list, because it belongs to the panel and not
+                 to any one section. It is the discoverable way to make a
+                 group; the row picker's "new group..." entry is the
+                 other, and both land in the same code path. Groups are
+                 user-defined and stored in the database - see
+                 client/js/session-sidebar-group-actions.js. -->
+            <button type="button" id="session-sidebar-group-add"
+                    class="session-sidebar-group-add" data-group-add="1"
+                    title="New group" aria-label="New group">
+                <span aria-hidden="true">+</span>
+            </button>
+                </div>
+            </div>
+            <!-- PANEL CHROME, a separate cluster from the list controls
+                 above. These act on the BAR (dock it, close it); the
+                 tools cluster acts on the LIST. Keeping them apart is
+                 what stops the next list control from being dropped in
+                 beside the close button again. -->
+            <div class="session-sidebar-actions">
+            <!-- Pin the BAR open (docked, no backdrop, survives a
+                 conversation switch). aria-pressed carries the real state;
+                 the pushpin glyph is presentational. Hidden below 700px by
+                 client/js/session-sidebar-pin.js — a docked 320px bar on a
+                 phone leaves nothing for the terminal. -->
+            <button type="button" id="session-sidebar-pin" class="session-sidebar-pin"
+                    aria-pressed="false" aria-label="Pin sidebar open" title="pin sidebar open">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="17" x2="12" y2="22"/>
+                    <path d="M5 17h14l-2-4V4H7v9l-2 4z"/>
+                </svg>
+            </button>
+            <button type="button" id="session-sidebar-close" aria-label="Close conversations" title="close">&times;</button>
+            </div>
+        </div>
+        <!-- role=listbox + roving tabindex: the list is ONE tab stop and
+             arrows move inside it, which is what makes Alt+Arrow reorder
+             reachable without a mouse. See
+             client/js/session-sidebar-reorder.js. -->
+        <div id="session-sidebar-list" class="session-sidebar-list"
+             role="listbox" aria-label="Sessions" data-density="cozy"></div>
+        <!-- A reorder whose only feedback is visual is not operable
+             without a mouse in any sense that matters, so every move and
+             pin says what it did here. -->
+        <div id="session-sidebar-live" class="session-sidebar-live"
+             role="status" aria-live="polite"></div>
+    </aside>
+
+    <!-- FILE BROWSER - a right-hand DRAWER, and optionally a docked one.
+         It was a centred dialog covering the terminal it was about; it is
+         back to sliding in from the right edge, full height, and it can be
+         PINNED so the app pays for it in layout and the terminal narrows
+         to what is left rather than being covered (client/js/config-drawer-
+         pin.js, the same mechanism as the session sidebar's pin, docked
+         only above 700px). It still registers with client/js/modal-stack.js,
+         which is what makes Escape close only the top surface and what
+         takes this one off screen while the full-screen editor is up on a
+         phone. Scope is the claude config directories plus the active
+         project's working directory, never a general filesystem browser.
+         See client/js/config-editor-panel.js. -->
+    <div class="modal-overlay config-editor-picker-overlay" id="config-editor-overlay" hidden data-modal="config-picker">
+        <div class="config-editor-picker-content" role="dialog" aria-modal="true" aria-labelledby="config-editor-title">
+            <div class="modal-header config-editor-header">
+                <span class="config-editor-title" id="config-editor-title">file editor</span>
+                <!-- Create a new file. Sits next to the title rather than on
+                     each directory row because a tree row is already a
+                     <button> and a button cannot nest another one; the
+                     prompt this opens asks for the root and the path
+                     instead. See client/js/config-editor-new-file.js. -->
+                <button type="button" id="config-editor-new" class="config-editor-new"
+                        aria-label="New file" title="new file">+ new file</button>
+                <!-- Pin the DRAWER open (docked, no backdrop, the terminal
+                     narrows to what is left instead of being covered).
+                     aria-pressed carries the real state; the pushpin glyph
+                     is presentational, and is the same glyph the session
+                     sidebar's pin uses because it is the same gesture.
+                     Hidden below 700px by client/js/config-drawer-pin.js -
+                     a docked drawer on a phone leaves no terminal. -->
+                <button type="button" id="config-drawer-pin" class="config-drawer-pin"
+                        aria-pressed="false" aria-label="Pin file drawer open"
+                        title="pin file drawer open">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="12" y1="17" x2="12" y2="22"/>
+                        <path d="M5 17h14l-2-4V4H7v9l-2 4z"/>
+                    </svg>
+                </button>
+                <button type="button" id="config-editor-close" aria-label="Close file editor" title="close">&times;</button>
+            </div>
+            <div class="modal-body config-editor-body">
+                <div id="config-editor-tree" class="config-editor-tree"></div>
+            </div>
+        </div>
+    </div>
 
     <!-- Auth Screen -->
     <div id="auth-screen" class="screen"></div>
@@ -64,6 +551,18 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
+        <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
+             strip used to float here holding copy output / session theme
+             / session music, while a second paperclip menu in the
+             bottom-right held paste / attach image. The STRIP is gone for
+             good - it covered terminal output across its whole width.
+             Its contents were re-split by JOB rather than by corner:
+             #terminalToolsBtn moves content, #sessionEditorBtn configures
+             the session. Both are at the bottom of this file, and the
+             session editor alone is pinned back over this corner as a
+             SINGLE 45px button. One button is not a strip; do not grow it
+             back into one. -->
+
         <div class="terminal-container">
             <div id="terminal"></div>
         </div>
@@ -73,43 +572,185 @@
             <div id="localServersList"></div>
         </div>
 
+        <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always
+             been a real, in-flow bar spanning the full width at the
+             bottom of #terminal-screen (unlike the home screen, which
+             needed restructuring to get one - see home-bar.css). It held
+             only the session id/PID readout; the connection light now
+             lives here too instead of floating in a fixed corner chip.
+             Same visual language as .home-bar: a shrinkable left item, a
+             spacer, a shrinkable status group on the right. See the
+             "CONNECTION-LIGHT BAR" comment in terminal-tools.css for the
+             full reasoning and App._placeStatusLight() for how the one
+             #statusText node gets moved here. -->
         <div class="info">
             <span id="sessionInfo">No active session</span>
+            <span class="terminal-bar__spacer"></span>
+            <span class="terminal-bar__status" id="terminal-bar-status">
+                <span class="terminal-bar__status-text" id="terminal-bar-status-text"></span>
+            </span>
         </div>
     </div>
 
-    <!-- xterm.js -->
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js"></script>
+    <!-- Vendored xterm.js + addons (see client/vendor/xterm/VERSION.md) -
+         served from this app's own origin so the terminal no longer
+         depends on cdn.jsdelivr.net being reachable. -->
+    <script src="/static/vendor/xterm/xterm.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-fit.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-webgl.js"></script>
+    <script src="/static/vendor/xterm/xterm-addon-unicode11.js"></script>
 
     <!-- Application modules -->
+    <!-- Shared click-dismissal guard. Loaded FIRST because it is a
+         dependency of anything that closes on click - slash-commands.js,
+         header-menu.js and app.js all call window.DismissGuard while
+         wiring their listeners. See that file for the two shipped bugs it
+         exists to retire. -->
+    <script src="/static/js/dismiss-guard.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->
+    <!-- THE ONE PLACE THAT DECIDES WHAT A SESSION IS CALLED ON SCREEN.
+         Must load BEFORE toast.js, launchpad.js, terminal.js and app.js -
+         all four render a session name and all four call
+         window.SessionLabel.resolve() to decide what that name is. It has
+         no dependencies of its own, so it goes first. -->
+    <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
+         session-sidebar.js, both of which call window.SessionStatusUI. -->
+    <script src="/static/js/session-status-ui.js"></script>
+    <!-- Shared X (close) / trash (remove) row control: which one a session
+         row gets, its tooltip, and its confirm copy. Must load AFTER
+         session-status-ui.js (uses its glyphs) and BEFORE launchpad.js,
+         terminal.js and session-sidebar.js, all of which call
+         window.SessionRowActions. -->
+    <script src="/static/js/session-row-actions.js"></script>
+    <!-- Session detail: renders HOW a session became yours (origin) and
+         which project it belongs to. The row badge shows only ours vs
+         external; created-vs-adopted lives here. Pure string rendering,
+         no state, no events - load order is irrelevant beyond being
+         before any consumer. -->
+    <script src="/static/js/session-detail.js"></script>
+    <!-- Per-row session-theme colours. Must load BEFORE launchpad.js and
+         session-sidebar-rows.js, both of which call
+         window.SessionThemeTint. It reads themes/registry.js lazily at
+         paint time rather than at load, so it does not have to come after
+         it, and it degrades to today's plain row while the registry is
+         still fetching. -->
+    <script src="/static/js/session-theme-tint.js"></script>
+    <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
+         launchpad.js, whose showFolderPickerModal() is now a delegate to
+         window.FolderPickerModal.open(). It reads no controller state -
+         the escaper is passed in - so it has no ordering constraint on
+         anything else. -->
+    <script src="/static/js/folder-picker-modal.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
          attaches showProviderModal() onto the window.Launchpad instance. -->
+    <!-- provider-groups.js holds the launch picker's family-grouping
+         rules and MUST load before providers.js calls them. -->
+    <script src="/static/js/provider-groups.js"></script>
     <script src="/static/js/providers.js"></script>
+    <!-- Server-restart detector (health polling + backoff). Must load
+         BEFORE terminal.js - terminal.js's ws.onclose handler reads
+         window.ServerRestartWatch to tell a restart apart from an
+         ordinary disconnect. -->
+    <script src="/static/js/server-restart-watch.js"></script>
+    <!-- Scroll anchoring. Must load BEFORE terminal.js runs (terminal.js
+         calls window.TerminalScroll from flush() and setupScrollListener()),
+         and it owns the decision that used to be the racing
+         autoScrollEnabled flag. -->
+    <!-- How far a gesture is worth. Must load BEFORE terminal-scroll.js,
+         which reads window.TerminalScrollStep from both the wheel and the
+         touch path so the two cannot cover different distances. -->
+    <script src="/static/js/terminal-scroll-step.js"></script>
+    <script src="/static/js/terminal-scroll.js"></script>
+    <!-- Is this onData payload a keystroke or a mouse report? Must load
+         BEFORE terminal.js, whose onData handler asks before it treats a
+         payload as a request to go back to the live bottom. Under claude's
+         `?1003h` any-event tracking, plain pointer motion arrives here. -->
+    <script src="/static/js/terminal-input-kind.js"></script>
+    <!-- Forces local selection instead of forwarding a mousedown when the
+         app owns the mouse and the view is scrolled away from the live
+         bottom (a forwarded report cannot mean what the app thinks it
+         means there). Must load BEFORE terminal.js, which wires it from
+         initTerminal() via _applySelectWhileScrolled(), and reads
+         window.TerminalScroll.isPinnedToBottom() so it must load AFTER
+         terminal-scroll.js above. -->
+    <script src="/static/js/terminal-select-scrolled.js"></script>
+    <!-- Alternate-screen scrollback (claude's `tui: fullscreen`, where the
+         terminal has no scrollback at all). Must load BEFORE terminal.js,
+         which wires it in setupScrollListener(), and terminal-scroll.js
+         calls window.AltScreenScroll from its one scroll primitive. -->
+    <!-- Key runs for claude's transcript view. Must load BEFORE
+         altscreen-scroll.js, which builds every synthesised scroll
+         through window.AltScreenKeys. -->
+    <script src="/static/js/altscreen-keys.js"></script>
+    <script src="/static/js/altscreen-scroll.js"></script>
+    <!-- Clipboard tier ladder. Must load BEFORE clipboard.js,
+         touch-select.js and copy-output.js, all of which copy through
+         window.CopyCompat rather than navigator.clipboard (absent over
+         plain http). -->
+    <script src="/static/js/clipboard-compat.js"></script>
+    <!-- Terminal resize pipeline. Must load BEFORE terminal.js, whose
+         initTerminal() calls window.TerminalLayout.install(this). Also
+         the explicit refit hook session-sidebar-pin.js calls. -->
+    <!-- Shared anchored-popover placement. Must load BEFORE
+         session-theme-menu.js and terminal-tools-menu.js, which both
+         call window.AnchorPopover.place(). launchpad.js also calls it
+         (placeNewFabMenu) but loads earlier - that is fine, because the
+         call happens on a user tap, long after every script has run. -->
+    <script src="/static/js/anchor-popover.js"></script>
+    <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
+         and terminal.js, both of which fit through
+         window.TerminalMetrics.guardedFit so an untrustworthy cell
+         measurement is skipped instead of being shipped to tmux. -->
+    <script src="/static/js/terminal-metrics.js"></script>
+    <script src="/static/js/terminal-layout.js"></script>
+    <!-- Must load BEFORE terminal.js: terminal.js's withTerminalBackgroundOpacity
+         wrapper reads window.TerminalBackgroundOpacity at call time, but
+         it is only meaningfully absent (falls through to the raw theme)
+         if this tag is missing or fails - load order still matters so the
+         translucency is live from the very first theme applied. -->
+    <script src="/static/js/terminal-background-opacity.js"></script>
     <script src="/static/js/terminal.js"></script>
-    <!-- Clipboard tools: paperclip paste menu + terminal copy chord.
-         Must load AFTER terminal.js — terminal.js calls into
-         window.ClipboardTools from its key/attach-button hook points. -->
+    <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
+         No UI of its own any more - the session tools menu calls
+         ClipboardTools.pasteFromClipboard(). Must load AFTER terminal.js,
+         which calls handleCopyChord() from its key handler. -->
     <script src="/static/js/clipboard.js"></script>
     <!-- Touch selection: long-press → drag → floating copy button on
          coarse-pointer devices. Must load AFTER terminal.js — terminal.js
          calls window.TouchSelect.init() from initTerminal(). -->
     <script src="/static/js/touch-select.js"></script>
+    <!-- Copy-output sheet: url/code chips + selectable raw text. Must
+         load AFTER terminal.js (terminal.js wires the button from
+         initTerminal) and AFTER output-scan.js, whose scan() it calls. -->
+    <script src="/static/js/output-scan.js"></script>
+    <script src="/static/js/copy-output.js"></script>
     <script src="/static/js/dpad.js"></script>
+    <!-- Display-only shortening of a command's full description. Must load
+         BEFORE both files below: the filter reads the FULL value off the
+         row, the renderer writes the shortened one into it. -->
+    <script src="/static/js/command-description.js"></script>
+    <script src="/static/js/slash-command-filter.js"></script>
+    <!-- The star that decides which commands get a chip. Must load AFTER
+         api.js (window.API) and BEFORE slash-commands.js, which calls
+         window.SlashFavorites while building its markup. Separate file
+         because slash-commands.js is already past the 500-line budget. -->
+    <script src="/static/js/slash-favorites.js"></script>
     <script src="/static/js/slash-commands.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>
+
+    <!-- Screen-state marker for the authenticated-only chrome. Must load
+         BEFORE app.js, whose show*() methods call ScreenChrome.apply(). -->
+    <script src="/static/js/screen-chrome.js"></script>
 
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
@@ -118,8 +759,197 @@
 
     <!-- v0.7.0+ — per-theme background music plumbing. Must load BEFORE
          app.js so window.ThemeAudio is defined when the app wires the
-         header toggle button + calls ThemeAudio.init(). -->
+         header toggle button + calls ThemeAudio.init().
+         themeAudioNode.js holds the per-node mechanics (build, ramp, play,
+         tear down) and themeAudioSettings.js holds persistence plus the
+         stored-settings migration. Both MUST load first: themeAudio.js
+         calls into window.ThemeAudioNode and window.ThemeAudioSettings. -->
+    <script src="/static/js/themeAudioNode.js"></script>
+    <script src="/static/js/themeAudioSettings.js"></script>
+    <!-- themeAudioVolume.js owns the master gain, its floor and its
+         live-apply hook. AFTER themeAudioSettings.js (it reads the floor
+         and the persistence contract), BEFORE themeAudio.js. -->
+    <script src="/static/js/themeAudioVolume.js"></script>
     <script src="/static/js/themeAudio.js"></script>
+    <!-- themeAudioStatus.js reads window.ThemeAudio.getStatus(), so it loads
+         AFTER themeAudio.js. It is what makes a silent failure speak: the
+         music control asks it why nothing is playing and shows the answer. -->
+    <script src="/static/js/themeAudioStatus.js"></script>
+    <!-- GlobalAudioToggle - the one audio on/off control, re-parented
+         between .home-bar and .info by app.js. AFTER themeAudio.js
+         (setSessionAudio) and themeAudioStatus.js (current()); BEFORE
+         app.js, which calls place()/syncForSession() from its
+         screen-transition methods. -->
+    <script src="/static/js/globalAudioToggle.js"></script>
+
+    <!-- Per-session theme picker, mounted on the terminal screen. Must
+         load AFTER themes/registry.js (window.Themes.getActiveSession /
+         applyGlobal / listAll). The per-session music opt-in that used to
+         live here moved to globalAudioToggle.js above. -->
+    <script src="/static/js/session-theme-menu.js"></script>
+
+    <!-- Session sidebar - conversation switcher. Must load AFTER api.js
+         (window.API) and BEFORE app.js is invoked (app.js's showTerminal /
+         returnToExistingTerminal / showLaunchpad / showAuth call into
+         window.SessionSidebar; script order below only needs it defined
+         before those methods RUN, not before app.js parses). -->
+    <!-- Three-outcome verdict for a session probe (CANNOT DETERMINE vs an
+         honestly empty list). Must load BEFORE the fetch and row modules,
+         both of which call into it. -->
+    <script src="/static/js/session-listing-state.js"></script>
+    <!-- Which sessions are PINNED to the top and the order the user put
+         them in, split into two files at the seam between persistence and
+         ordering. The STORE owns the localStorage envelope, its three load
+         outcomes and the pin membership; ARRANGEMENT owns the ordering
+         algebra and reads/writes through the store. Pure functions plus
+         localStorage; no DOM. The store must load FIRST, and both must
+         load BEFORE session-sidebar.js runs. -->
+    <!-- The group model, read from the database. Must load BEFORE
+         session-sidebar-arrangement.js, whose arrange() partitions rows
+         into the bands this module declares. -->
+    <script src="/static/js/session-sidebar-group-store.js"></script>
+    <script src="/static/js/session-sidebar-store.js"></script>
+    <script src="/static/js/session-sidebar-arrangement.js"></script>
+    <!-- Two endpoints to one row list, plus whether the probe answered. -->
+    <script src="/static/js/session-sidebar-fetch.js"></script>
+    <!-- Row markup for the sidebar list; must load BEFORE session-sidebar.js
+         paints. -->
+    <script src="/static/js/session-sidebar-rename.js"></script>
+    <script src="/static/js/session-sidebar-rows.js"></script>
+    <script src="/static/js/session-sidebar-groups.js"></script>
+    <!-- Click routing for the list, split out of session-sidebar.js to
+         keep that file under the 500-line budget. Must load BEFORE it:
+         the controller's handlers delegate straight into this. -->
+    <script src="/static/js/session-sidebar-clicks.js"></script>
+    <script src="/static/js/session-sidebar.js"></script>
+    <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
+         (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
+    <script src="/static/js/session-sidebar-pin.js"></script>
+    <!-- Row detail (density) and the reorder interactions. Both call back
+         into window.SessionSidebar, so both load AFTER it. -->
+    <script src="/static/js/session-sidebar-density.js"></script>
+    <!-- Which band the pointer is over. Split out of the reorder module
+         when that crossed the 500-line budget; must load BEFORE it. -->
+    <script src="/static/js/session-sidebar-drop-target.js"></script>
+    <script src="/static/js/session-sidebar-reorder.js"></script>
+    <!-- Create/rename/delete/reorder groups, and every NON-DRAG way to
+         move a session between them. Loads AFTER reorder because it
+         borrows that module's live-region announcer. -->
+    <script src="/static/js/session-sidebar-group-actions.js"></script>
+
+    <!-- Settings panel — gear-icon modal folding in the theme chooser
+         (moved here from the header, see #settingsBtn's comment) plus the
+         agent/notifications/server sections. Must load AFTER api.js
+         (window.API), themes/registry.js + themes/themeSelector.js
+         (window.Themes / window.ThemeSelector — mounted into the panel's
+         appearance section on open, not into `.header .controls` any
+         more), and BEFORE app.js so App.init() can wire #settingsBtn's
+         click handler to window.SettingsPanel.open(). -->
+    <!-- Launch-wrapper list/editor mounted inside the settings panel's
+         "agent" section. Must load AFTER api.js (window.API) and BEFORE
+         settings-panel.js calls window.AgentWrappersPanel.mount(). -->
+    <!-- agent-wrappers-view.js holds the wrappers screen's pure render
+         functions and MUST load before the panel that calls them. -->
+    <script src="/static/js/agent-wrappers-view.js"></script>
+    <script src="/static/js/agent-wrappers-panel.js"></script>
+    <!-- Terminal-command list/editor for the settings panel's "terminal"
+         tab. Same contract as agent-wrappers-panel.js: AFTER api.js,
+         BEFORE settings-panel.js mounts it. -->
+    <script src="/static/js/terminal-commands-panel.js"></script>
+    <!-- Settings modal internals. settings-tabs.js owns the tab strip and
+         settings-sections.js the section markup; both must load BEFORE
+         settings-panel.js, which reads window.SettingsSections at IIFE
+         time. -->
+    <script src="/static/js/settings-tabs.js"></script>
+    <script src="/static/js/settings-sections.js"></script>
+    <!-- The global music volume row in the general tab. Reads
+         window.ThemeAudio for the current gain and the floor, so it loads
+         AFTER themeAudio.js and BEFORE settings-panel.js renders it. -->
+    <script src="/static/js/settings-audio.js"></script>
+    <!-- The workspace tab (the four global settings). Reads
+         window.SettingsSections at IIFE time for escapeHtml, so it loads
+         AFTER settings-sections.js and BEFORE settings-panel.js, which
+         calls its render()/wire()/collect(). -->
+    <script src="/static/js/settings-workspace.js"></script>
+    <script src="/static/js/settings-panel.js"></script>
+
+    <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -
+         served from this app's own origin so it satisfies the CSP's
+         script-src 'self' with no CDN and no policy change. Exposes
+         window.CodeMirrorBundle. Must load BEFORE config-editor-modal.js. -->
+    <script src="/static/vendor/codemirror/codemirror-bundle.js"></script>
+
+    <!-- Config/project file tree + editor. Must load AFTER api.js
+         (window.API) and BEFORE app.js so App.init() can wire
+         #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
+    <script src="/static/js/markdown-lite.js"></script>
+    <!-- Escape routing / scroll lock / focus restore for the picker+editor
+         pair. Must load BEFORE both of them. -->
+    <script src="/static/js/modal-stack.js"></script>
+    <script src="/static/js/config-editor-modal.js"></script>
+    <!-- "new file" prompt. Must load BEFORE config-editor-panel.js, whose
+         header button calls window.ConfigEditorNewFile.open(). -->
+    <script src="/static/js/config-editor-new-file.js"></script>
+    <!-- Root table + working-directory resolver + the "why is this root
+         absent" sentences. Must load BEFORE config-editor-panel.js, which
+         reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
+    <script src="/static/js/config-editor-roots.js"></script>
+    <!-- Which tree nodes start collapsed, and the localStorage map behind
+         it. Must load BEFORE config-editor-panel.js, which renders against
+         window.ConfigEditorTreeState. -->
+    <script src="/static/js/config-editor-tree-state.js"></script>
+    <script src="/static/js/config-editor-panel.js"></script>
+    <!-- Docking the file drawer open. Must load AFTER
+         config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and
+         it is the panel's _wire() that calls init(). Same split, same
+         reasons, as session-sidebar-pin.js beside session-sidebar.js. -->
+    <script src="/static/js/config-drawer-pin.js"></script>
+
+    <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
+         (window.DismissGuard). It re-parents the existing header control
+         nodes rather than cloning them, so it is order-independent with
+         respect to app.js wiring their click handlers - the listeners
+         travel with the nodes. -->
+    <script src="/static/js/header-menu.js"></script>
+
+    <!-- Header title middle-elision. Must load BEFORE app.js so
+         setHeaderIdentity() can hand it the full session name on the very
+         first paint instead of writing textContent directly. Degrades to
+         the CSS end-ellipsis in styles.css if it is absent. -->
+    <script src="/static/js/header-title-fit.js"></script>
+
+    <!-- The two session-scoped FAB menus. fab-menu.js carries the shared
+         open/close/dismiss/wire machinery and MUST load first; the two
+         modules below only declare their own rows.
+
+         Both must load AFTER anchor-popover.js (placement), copy-output.js,
+         clipboard.js and session-theme-menu.js, whose exported functions
+         their rows call. terminal.js hands each of them the Terminal
+         wrapper from _applyTerminalTools() / _applySessionEditor(). -->
+    <script src="/static/js/fab-menu.js"></script>
+    <!-- The paste fallback. Called by clipboard.js at runtime only, so
+         the order between the two does not matter, but it must load
+         after fab-menu.js whose notify() it reports through. -->
+    <script src="/static/js/paste-fallback.js"></script>
+    <script src="/static/js/terminal-tools-menu.js"></script>
+    <script src="/static/js/session-editor-menu.js"></script>
+    <!-- The home bar's server-controls menu. Same shared plumbing, but
+         APP-scoped rather than session-scoped, which is why it mounts on
+         the home screen and the two above do not. Must load after
+         fab-menu.js and anchor-popover.js; launchpad.js wires it on
+         render, so the order relative to launchpad.js does not matter. -->
+    <!-- The server-status panel behind that menu's first row. Split in
+         two: the format module is pure and testable with no DOM, the
+         panel owns the fetch, the overlay and the one destructive
+         control. Must load BEFORE server-controls-menu.js only in the
+         sense that the row calls window.ServerStatusPanel lazily on
+         click, so strict order is not required - but keeping them
+         adjacent is how the pair stays findable. Both need api.js
+         (loaded far above) and session-row-actions.js, which owns the
+         confirmation copy and the two destruction endpoints. -->
+    <script src="/static/js/server-status-format.js"></script>
+    <script src="/static/js/server-status-panel.js"></script>
+    <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
     <script src="/static/js/app.js"></script>
@@ -130,12 +960,71 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- IMG-PASTE — image attach controls. The hidden file input is
-         triggered programmatically by the 📎 button in terminal.js
-         (_applyImageAttachButton). Visibility of the button is gated
-         to coarse-pointer (touch) devices via CSS so desktop users get
-         the paste-only flow. -->
-    <input type="file" id="cloude-image-attach-input" accept="image/*,image/heic,image/heif" hidden />
-    <button type="button" id="cloude-image-attach-button" class="cloude-image-attach-button" aria-label="Attach image" title="Attach image">📎</button>
+    <!-- THE TWO SESSION-SCOPED FAB MENUS, split by JOB and by how often
+         you reach for them.
+
+         TERMINAL TOOLS (bottom row, slot 0, the right edge) moves content
+         across the terminal's boundary: copy output, paste from
+         clipboard, attach image. It stays on the bottom row with the
+         d-pad, over the command line, because it is used all day.
+
+         SESSION EDITOR (top-right rail) configures the session itself:
+         theme and music. Set once per session, so it is out of the
+         working row entirely. Two coherent groups with a rule a user can
+         learn, not one drawer of everything.
+
+         Both are direct children of <body>. NOTHING may move inside
+         #terminal: TerminalScroll.blockOverscrollEscape calls
+         preventDefault on single-touch drags there, so a control mounted
+         inside it loses its gestures.
+
+         The hidden file input is the "attach file" path, opened
+         programmatically by that menu row; the change handler lives in
+         clipboard.js (ClipboardTools.wireFileInput).
+
+         Icon geometry is the terminal-tool set exactly: 16x16 in a
+         0 0 16 16 viewBox with stroke-width declared PER PATH. A
+         presentation attribute on the path beats a stylesheet rule that
+         targets the svg, so the value has to be right here. -->
+    <input type="file" id="cloude-image-attach-input" hidden />
+
+    <!-- THE ONE #statusText NODE STARTS HERE AND NEVER STAYS.
+         App._placeStatusLight() moves it into #home-bar-status (home
+         screen) or #terminal-bar-status (terminal screen, inside the
+         real `.info` bar - see index.html and terminal-tools.css) the
+         moment a screen shows. There used to be a `position: fixed`
+         chip parked here as its own floating "bar"; it is gone, because
+         it was not a bar, it was a chip that happened to sit at a
+         fixed screen position. This bare span is just the node's
+         starting point before the first _placeStatusLight() call runs.
+         Auth screen: neither destination is inside its DOM, so the
+         node just sits here, unattached and invisible, until a real
+         screen claims it - the auth screen reports its own server
+         failures inline and was never meant to show a light. -->
+    <span class="status" id="statusText" data-status="Ready" tabindex="0"
+          role="status" aria-live="polite" aria-label="Ready"></span>
+
+    <!-- Clipboard glyph: all three rows are content crossing the boundary. -->
+    <button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="terminalToolsMenu"
+            aria-label="terminal tools" title="terminal tools">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M5.5 2.5h-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-10a1 1 0 0 0-1-1h-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="5.5" y="1.5" width="5" height="2.5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 8h4M6 10.5h2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+    </button>
+
+    <!-- Sliders glyph: this one CONFIGURES rather than moves anything. -->
+    <button type="button" id="sessionEditorBtn" class="fab-menu-btn session-editor-fab"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
+            aria-label="session editor" title="session editor">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+    </button>
 </body>
 </html>

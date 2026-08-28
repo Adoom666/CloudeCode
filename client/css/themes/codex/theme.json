@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Soft white surfaces with an indigo wash — inspired by openai.com/codex.",
+  "description": "Soft white surfaces with an indigo wash - inspired by openai.com/codex.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -16,8 +16,8 @@
     "--color-header-bg": "#ffffff",
     "--color-fg": "#1a1a1a",
     "--color-fg-muted": "#666666",
-    "--color-fg-subtle": "#999999",
-    "--color-fg-faint": "#aaaaaa",
+    "--color-fg-subtle": "#717171",
+    "--color-fg-faint": "#757575",
     "--color-border": "#e5e5ea",
     "--color-border-subtle": "#f0f0f3",
     "--color-accent": "#7c5cff",
@@ -34,9 +34,9 @@
     "--color-accent-glow": "rgba(124, 92, 255, 0.35)",
     "--color-accent-glow-strong": "rgba(124, 92, 255, 0.50)",
     "--color-accent-shadow-soft": "rgba(124, 92, 255, 0.20)",
-    "--color-on-accent": "#ffffff",
-    "--color-success": "#16a34a",
-    "--color-warning": "#d97706",
+    "--color-on-accent": "#0a0a0a",
+    "--color-success": "#12823b",
+    "--color-warning": "#aa5d05",
     "--color-danger": "#dc2626",
     "--color-info": "#2563eb",
     "--color-danger-bg": "rgba(220, 38, 38, 0.08)",
@@ -57,7 +57,7 @@
     "--color-status-error-glow": "rgba(220, 38, 38, 0.55)",
     "--color-status-pending-glow": "rgba(217, 119, 6, 0.55)",
     "--color-badge-owned-bg": "#e6f4ea",
-    "--color-badge-owned-fg": "#16a34a",
+    "--color-badge-owned-fg": "#117d39",
     "--color-badge-tmux-bg": "#eef0ff",
     "--color-badge-tmux-fg": "#5b3eed",
     "--color-badge-external-bg": "#fef3c7",
@@ -91,5 +91,11 @@
     "brightCyan": "#0e7490",
     "brightWhite": "#1a1a1a"
   },
-  "themeCss": "theme.css"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/observing-the-star.m4a",
+    "srcFallback": "/static/assets/audio/observing-the-star.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
+  }
 }

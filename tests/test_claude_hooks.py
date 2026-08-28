@@ -71,6 +71,9 @@ class _StubSettings:
     def get_pinned_themes_path(self) -> Path:
         return self._pin_path
 
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
     @property
     def log_directory(self) -> str:
         return str(self._log_dir)
@@ -171,14 +174,53 @@ def test_validate_hook_token_uses_compare_digest(monkeypatch, tmp_path):
     assert called["count"] == 1, "expected validate_hook_token to call hmac.compare_digest"
 
 
-def test_hook_token_dropped_on_wipe(monkeypatch, tmp_path):
+# SUPERSEDED 2026-08-28. This asserted the opposite of what is now
+# correct, and the reversal was measured rather than argued.
+#
+# It required `_wipe_session_state` to drop the hook token. That reads as
+# obvious hygiene - a token should not outlive its session - but that
+# function means "forget the IN-MEMORY state for this id", and its
+# callers are startup stale-cleanup, zombie cleanup and a failed create.
+# None of them is "the user ended this session".
+#
+# Once tokens became durable (so a session's hooks survive a server
+# restart), this behaviour revoked the credentials of perfectly live
+# agents on the way down - the very restart the token store exists to
+# survive wiped the store. Caught by a differential: a hand-seeded entry
+# survived a restart untouched while a real session's token vanished.
+#
+# Forgetting state and revoking a credential are two different
+# operations. The token's real lifetime is "as long as a tmux session by
+# that name is still owned", enforced by `_gc_hook_tokens` at load.
+def test_wiping_in_memory_state_does_NOT_revoke_the_token(monkeypatch, tmp_path):
+    """A live agent must keep working when its id is forgotten."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_w", tmp_path)
-    mgr._mint_hook_token("ses_w")
+    mgr._mint_hook_token("ses_w", tmux_name="cloude_w")
     assert "ses_w" in mgr._hook_tokens
+
     mgr._wipe_session_state("ses_w")
-    assert "ses_w" not in mgr._hook_tokens
-    assert mgr.get_hook_token("ses_w") is None
+
+    assert mgr.get_hook_token("ses_w") is not None, (
+        "wiping in-memory state must not revoke a live agent's credential - "
+        "the agent cannot be re-issued one, its token is baked into the pane"
+    )
+
+
+def test_a_token_is_garbage_collected_when_its_tmux_name_is_gone(monkeypatch, tmp_path):
+    """The other half: tokens must not accumulate forever.
+
+    Asserting only the negative above would be satisfied by a store that
+    never forgets anything, which is a credential leak rather than a fix.
+    """
+    from src.core.hook_tokens import load_tokens, save_tokens
+
+    save_tokens(tmp_path, {"ses_gone": "t"}, tmux_names={"ses_gone": "cloude_gone"})
+    kept = load_tokens(tmp_path, live_session_ids=["ses_gone"])
+    assert kept.tokens
+
+    dropped = load_tokens(tmp_path, live_session_ids=[])
+    assert dropped.tokens == {}
 
 
 def test_get_env_for_spawn_includes_all_three_vars(monkeypatch, tmp_path):
@@ -439,7 +481,7 @@ def test_ensure_hook_settings_creates_file_when_missing(monkeypatch, tmp_path):
     target = tmp_path / "claude" / "settings.json"
     assert not target.exists()
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True
     assert target.exists()
 
@@ -462,6 +504,10 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
 
     user_block = {
         "hooks": {
+            # PreToolUse is now ALSO a cloudecode-managed event
+            # (feat/hook-driven-status) — the user's existing matcher on it
+            # must be preserved AND our own canonical entry appended, same
+            # merge rule as Stop below.
             "PreToolUse": [
                 {
                     "matcher": "Bash",
@@ -478,25 +524,62 @@ def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_pat
                     ],
                 }
             ],
+            # feat/session-lineage - this slot used to hold SessionStart,
+            # which WAS unmanaged when this test was written and is now a
+            # lifecycle event we install. Swapped to PreCompact, which
+            # this app still does not manage, so the case the test exists
+            # to cover - a user hook under an event we never touch - is
+            # still actually being covered rather than quietly retired.
+            # The SessionStart pass-through case is asserted separately
+            # below, where it now belongs: preserved AND appended to.
+            "PreCompact": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": "echo user-pre-compact"}
+                    ],
+                }
+            ],
+            "SessionStart": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": "echo user-session-start"}
+                    ],
+                }
+            ],
         },
         "someOtherUserKey": "value",
     }
     target.write_text(json.dumps(user_block))
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True
 
     data = json.loads(target.read_text())
-    # User's PreToolUse hook still intact.
+    # User's PreToolUse hook still intact, PLUS our managed one appended.
     pre = data["hooks"]["PreToolUse"]
-    assert len(pre) == 1
+    assert len(pre) == 2
     assert pre[0]["hooks"][0]["command"] == "echo user-pre-tool"
+    assert CLOUDECODE_HOOKS_MARKER in pre[1]["hooks"][0]["command"]
 
     # User's Stop hook still there, PLUS our managed Stop appended.
     stop_entries = data["hooks"]["Stop"]
     assert len(stop_entries) == 2
     assert stop_entries[0]["hooks"][0]["command"] == "echo user-stop"
     assert CLOUDECODE_HOOKS_MARKER in stop_entries[1]["hooks"][0]["command"]
+
+    # An event we don't manage at all is untouched.
+    assert data["hooks"]["PreCompact"] == user_block["hooks"]["PreCompact"]
+
+    # feat/session-lineage - SessionStart is managed NOW, so the user's
+    # entry must survive and ours must be appended after it. Asserted in
+    # that order deliberately: claude_hooks appends managed matchers last
+    # so a user hook's exit code can short-circuit ours, never the reverse.
+    starts = data["hooks"]["SessionStart"]
+    assert len(starts) == 2
+    assert starts[0]["hooks"][0]["command"] == "echo user-session-start"
+    assert CLOUDECODE_HOOKS_MARKER in starts[1]["hooks"][0]["command"]
 
     # Non-hooks user keys preserved.
     assert data["someOtherUserKey"] == "value"
@@ -509,8 +592,8 @@ def test_ensure_hook_settings_replaces_old_cloudecode_hooks_idempotently(
     _isolate_settings_disabled_flag(monkeypatch, False)
     target = tmp_path / "settings.json"
 
-    ensure_hook_settings(settings_path=target)
-    ensure_hook_settings(settings_path=target)
+    ensure_hook_settings(target)
+    ensure_hook_settings(target)
 
     data = json.loads(target.read_text())
     for event in ("Stop", "Notification", "PermissionRequest"):
@@ -533,7 +616,7 @@ def test_ensure_hook_settings_does_not_clobber_unparseable(monkeypatch, tmp_path
     corrupt = "{ this is not json"
     target.write_text(corrupt)
 
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is False
     assert target.read_text() == corrupt  # untouched
 
@@ -541,7 +624,7 @@ def test_ensure_hook_settings_does_not_clobber_unparseable(monkeypatch, tmp_path
 def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
     _isolate_settings_disabled_flag(monkeypatch, True)
     target = tmp_path / "claude" / "settings.json"
-    ok = ensure_hook_settings(settings_path=target)
+    ok = ensure_hook_settings(target)
     assert ok is True  # disabled = success-no-op
     assert not target.exists()  # file never created
 
@@ -551,9 +634,25 @@ def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
 # =========================================================================== #
 
 
-def test_build_hook_block_has_all_three_events():
+def test_build_hook_block_has_all_managed_events():
+    """3 toast events + 5 activity-only + 2 lifecycle (feat/session-lineage)."""
     block = _build_hook_block()
-    assert set(block.keys()) == {"Stop", "Notification", "PermissionRequest"}
+    assert set(block.keys()) == {
+        "Stop",
+        "Notification",
+        "PermissionRequest",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        # feat/session-lineage - the only two events that carry the Claude
+        # conversation uuid and how it started. Listed literally rather
+        # than derived from _MANAGED_EVENTS: a test that recomputes the
+        # value under test can never disagree with it.
+        "SessionStart",
+        "SessionEnd",
+    }
 
 
 def test_build_managed_command_carries_marker():

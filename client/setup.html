@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloude Code setup</title>
+<!--
+  The setup / upgrade wizard.
+
+  ONE PAGE, TWO MODES. Which mode you get is decided by the server from
+  measured state (src/core/setup_state.py), never by a query string, so a
+  crafted URL cannot ask for the unauthenticated variant.
+
+  This shell holds no facts. Everything visible arrives from
+  GET /api/v1/setup/state, which is open only while setup is unfinished and
+  behind a TOTP session afterwards. That means the sensitive half of this
+  feature is enforced server-side, where a browser cannot argue with it.
+
+  No build step, no framework, no external requests: the app's CSP is
+  default-src 'self' with script-src 'self', so an inline <script> would be
+  refused. The stylesheet is inline because style-src allows 'unsafe-inline';
+  the script is a separate same-origin file, client/setup.js.
+-->
+<style>
+  :root {
+    --bg: #12131a;
+    --panel: #1b1d27;
+    --panel-edge: #2b2e3d;
+    --ink: #e8e9f0;
+    --ink-dim: #a3a7ba;
+    --accent: #5b9dff;
+    --warn: #e0a33a;
+    --danger: #e05c5c;
+    --ok: #4cbf7a;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 20px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 17px; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; }
+  .lede { color: var(--ink-dim); margin-bottom: 24px; }
+
+  /* Every block a human reads is a .card. The wizard's own output has to be
+     legible as prose, not as a dump of field names and values, which is what
+     the dialog it replaces did. */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 0 0 14px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 16px; }
+  .muted { color: var(--ink-dim); font-size: 14px; }
+
+  .banner {
+    border-left: 4px solid var(--warn);
+    background: #241f14;
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    margin: 0 0 20px;
+  }
+  .banner.ok { border-left-color: var(--ok); background: #14241a; }
+  .banner.danger { border-left-color: var(--danger); background: #241416; }
+
+  .check { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; }
+  .check + .check { border-top: 1px solid var(--panel-edge); }
+  .mark {
+    flex: 0 0 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #12131a;
+  }
+  .mark.pass { background: var(--ok); }
+  .mark.fail { background: var(--danger); }
+  /* "could not evaluate" gets its own colour and its own glyph. It is not a
+     dimmer failure and it is not a quiet pass. */
+  .mark.unknown { background: var(--ink-dim); }
+
+  .values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+  .value-box { background: #14161f; border: 1px solid var(--panel-edge); border-radius: 8px; padding: 10px 12px; }
+  .value-box h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-dim); }
+  pre { margin: 0; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }
+
+  .choices { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  label.choice {
+    flex: 1 1 300px; display: block; cursor: pointer;
+    border: 1px solid var(--panel-edge); border-radius: 8px; padding: 10px 12px;
+    background: #14161f;
+  }
+  label.choice input { margin-right: 8px; }
+  label.choice .consequence { display: block; margin-top: 4px; color: var(--ink-dim); font-size: 13px; }
+
+  button {
+    font: inherit; font-weight: 600; color: #0d1017; background: var(--accent);
+    border: 0; border-radius: 8px; padding: 11px 20px; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--panel-edge); }
+  button[disabled] { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+
+  input[type=text] {
+    font: inherit; background: #14161f; color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 8px; padding: 10px 12px; width: 200px;
+  }
+  code { background: #14161f; border-radius: 4px; padding: 1px 5px; }
+  @media (max-width: 620px) { .values { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="wizard-title">Cloude Code setup</h1>
+  <p class="lede" id="wizard-lede">Checking this instance...</p>
+  <div id="wizard-body"></div>
+</main>
+<script src="/static/setup.js"></script>
+</body>
+</html>

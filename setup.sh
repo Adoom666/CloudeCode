@@ -19,32 +19,11 @@ NC='\033[0m' # No Color
 # Track if any setup is needed
 NEEDS_SETUP=false
 
-# Check cloudflared
-echo ""
-echo "Checking cloudflared..."
-if command -v cloudflared &> /dev/null; then
-    echo -e "${GREEN}✓${NC} cloudflared is installed"
-
-    # Check authentication
-    if [ -f ~/.cloudflared/cert.pem ]; then
-        echo -e "${GREEN}✓${NC} cloudflared is authenticated"
-    else
-        echo -e "${YELLOW}!${NC} cloudflared is not authenticated"
-        echo "  Authenticating now..."
-        cloudflared login
-        if [ -f ~/.cloudflared/cert.pem ]; then
-            echo -e "${GREEN}✓${NC} cloudflared authenticated successfully"
-        else
-            echo -e "${RED}✗${NC} cloudflared authentication failed"
-            NEEDS_SETUP=true
-        fi
-    fi
-else
-    echo -e "${RED}✗${NC} cloudflared is not installed"
-    echo "  Install with: brew install cloudflared"
-    NEEDS_SETUP=true
-    exit 1
-fi
+# Plan v3.2 demolished the Cloudflare tunnel system. What stood here was a
+# hard gate: no cloudflared binary meant `exit 1`, so setup refused to run
+# at all on a machine with no use for a feature this app no longer has. It
+# also ran `cloudflared login`, an interactive browser flow, to authorise a
+# tunnel nothing would ever create.
 
 # Check claude
 echo ""
@@ -140,12 +119,17 @@ ENV_COMPLETE=false
 if [ -f ".env" ]; then
     ENV_EXISTS=true
 
-    # Check if all required values are present
-    if grep -q "CLOUDFLARE_API_TOKEN=.\+" .env && \
-       grep -q "CLOUDFLARE_ZONE_ID=.\+" .env && \
-       grep -q "CLOUDFLARE_DOMAIN=.\+" .env && \
-       grep -q "TOTP_SECRET=.\+" .env && \
-       grep -q "JWT_SECRET=.\+" .env; then
+    # Check if all required values are present.
+    #
+    # The three CLOUDFLARE_* checks that used to be here were removed: the
+    # Cloudflare tunnel system went away in Plan v3.2 and .env.example has
+    # not carried those keys since, so no install could satisfy them and
+    # ENV_COMPLETE was permanently false. That dragged an already-configured
+    # user back through setup_auth.py further down this script - the same
+    # dead check, and the same consequence, as the one in
+    # macOS/server-manager.js checkConfiguration().
+    if grep -q "^TOTP_SECRET=.\+" .env && \
+       grep -q "^JWT_SECRET=.\+" .env; then
         ENV_COMPLETE=true
     fi
 fi
@@ -189,10 +173,8 @@ echo "========================================"
 echo "Interactive Configuration Setup"
 echo "========================================"
 echo ""
-echo "Let's configure Cloude Code. You'll need:"
-echo "1. A Cloudflare account and domain"
-echo "2. Cloudflare API token (with Zone.DNS and Tunnel permissions)"
-echo "3. Your Cloudflare Zone ID"
+echo "Let's configure Cloude Code. Nothing external is required - this writes"
+echo "local paths and an authentication secret into .env."
 echo ""
 echo "Press Enter to continue..."
 read -r
@@ -204,42 +186,11 @@ if [ "$ENV_EXISTS" = false ]; then
     echo ""
 fi
 
-# Prompt for Cloudflare domain
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Cloudflare Configuration"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-# Get current values if they exist
-CURRENT_DOMAIN=""
-CURRENT_TOKEN=""
-CURRENT_ZONE=""
-CURRENT_TUNNEL_NAME=""
-
-if [ -f ".env" ]; then
-    CURRENT_DOMAIN=$(grep "CLOUDFLARE_DOMAIN=" .env | cut -d'=' -f2 || echo "")
-    CURRENT_TOKEN=$(grep "CLOUDFLARE_API_TOKEN=" .env | cut -d'=' -f2 || echo "")
-    CURRENT_ZONE=$(grep "CLOUDFLARE_ZONE_ID=" .env | cut -d'=' -f2 || echo "")
-    CURRENT_TUNNEL_NAME=$(grep "CLOUDFLARE_TUNNEL_NAME=" .env | cut -d'=' -f2 || echo "")
-fi
-
-# Use current values as defaults if they exist
-DEFAULT_DOMAIN="${CURRENT_DOMAIN:-cloude.example.com}"
-DEFAULT_TUNNEL_NAME="${CURRENT_TUNNEL_NAME:-cloude-controller}"
-
-prompt_with_default "Enter your Cloudflare domain (e.g., claude.yourdomain.com):" "$DEFAULT_DOMAIN" CF_DOMAIN
-
-echo ""
-echo "To get your Cloudflare API token and Zone ID:"
-echo "  1. API Token: https://dash.cloudflare.com/profile/api-tokens"
-echo "     Create a token with 'Zone.DNS Edit' and 'Cloudflare Tunnel Edit' permissions"
-echo "  2. Zone ID: Found on your domain's overview page in Cloudflare dashboard"
-echo ""
-
-prompt_with_default "Enter your Cloudflare API token:" "${CURRENT_TOKEN}" CF_TOKEN
-prompt_with_default "Enter your Cloudflare Zone ID:" "${CURRENT_ZONE}" CF_ZONE
-prompt_with_default "Enter tunnel name:" "$DEFAULT_TUNNEL_NAME" CF_TUNNEL_NAME
+# The Cloudflare block that stood here asked for a domain, an API token, a
+# zone ID and a tunnel name. All four were already dead: .env.example carries
+# no CLOUDFLARE_* keys, so the sed lines that were supposed to store them
+# matched nothing and wrote nothing. Setup collected an API token from the
+# user and silently discarded it.
 
 # Prompt for optional settings
 echo ""
@@ -278,10 +229,6 @@ echo "Writing configuration to .env..."
 cp .env.example .env.tmp
 
 # Update values
-sed -i '' "s|CLOUDFLARE_API_TOKEN=.*|CLOUDFLARE_API_TOKEN=$CF_TOKEN|" .env.tmp
-sed -i '' "s|CLOUDFLARE_ZONE_ID=.*|CLOUDFLARE_ZONE_ID=$CF_ZONE|" .env.tmp
-sed -i '' "s|CLOUDFLARE_DOMAIN=.*|CLOUDFLARE_DOMAIN=$CF_DOMAIN|" .env.tmp
-sed -i '' "s|CLOUDFLARE_TUNNEL_NAME=.*|CLOUDFLARE_TUNNEL_NAME=$CF_TUNNEL_NAME|" .env.tmp
 sed -i '' "s|DEFAULT_WORKING_DIR=.*|DEFAULT_WORKING_DIR=$WORKING_DIR|" .env.tmp
 sed -i '' "s|LOG_DIRECTORY=.*|LOG_DIRECTORY=$LOG_DIR|" .env.tmp
 
@@ -329,8 +276,6 @@ echo -e "${GREEN}✓ Setup complete!${NC}"
 echo "========================================"
 echo ""
 echo "Configuration summary:"
-echo "  Domain: $CF_DOMAIN"
-echo "  Tunnel: $CF_TUNNEL_NAME"
 echo "  Projects: $EXPANDED_WORKING_DIR"
 echo "  Logs: $EXPANDED_LOG_DIR"
 echo ""

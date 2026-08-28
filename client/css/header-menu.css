@@ -1,0 +1,149 @@
+/* Header overflow menu
+ *
+ * Holds the three rarely-used app controls (app sound, logout, settings)
+ * at EVERY width. It used to be a phone-only fold of the whole six-icon
+ * cluster; it is now a permanent overflow, so the trigger is always
+ * visible and the file editor stays inline beside it. See
+ * client/js/header-menu.js for why the controls are re-parented rather
+ * than mirrored, and for what is deliberately kept out.
+ *
+ * Loaded after styles.css so the theme custom properties it uses
+ * (--color-bg-page, --color-accent, --radius-md, ...) are already defined,
+ * same contract as toast.css / session-sidebar.css.
+ */
+
+/* Anchor for the absolutely positioned panel. */
+.controls {
+    position: relative;
+}
+
+/* ALWAYS VISIBLE. There is no width at which these three controls come
+ * back out inline: the menu is an overflow now, not a responsive fold,
+ * and a control that only exists below 768px is a control desktop users
+ * never learn. flex-shrink:0 so a long session title elides instead of
+ * squeezing the trigger. */
+.header-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.header-menu-toggle > svg {
+    color: var(--color-accent);
+}
+
+/* The panel itself. Right-aligned under the trigger and pulled toward the
+ * thumb: on a phone the top-right corner is the worst reach on the screen,
+ * so the PANEL drops down the right edge with generous 44px rows rather
+ * than making the user stretch for six separate corner targets. */
+.header-menu-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 1100;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 200px;
+    padding: 6px;
+    background: var(--color-bg-page);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    /* Never let the menu run off the right edge or under the notch. */
+    max-width: calc(100vw - 24px);
+    /* MEASURED OVERSHOOT. `100vh` is the LARGE viewport, and this app can
+     * never collapse the iOS toolbar to earn it: `body` is
+     * `overflow: hidden; height: 100dvh`, so the document never scrolls
+     * and Safari has no reason to shrink its chrome. On a 390x844 iPhone
+     * that made `100vh` 739px against a 699px visible viewport, so this
+     * cap resolved to 643px with only 641px of real space below the 58px
+     * header - the menu could overflow the screen by ~2px, permanently.
+     * `dvh` is the honest unit here precisely BECAUSE the toolbar cannot
+     * collapse: it is pinned at the small viewport, so there is no jitter
+     * to trade away. The `vh` line above it is the fallback for engines
+     * without dynamic viewport units, which drop the second declaration. */
+    max-height: calc(100vh - 96px);
+    max-height: calc(100dvh - 96px);
+    overflow-y: auto;
+}
+
+.header-menu-panel--open {
+    display: flex;
+}
+
+/* Folded controls become full-width rows: icon left, label right. Width
+ * and height are overridden off the 36/40/44px square the base `button`
+ * rule gives header icons - inside the panel they are list rows. */
+.header-menu-panel button {
+    display: flex;
+    align-items: center;
+    /* The base `button` rule centres its single glyph. In a list that
+     * pushes every icon to a different x depending on label width, so
+     * rows are explicitly left-aligned here. */
+    justify-content: flex-start;
+    gap: 12px;
+    width: 100%;
+    height: auto;
+    min-height: 44px;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    text-align: left;
+    /* The base button rule uses transform on hover; inside a list that
+     * reads as a wobble, so rows highlight instead. */
+    transform: none;
+}
+
+.header-menu-panel button:hover,
+.header-menu-panel button:focus-visible {
+    background: var(--color-accent-bg-soft);
+    transform: none;
+}
+
+.header-menu-panel button > svg {
+    flex-shrink: 0;
+}
+
+/* Label text. Taken from the button's own `title`, which is already the
+ * lowercase house copy ("home", "detach session", "file editor") and is
+ * kept current by whatever code owns each button - the audio toggle swaps
+ * its title when it flips state, and this label follows for free.
+ *
+ * This deliberately overrides `button[data-tooltip]::after` from
+ * styles.css: inside the panel the text is a permanent row label, not a
+ * hover tooltip, so none of the tooltip's absolute positioning applies. */
+.header-menu-panel button[data-tooltip]::after,
+.header-menu-panel button::after {
+    content: attr(title);
+    position: static;
+    display: inline;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: lowercase;
+    font-size: 0.9rem;
+    color: var(--color-fg-primary, var(--color-accent));
+    pointer-events: none;
+}
+
+/* The trigger has no label row of its own. */
+.header-menu-toggle::after {
+    content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .header-menu-panel button {
+        transition: none;
+    }
+}

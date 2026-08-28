@@ -1,9 +1,14 @@
-"""Tests for the browser-paste image upload endpoint.
+"""Tests for the IMAGE half of the browser-paste upload endpoint.
 
-Covers POST /api/v1/sessions/upload-image and the destroy-session
-upload-bucket cleanup. The validation core (validate_image /
-save_to_session_dir) is exercised through the route so the wiring
-contract is pinned end-to-end.
+Covers POST /api/v1/sessions/upload-image (the retained alias) and the
+destroy-session upload-bucket cleanup. The validation core
+(validate_upload / save_upload_to_session_dir) is exercised through the
+route so the wiring contract is pinned end-to-end.
+
+The endpoint was widened to accept ANY file on 2026-08-16; the
+arbitrary-file contract, filename sanitisation, traversal and
+no-silent-overwrite cases live in tests/test_upload_file.py. What THIS
+file pins is that widening it did not loosen the image contract.
 
 Pillow generates real bytes for png / jpeg / webp fixtures so the
 magic-byte cross-check inside validate_image() runs against authentic
@@ -45,6 +50,7 @@ from src.models import Session, SessionStatus  # noqa: E402
 
 JWT_SECRET = "test-secret-for-upload-image"
 MAX_SIZE_MB = 10
+MAX_FILE_SIZE_MB = 50
 
 
 # --------------------------------------------------------------------------- #
@@ -57,6 +63,7 @@ def _make_fake_auth_config():
         ttl_seconds=86400,
         sweep_interval_seconds=3600,
         max_size_mb=MAX_SIZE_MB,
+        max_file_size_mb=MAX_FILE_SIZE_MB,
     )
     return SimpleNamespace(
         jwt_secret=JWT_SECRET,
@@ -65,7 +72,6 @@ def _make_fake_auth_config():
         refresh_token_ttl_seconds=604800,
         refresh_grace_seconds=10,
         totp_secret="X" * 32,
-        projects=[],
         uploads=uploads,
     )
 
@@ -214,11 +220,28 @@ def test_upload_valid_webp_accepted(client, auth_headers, tmp_path):
     assert target.suffix == ".webp"
 
 
-def test_upload_bad_extension_rejected(client, auth_headers):
+def test_upload_non_image_extension_now_accepted(client, auth_headers, tmp_path):
+    """A non-image extension is ACCEPTED, and lands with its name intact.
+
+    This assertion used to be the exact opposite (400, "extension"). The
+    feature was deliberately widened on 2026-08-16 from images to any
+    file, so the inversion is the point of the test, not a regression.
+    """
     files = {"file": ("notes.txt", b"not an image", "text/plain")}
     r = client.post("/api/v1/sessions/upload-image", files=files, headers=auth_headers)
+    assert r.status_code == 201, r.text
+    target = Path(r.json()["path"])
+    assert target.exists()
+    assert target.suffix == ".txt"
+    assert target.name.endswith("-notes.txt")
+    assert target.read_bytes() == b"not an image"
+
+
+def test_upload_image_extension_still_magic_checked(client, auth_headers):
+    """Widening did not loosen the image contract: a fake .png is still 400."""
+    files = {"file": ("fake.png", b"definitely not a png", "image/png")}
+    r = client.post("/api/v1/sessions/upload-image", files=files, headers=auth_headers)
     assert r.status_code == 400, r.text
-    assert "extension" in r.json()["detail"].lower()
 
 
 def test_upload_magic_byte_mismatch_rejected(client, auth_headers):
@@ -232,7 +255,7 @@ def test_upload_magic_byte_mismatch_rejected(client, auth_headers):
 
 
 def test_upload_oversized_rejected(client, auth_headers):
-    """Bytes larger than max_size_mb cap → 400 before any validation."""
+    """Image bytes larger than the IMAGE cap → 400 before any validation."""
     oversized = b"\x89PNG\r\n\x1a\n" + b"A" * (MAX_SIZE_MB * 1024 * 1024 + 1)
     files = {"file": ("big.png", oversized, "image/png")}
     r = client.post("/api/v1/sessions/upload-image", files=files, headers=auth_headers)

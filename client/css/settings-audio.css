@@ -1,0 +1,94 @@
+/*
+ * settings-audio.css - the music volume row in the settings panel's
+ * general tab (client/js/settings-audio.js).
+ *
+ * TOUCH IS THE WHOLE PROBLEM HERE. A native range input is about 16px
+ * tall with a thumb to match, which on a 390px phone held one-handed is
+ * a target you miss and then drag the modal instead. So:
+ *   - the row is 44px tall (Apple HIG / WCAG 2.5.5 minimum) and the input
+ *     fills it, so the whole strip is live, not just the 4px track;
+ *   - the thumb is 28px, well clear of the 24px CSS-pixel floor, and the
+ *     44px row height supplies the rest of the slop above and below;
+ *   - `touch-action: pan-y` keeps a vertical flick scrolling the modal
+ *     while a horizontal drag moves the slider, instead of the browser
+ *     guessing.
+ *
+ * The readout is tabular-width so the row does not twitch sideways as the
+ * number changes while dragging.
+ *
+ * Loads after styles.css, which owns .settings-field and the theme tokens
+ * these colours come from.
+ */
+
+.settings-volume-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    /* The touch minimum. The input below stretches to fill it. */
+    min-height: 44px;
+}
+
+.settings-volume-slider {
+    flex: 1 1 auto;
+    /* Full-height hit area, not just the painted track. */
+    height: 44px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    /* Vertical flicks scroll the modal; horizontal drags move the slider. */
+    touch-action: pan-y;
+    cursor: pointer;
+}
+
+.settings-volume-slider:focus-visible {
+    outline: 2px solid var(--color-accent, #d77757);
+    outline-offset: 2px;
+}
+
+/* Track. WebKit and Firefox need separate rules; neither honours a
+ * shorthand, and a missing one renders the platform default at the wrong
+ * height inside our 44px row. */
+.settings-volume-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--color-border, #3e3e42);
+}
+
+.settings-volume-slider::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--color-border, #3e3e42);
+}
+
+/* Thumb. 28px, centred in the 6px track: (6 - 28) / 2 = -11px. */
+.settings-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    margin-top: -11px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-accent, #d77757);
+}
+
+.settings-volume-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-accent, #d77757);
+}
+
+.settings-volume-value {
+    flex: 0 0 auto;
+    /* Fits "100%" without the row reflowing as the number changes. */
+    min-width: 4ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    color: var(--color-fg-muted, #858585);
+}

@@ -1,0 +1,204 @@
+/* Common slash-command chips
+ *
+ * The favourites row at the top of the slash-commands modal. Each chip is
+ * now two lines - command name, then a short description - instead of a
+ * bare name whose meaning lived in a `title` tooltip that a phone can
+ * never show.
+ *
+ * The descriptions are kept short server-side (see
+ * src/core/slash_command_labels.py, MAX_DESCRIPTION_LENGTH) precisely so
+ * this row does not grow: two lines per chip, three chips per row on
+ * desktop, two on a phone. Anything longer would push the "all commands"
+ * list below the fold, which is the failure this change exists to avoid.
+ *
+ * Loaded after styles.css, which owns the base .command-button rule.
+ */
+
+/* THE CHIP ROW IS THE USER'S FAVORITES, not a hand-picked list.
+ *
+ * Each chip is a command button PLUS its own star, so unstarring happens
+ * where the chip is rather than by hunting the command down in the list
+ * below. The star is absolutely positioned so the chip's own two-line
+ * layout is untouched; the button reserves room for it on the right
+ * instead of flowing around it. */
+.common-commands-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.common-commands-note {
+    color: var(--color-fg-faint);
+    font-size: 0.7rem;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.command-chip {
+    position: relative;
+    display: flex;
+    width: 31%;
+    /* A flex child defaults to min-width: auto and refuses to shrink
+     * below its content, which would let a long command name push the
+     * grid past the modal. Same trap as .command-item in styles.css. */
+    min-width: 0;
+}
+
+.command-button {
+    /* styles.css centres a single line with `align-items: center` on a
+     * row flex. Two stacked lines need a column. */
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.25;
+    /* The base rule's 45px min-height plus 12px vertical padding leaves a
+     * 21px content box, which is shorter than two lines (about 30px), so
+     * the description spilled outside the chip and read as missing.
+     * Height grows with the content instead. */
+    min-height: 54px;
+    height: auto;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    /* Inside a chip the button fills the chip, which is what carries the
+     * grid width now. */
+    width: 100%;
+    min-width: 0;
+    /* Room for the star, which overlays the top-right corner. Without it
+     * a long command name renders underneath the star. */
+    padding-right: 40px;
+    /* NO PILL. The settings screen was flattened to square corners and
+     * this row is the same language. 12px on a 54px chip was not an oval,
+     * but it was the only rounded surface left in the modal. */
+    border-radius: var(--radius-md);
+}
+
+.command-button-name {
+    color: var(--color-accent);
+    font-weight: 600;
+}
+
+.command-button-desc {
+    /* Muted and a size down so the command name stays the thing you scan
+     * for; the description is support text, not a competing label. */
+    color: var(--color-fg-faint);
+    font-size: 0.68rem;
+    font-family: var(--font-sans, inherit);
+    /* One line, ellipsized. A wrapping description is exactly the "takes
+     * up too much room" symptom; truncation keeps the grid rectangular
+     * and the full text is still on the chip's title tooltip. */
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.common-commands-empty {
+    color: var(--color-fg-faint);
+    padding: 12px;
+    text-align: center;
+}
+
+/* THE STAR.
+ *
+ * EVERY ONE of these declarations is load-bearing against the bare
+ * element rule near the top of styles.css:
+ *
+ *     button { width: var(--control-size); height: var(--control-size);
+ *              border-radius: var(--radius-full); padding: 0;
+ *              background: ...; border: ...; }
+ *
+ * which exists for the round header icon buttons and reaches every button
+ * that does not opt out property by property. A class only beats an
+ * element rule for the properties it DECLARES. Nine user-visible bugs in
+ * this repo have come from that rule, including a settings tab strip
+ * rendered as a row of ellipses. So: width, height, border-radius,
+ * padding, background, border and display are all stated here, and
+ * border-radius is 0 because settings was just flattened and this has to
+ * match.
+ *
+ * TOUCH: 44px square is the whole point of the affordance existing rather
+ * than a hover-only control - this app is driven from a phone. The icon
+ * inside is 18px; the other 26px is hit area, which is why the box is
+ * sized here and not by the glyph.
+ *
+ * NOT the `more` control. `more` is a WORD in normal flow at the bottom
+ * left of a row; the star is an ICON pinned to the top right. Different
+ * shape, different place. */
+.command-star {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--color-fg-faint);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    /* Above the chip/row it overlays, so the press lands on the star and
+     * not on the command underneath it. */
+    z-index: 1;
+}
+
+.command-star--on {
+    color: var(--color-accent);
+}
+
+.command-star:hover,
+.command-star:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    outline: none;
+}
+
+.command-star:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* The star on a full-list row. Same control, same box; the row is not
+ * position: relative by default, so it is made so here rather than in
+ * styles.css, where .command-item's own rule is shared with the layout
+ * fixes documented above it. */
+.command-item {
+    position: relative;
+    /* Reserve the star's column so a long command name never runs
+     * underneath it. */
+    padding-right: 52px;
+}
+
+/* Phone: two chips per row. Three 31% columns plus a description turns
+ * into three ellipsized stubs, which carries less information than the
+ * tooltip it replaced. */
+/* Phone: two chips per row, and give the description the horizontal room
+ * it needs. Measured at 375px CSS width, which is the narrowest phone
+ * this is expected to run on: at the base 0.68rem with the desktop 10px
+ * side padding, a 20-character description ellipsized at about 14 and
+ * "undo to a checkpoint" rendered as "undo to a chec...", which carries
+ * less than the tooltip it replaced. */
+@media (max-width: 600px) {
+    /* The width moved to the chip: the button fills it, and the chip is
+     * what the grid lays out now that a star shares the same box. */
+    .command-chip {
+        width: 47%;
+    }
+
+    .command-button {
+        padding-left: 6px;
+        /* Still room for the 44px star; only the left side gets tightened.
+         * Trimming this too would put the glyph on top of the command
+         * name, which is the "carries less than the tooltip it replaced"
+         * failure this file already documents. */
+        padding-right: 40px;
+    }
+
+    .command-button-desc {
+        font-size: 0.6rem;
+        letter-spacing: -0.01em;
+    }
+}

@@ -4,7 +4,17 @@ uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9
 
 # Data Validation
-pydantic>=2.10.0
+# UPPER BOUND IS DELIBERATE, AND IT IS INSURANCE, NOT A MIGRATION.
+# src/models.py still carries 10 pydantic-2 deprecated sites: 5 `class
+# Config` blocks and 5 `json_encoders`. Inside 2.x they emit warnings and
+# keep working. Pydantic 3.0 removes both, so an UNBOUNDED requirement
+# would let the next fresh install resolve to 3.x and turn all 10 into
+# hard ImportErrors at startup, with no warning release in between - a
+# break that arrives on a day nobody here changed anything.
+# The pin buys time; it does not pay the debt. The real fix is
+# ConfigDict plus field serializers, which is its own job. Do not raise
+# this ceiling until that migration has landed and been measured.
+pydantic>=2.10.0,<3
 pydantic-settings>=2.6.0
 
 # Authentication
@@ -26,8 +36,10 @@ structlog==23.2.0
 # HTTP Client (for health checks)
 httpx==0.25.2
 
-# Cloudflare API
-cloudflare>=2.11.0,<3.0
+# Stale. Nothing in this codebase imports yaml; measured 2026-08-26 by
+# scanning src, tests, scripts, packaging and verify for an `import yaml`.
+# It was pulled in as a cloudflare 2.x dependency and is left declared
+# only so its removal is its own change with its own measurement.
 pyyaml>=6.0
 
 # Testing

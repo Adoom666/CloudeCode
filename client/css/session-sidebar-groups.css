@@ -1,0 +1,464 @@
+/* =====================================================================
+ * Session sidebar GROUPS, the HEADING CLUSTER, and the INLINE RENAME
+ * editor. Three things in one file because they are one round of work
+ * on one strip of UI, and splitting them would put three 60-line files
+ * where the shared context is the thing worth keeping.
+ *
+ * WHY THIS FILE EXISTS AT ALL, recorded because the gap was invisible:
+ * client/index.html linked it and every class below was already being
+ * EMITTED by the JS, so every DOM assertion in the suite passed while
+ * the browser rendered an unstyled pile. A class with no rule is not a
+ * missing style, it is a missing FEATURE that tests reading DOM text
+ * cannot see. Same family as the `~~claude` defect this round removed.
+ *
+ * Load order: AFTER session-sidebar.css and session-sidebar-density.css.
+ * It overrides the header layout in the first and depends on the row
+ * metrics in the second.
+ *
+ * EVERY COLOUR HERE IS AN EXISTING THEME TOKEN. Nothing new is invented
+ * and no literal colour appears below, so a theme that redefines its
+ * palette redefines this strip with it. Radius uses the same tokens,
+ * which is why the `terminal` theme renders these square: it zeroes all
+ * five radius tokens on purpose, and that is correct there.
+ * ===================================================================== */
+
+/* ---- The heading cluster --------------------------------------------
+ * "we need to push it closer to the title conversations we will probably
+ * add more icons later on."
+ *
+ * THE POINT OF THIS BLOCK IS THAT THE NEXT CONTROL IS ONE ELEMENT, NOT A
+ * LAYOUT CHANGE. The density button used to carry `margin-left: auto`
+ * and float to the far right, landing next to the panel's pin and close
+ * buttons, so it read as panel chrome rather than as a control over the
+ * list. Moving it by hand-editing that one `auto` is what makes the next
+ * control another hand-edit.
+ *
+ * Instead there are two clusters with different jobs. `.heading` holds
+ * the title and the controls that act on the LIST; `.actions` holds the
+ * controls that act on the BAR. The gap between them is the `auto`, and
+ * it lives on the container split rather than on any single button, so
+ * adding a third list control is appending a sibling inside `.tools`
+ * and nothing else moves. */
+
+.session-sidebar-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* The title gives way before the controls do. Without this the flex
+     * default of min-width:auto lets a long title push the tools out of
+     * the panel entirely rather than ellipsing itself. */
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.session-sidebar-heading .session-sidebar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The control cluster. `gap` is the only spacing between controls, so a
+ * new sibling is spaced correctly by existing it. */
+.session-sidebar-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* Panel chrome, pushed to the far edge. This is where the `auto` lives
+ * now: on the cluster boundary, not on a button. */
+.session-sidebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* The density control sits in the tools cluster now, so its own
+ * `margin-left: auto` in session-sidebar-density.css would fight the
+ * cluster and shove it back to the right edge. Neutralised here rather
+ * than deleted there so the two files stay independently readable. */
+.session-sidebar-tools .session-sidebar-density-wrap {
+    margin-left: 0;
+}
+
+/* ---- Section headers -------------------------------------------------
+ * Headers are ROWS of the list, not captions floating above it, which is
+ * the Claude Code sidebar shape the user pointed at. They read as
+ * structure: muted, smaller, letter-spaced, and never competing with a
+ * session name for attention. */
+
+.session-sidebar-group {
+    display: block;
+}
+
+/* ---- The header ROW: the fold button plus a user group's menu --------
+ *
+ * A user group's header is TWO controls, not one, so they cannot be a
+ * single button: the fold toggle owns the whole label and count (a big,
+ * forgiving target), and the menu sits at the end. `pinned` and `other`
+ * emit no menu at all - see session-sidebar-groups.js - so this row is
+ * one child wide for them and the flex layout collapses to exactly the
+ * old geometry. That is deliberate: the pinned header must not shift
+ * when user groups appear beside it.
+ */
+.session-sidebar-group__headerrow {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+/* THE MENU IS SYMMETRIC AND INSET, never an edge bar. scripts/
+ * verify_sidebar_row_edges.py asserts that a sidebar row's left three
+ * pixels match its right three, and a control that painted a rail on
+ * either edge would break that property for every row beneath it. This
+ * one lives inside the header's own padding box. */
+.session-sidebar-group__menu {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    min-height: 22px;
+    margin: 0 6px 0 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.9em;
+    line-height: 1;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.session-sidebar-group__menu:hover,
+.session-sidebar-group__menu:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-group__menu:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: -1px;
+}
+
+.session-sidebar-group__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    /* The 8px left inset lines the chevron up with the row grips below
+     * it, so the header reads as the same column of content. */
+    padding: 4px 10px 4px 8px;
+    margin: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.72em;
+    font-weight: bold;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+    /* DECLARED, not emergent. The header's height is part of the list
+     * geometry the density contract is measured against, so it is stated
+     * rather than left to whatever the chevron happens to be. */
+    min-height: 22px;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.session-sidebar-group__header:hover,
+.session-sidebar-group__header:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-group__header:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: -1px;
+}
+
+/* The chevron points right when shut and down when open. It is driven
+ * off `aria-expanded`, which is the SAME attribute a screen reader
+ * reads, so the glyph cannot disagree with the announced state. Keying
+ * it off a separate class is how those two drift apart. */
+.session-sidebar-group__chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    transition: transform 120ms ease;
+}
+
+.session-sidebar-group__header[aria-expanded="true"] .session-sidebar-group__chevron {
+    transform: rotate(90deg);
+}
+
+.session-sidebar-group__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A folded section still says how much it hides. The count is the only
+ * thing standing between "collapsed" and "empty" once the rows are gone,
+ * and those must not look the same. */
+.session-sidebar-group__count {
+    margin-left: auto;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-overlay-soft);
+    color: var(--color-fg-faint);
+    font-size: 0.9em;
+    font-weight: normal;
+    letter-spacing: 0;
+    flex-shrink: 0;
+}
+
+.session-sidebar-group__body {
+    display: block;
+}
+
+/* A COLLAPSED BODY IS EMPTY, NOT HIDDEN. The element stays so
+ * `aria-controls` resolves and a drag still has a drop target, but the
+ * rows are not in it: client/js/session-sidebar-reorder.js reads the
+ * visible order off the DOM and would happily count rows nobody can see.
+ * This rule only removes the leftover box. */
+.session-sidebar-group[data-collapsed="1"] .session-sidebar-group__body {
+    min-height: 0;
+}
+
+/* The pinned band gets a hairline under it so the seam between the two
+ * groups is visible even when both are open and the labels have scrolled
+ * past. Bottom border on the group, not a top border on the next header,
+ * so it disappears with the group rather than orphaning itself. */
+.session-sidebar-group[data-group="pinned"] {
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* WHILE A DRAG IS IN FLIGHT the empty pinned group is drawn as a drop
+ * target, and an empty target has to be big enough to hit. Steady state
+ * never sees this rule because the empty group is not rendered at all
+ * outside a drag. */
+.session-sidebar-list--dragging .session-sidebar-group[data-group="pinned"][data-count="0"]
+.session-sidebar-group__body {
+    min-height: 28px;
+    border: 1px dashed var(--color-accent-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-bg-faint);
+}
+
+/* ---- Inline rename ---------------------------------------------------
+ * The editor replaces the name IN PLACE and must not resize the row: a
+ * row that grows when you double-click it shoves every row below it
+ * down, and the pointer is already moving. Matching the name's own type
+ * and box is what keeps the row height identical between the two
+ * states. */
+
+.session-sidebar-rename-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.session-sidebar-rename-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0 4px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    /* `inherit` on all three is the whole trick: the input is the same
+     * type as the label it replaced, so the row does not reflow. */
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.session-sidebar-rename-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+/* A REJECTED RENAME SAYS SO AND KEEPS THE TEXT. This is the only place
+ * the reason is shown, and it is shown next to the input the user is
+ * about to correct rather than in a toast that has already gone. */
+.session-sidebar-rename-error {
+    color: var(--color-danger);
+    font-size: 0.7em;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+/* ---- The group chip on a row, and the "new group" button -------------
+ *
+ * THE CHIP IS ONE CONTROL DOING TWO JOBS. It names the group a row is
+ * filed in - which is the only way a PINNED row can show its filing,
+ * since a pinned row is drawn in the pinned band rather than under its
+ * group's header - and it is also the button that opens the picker. That
+ * makes the non-drag route permanently visible instead of hidden behind
+ * a hover, which is what makes it usable on a phone, where hover does
+ * not exist.
+ *
+ * IT PAINTS NO EDGE. scripts/verify_sidebar_row_edges.py asserts that
+ * the three pixels in from a row's LEFT edge match the three in from its
+ * RIGHT, and it fails on a left bar from any stylesheet. This chip sits
+ * inline in the row's main flex line, well inside both edges, with no
+ * ::before and no inset box-shadow - so that property is untouched.
+ */
+.session-sidebar-row-group {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 88px;
+    display: inline-flex;
+    align-items: center;
+    margin: 0 2px;
+    padding: 1px 6px;
+    background: var(--color-accent-bg-soft);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-pill, 999px);
+    color: var(--color-accent);
+    font-family: inherit;
+    font-size: 0.66em;
+    line-height: 1.5;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+/* An UNGROUPED row still shows the control, muted, reading "+ group".
+ * A control that only appears once you have used it cannot be
+ * discovered - and discovery is the entire job of the non-drag route. */
+.session-sidebar-row-group--none {
+    background: transparent;
+    border-color: var(--color-border-subtle);
+    color: var(--color-fg-subtle);
+}
+
+.session-sidebar-row-group__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-sidebar-row-group:hover,
+.session-sidebar-row-group:focus-visible {
+    background: var(--color-accent-bg-soft);
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    outline: none;
+}
+
+.session-sidebar-row-group:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: 1px;
+}
+
+/* The compact density drops the chip's TEXT but keeps its box, so the
+ * row still carries the control and still lines up with its neighbours.
+ * Dropping the control entirely at compact would make the non-drag route
+ * disappear at exactly the density a small screen defaults to. */
+.session-sidebar-list[data-density="compact"] .session-sidebar-row-group {
+    max-width: 20px;
+    padding: 1px 4px;
+}
+
+.session-sidebar-list[data-density="compact"] .session-sidebar-row-group__label {
+    max-width: 12px;
+}
+
+.session-sidebar-group-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.9em;
+    line-height: 1;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-group-add:hover,
+.session-sidebar-group-add:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+/* ---- The picker / header menu ----------------------------------------
+ *
+ * A real menu of real buttons, positioned fixed so it escapes the list's
+ * own overflow clipping - a menu that opened inside a scrolling list
+ * would be cut off by it at exactly the rows nearest the bottom.
+ */
+.session-sidebar-group-menu {
+    z-index: 1000;
+    min-width: 160px;
+    max-width: 240px;
+    padding: 4px;
+    background: var(--color-bg-raised, var(--color-bg));
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.session-sidebar-group-menu__item {
+    display: block;
+    width: 100%;
+    padding: 5px 8px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    font-family: inherit;
+    font-size: 0.8em;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.session-sidebar-group-menu__item:hover,
+.session-sidebar-group-menu__item:focus-visible {
+    background: var(--color-accent-bg-soft);
+    color: var(--color-accent);
+    outline: none;
+}
+
+/* The CURRENT group is marked with a glyph and not with colour alone.
+ * A state carried only by a hue is a state a colourblind user does not
+ * have, and this menu is the one place the filing is stated in full. */
+.session-sidebar-group-menu__item--current::before {
+    content: "\2713\00a0";
+    color: var(--color-accent);
+}

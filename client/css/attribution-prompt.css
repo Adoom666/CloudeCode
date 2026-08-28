@@ -1,0 +1,174 @@
+/* ---------------------------------------------------------------------
+ * STAGE C: the session-attribution prompt.
+ *
+ * The card the home screen shows once for the tmux sessions the evidence
+ * ladder could not attribute. Every colour below is read from an existing
+ * theme token; this file introduces no palette of its own.
+ *
+ * WHY EVERY ELEMENT HERE CARRIES A CLASS, INCLUDING THE BUTTONS. This
+ * project has shipped a button that fell through to the bare user-agent
+ * stylesheet and rendered as an unstyled grey square, while the test that
+ * asserted "the button exists" passed - the element WAS in the DOM. A
+ * classless control in this card would do the same thing, and the pixel
+ * verifier (scripts/verify_attribution_prompt.py) measures the computed
+ * background and the painted box rather than the markup, precisely so
+ * that failure is caught by a test rather than by the user.
+ *
+ * The healthy case draws NOTHING: renderAttributionPrompt() empties the
+ * slot when there is nothing to ask, so the card has no idle cost. */
+
+.attribution-prompt-slot:empty {
+    display: none;
+}
+
+.attribution-prompt {
+    position: relative;
+    padding: 12px 14px;
+    margin: 0 0 12px 0;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid var(--color-warning-border, var(--color-border));
+    background: var(--color-warning-bg, var(--color-bg-elevated));
+    color: var(--color-text-primary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+/* CANNOT DETERMINE reads differently from a question, because it is not
+ * one: nobody is being asked anything, we are saying we could not look. */
+.attribution-prompt--unknown {
+    border-color: var(--color-border);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+}
+
+.attribution-prompt__notice {
+    margin: 0 26px 10px 0;
+    color: var(--color-text-primary);
+}
+
+.attribution-prompt__list {
+    list-style: none;
+    margin: 0 0 12px 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.attribution-prompt__row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--color-bg-base, transparent);
+    border: 1px solid var(--color-border);
+}
+
+.attribution-prompt__pick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+/* The tick boxes only exist once the user has asked to choose
+ * individually. Hidden by default rather than absent, so the row's
+ * geometry does not jump when they appear. */
+.attribution-prompt__check {
+    display: none;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    accent-color: var(--color-accent, currentColor);
+}
+
+.attribution-prompt--picking .attribution-prompt__check {
+    display: inline-block;
+}
+
+.attribution-prompt__name {
+    font-family: var(--font-mono, monospace);
+    font-weight: 600;
+    color: var(--color-text-primary);
+    word-break: break-all;
+}
+
+.attribution-prompt__meta,
+.attribution-prompt__why {
+    color: var(--color-text-secondary);
+    font-size: 0.72rem;
+}
+
+/* HINTS ARE WORDS, NOT A SCORE. Rendered as their own indented lines so
+ * each one reads as a separate thing that was observed. */
+.attribution-prompt__hints {
+    list-style: disc;
+    margin: 4px 0 0 0;
+    padding-left: 18px;
+    color: var(--color-text-secondary);
+    font-size: 0.72rem;
+}
+
+.attribution-prompt__hint {
+    margin: 0;
+}
+
+.attribution-prompt__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.attribution-prompt__actions[hidden] {
+    display: none;
+}
+
+/* Every button is styled here. See the header comment: a control with no
+ * class in this codebase has already shipped as an unstyled grey square
+ * through a green suite. */
+.attribution-prompt__btn {
+    width: auto;
+    height: auto;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
+    font-size: 0.75rem;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.attribution-prompt__btn:hover {
+    border-color: var(--color-accent, var(--color-border));
+}
+
+.attribution-prompt__btn--primary {
+    background: var(--color-accent, var(--color-bg-elevated));
+    border-color: var(--color-accent, var(--color-border));
+    color: var(--color-accent-contrast, var(--color-text-primary));
+}
+
+.attribution-prompt__close {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.attribution-prompt__footnote {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
+}

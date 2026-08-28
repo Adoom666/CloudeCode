@@ -6,7 +6,7 @@ turning raw pane bytes into validated dev-server port numbers.
 
 False-positive history (do not regress):
     The previous ``listening_on_port`` regex was loose enough to match
-    digits in the Claude TUI status row — e.g. ``"running ✦ 15.3k tokens
+    digits in the Claude TUI status row - e.g. ``"running ✦ 15.3k tokens
     · 31% context left"`` would extract port ``15`` or ``31``. The current
     pattern set is anchored on URL-shaped tokens, server-ready verbs, or
     a literal ``port`` keyword so unrelated digits in TUI chrome never
@@ -31,7 +31,7 @@ def is_valid_dev_port(port: int) -> bool:
     """True iff ``port`` is a non-privileged TCP port (1024-65535).
 
     Single chokepoint that gates EVERY value entering the local-servers
-    tracker. Privileged ports (1-1023) are rejected outright — dev servers
+    tracker. Privileged ports (1-1023) are rejected outright - dev servers
     don't bind there, and matching a small int from TUI text (``"15.3k
     tokens"``) can't survive this guard. Anything outside the int range or
     not strictly numeric returns False rather than raising.
@@ -54,7 +54,7 @@ def port_is_listening(port: int, timeout_ms: int = 250) -> bool:
     Args:
         port: TCP port to probe. Caller should have already gated through
             ``is_valid_dev_port``; we re-check defensively.
-        timeout_ms: connect timeout in milliseconds. Default 250ms — long
+        timeout_ms: connect timeout in milliseconds. Default 250ms - long
             enough for a same-host listener to ack, short enough that a
             full janitor sweep across N tracked ports stays under a second.
 
@@ -115,7 +115,7 @@ class PatternDetector:
         ),
 
         # Detect ``listening on port N``, ``serving at 8000``, etc. The
-        # set of verbs is intentionally narrow — ``running`` and ``started``
+        # set of verbs is intentionally narrow - ``running`` and ``started``
         # were dropped because they appear in the Claude TUI status row
         # (``running ✦ 15.3k tokens``) and produced false-positive ports.
         "listening_on_port": re.compile(
@@ -131,7 +131,7 @@ class PatternDetector:
             re.IGNORECASE,
         ),
 
-        # Detect URLs with explicit ports — covers cases like
+        # Detect URLs with explicit ports - covers cases like
         # ``http://example.dev:8080/`` where the host is neither localhost
         # nor a loopback IP. The host token excludes ``/`` and ``:`` so
         # it never spans a path or another colon.
@@ -318,5 +318,5 @@ def _detector() -> PatternDetector:
 
 
 def extract_port(text: str) -> Optional[int]:
-    """Module-level convenience — see :meth:`PatternDetector.extract_port`."""
+    """Module-level convenience - see :meth:`PatternDetector.extract_port`."""
     return _detector().extract_port(text)

@@ -1,0 +1,161 @@
+
+# macOS DMG release build.
+#
+# READ THIS BEFORE ENABLING IT FOR REAL. The maintainer currently builds the
+# DMG by hand. This workflow is written to ASSIST that process, not to replace
+# it, so it is deliberately conservative:
+#
+#   * It NEVER runs on a merge, a push to a branch, or a schedule. The only
+#     automatic trigger is pushing a tag matching v*, which is an explicit,
+#     deliberate act. It can also be started by hand from the Actions tab.
+#   * It publishes a DRAFT release. Nothing becomes visible to users until a
+#     human opens the draft, checks the DMG, and presses publish. If the
+#     workflow is wrong, the blast radius is an unpublished draft.
+#   * It does NOT notarize, and it does not sign with a real identity. It DOES
+#     ad-hoc sign, via the afterPack hook in macOS/scripts/adhoc-sign.js, and
+#     that is not optional. Without it electron-builder skips signing entirely
+#     and emits a bundle with no Contents/_CodeSignature at all, which macOS
+#     reports as "Cloude Code is damaged and can't be opened" once a browser
+#     download marks it quarantined. Right click > Open does NOT clear that;
+#     only `xattr -dr com.apple.quarantine` in Terminal does.
+#     An ad-hoc signature is structurally valid but carries no identity, so the
+#     user instead gets the ordinary unidentified-developer prompt that right
+#     click > Open clears. Notarization is still intentionally left out rather
+#     than half-done: it needs an Apple Developer ID certificate and an
+#     app-specific password.
+#     The hook uses no keychain state, so this runner and a maintainer's laptop
+#     produce byte-for-byte the same signing outcome.
+#   * The DMG is attached to the draft AND uploaded as a workflow artifact, so
+#     the build output is retrievable even if the release step is removed.
+#
+# To go back to a purely manual process, delete this file. Nothing else in the
+# repository depends on it.
+#
+# Triggers: push of a tag matching v*; or manual workflow_dispatch.
+# Missing secrets: none are required. The only credential used is the
+# automatic GITHUB_TOKEN, which Actions always provides.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build the DMG but do not create a draft release'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  macos-dmg:
+    name: build macos dmg
+    # electron-builder can only produce a macOS DMG on macOS.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      # Needed only by the draft-release step.
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install menubar app dependencies
+        working-directory: macOS
+        # `npm install`, not `npm ci`: macOS/package-lock.json is not committed.
+        run: npm install
+
+      - name: Confirm tag matches package version
+        # A tag that disagrees with macOS/package.json produces a DMG whose
+        # filename and internal version differ from the release name. Catch it
+        # before the build rather than after publishing.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node --print "require('./macOS/package.json').version")"
+          if [ "${tag_version}" != "${pkg_version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} implies version ${tag_version} but macOS/package.json says ${pkg_version}. Update one of them so the DMG and the release agree."
+            exit 1
+          fi
+          echo "tag and package.json agree on version ${pkg_version}"
+
+      - name: Build ad-hoc signed DMG
+        working-directory: macOS
+        env:
+          # Tell electron-builder not to look for a signing identity. Without
+          # this it may try, and fail confusingly, on a runner that has none.
+          # This makes it SKIP its own signing step; the ad-hoc signature is
+          # applied by the afterPack hook regardless, which is what keeps the
+          # runner and a local build identical.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package
+
+      - name: Verify the DMG is properly signed
+        working-directory: macOS
+        # The failure this guards against exited 0 and looked fine everywhere
+        # except on the user's machine, so check the artifact itself. Mount the
+        # DMG that will actually be published and assert on the bundle inside
+        # it, not on the staged copy in dist/mac-arm64.
+        run: |
+          set -euo pipefail
+          dmg="$(ls dist/*.dmg | head -1)"
+          echo "verifying ${dmg}"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "${mnt}" "${dmg}" > /dev/null
+          trap 'hdiutil detach "${mnt}" > /dev/null 2>&1 || true' EXIT
+          appdir="$(ls -d "${mnt}"/*.app | head -1)"
+
+          # 1. The sealed resource directory must exist. Its absence IS the bug.
+          if [ ! -f "${appdir}/Contents/_CodeSignature/CodeResources" ]; then
+            echo "::error::${appdir} has no Contents/_CodeSignature/CodeResources. Quarantined, macOS will call this DMG damaged."
+            exit 1
+          fi
+
+          # 2. The signature must verify strictly, including nested helpers.
+          if ! codesign --verify --deep --strict --verbose=2 "${appdir}"; then
+            echo "::error::codesign verification failed for ${appdir}."
+            exit 1
+          fi
+
+          echo "signature present and valid (ad-hoc). spctl will still reject it, which is expected and is the same state as v0.8.1."
+
+      - name: Upload DMG as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloude-code-dmg
+          path: macOS/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create draft release
+        # Only for real tag pushes, and never for a dry run. The release is a
+        # DRAFT: a human publishes it.
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: macOS/dist/*.dmg
+          body: |
+            Ad-hoc signed macOS build produced by .github/workflows/release.yml.
+
+            This is a DRAFT. Verify the DMG opens and the menu bar app starts
+            before publishing.
+
+            The build is ad-hoc signed but not notarized, so macOS Gatekeeper
+            will warn on first launch: "Cloude Code cannot be opened because it
+            is from an unidentified developer." Right click the app and choose
+            Open to get past it. This is the same prompt v0.8.1 produced.

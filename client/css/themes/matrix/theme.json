@@ -1,7 +1,7 @@
 {
   "id": "matrix",
   "name": "Matrix",
-  "description": "Phosphor green CRT with falling katakana — wake up, Neo.",
+  "description": "Phosphor green CRT with falling katakana - wake up, Neo.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
@@ -16,8 +16,8 @@
     "--color-header-bg": "#000000",
     "--color-fg": "#00ff41",
     "--color-fg-muted": "#00aa2c",
-    "--color-fg-subtle": "#006619",
-    "--color-fg-faint": "#004d12",
+    "--color-fg-subtle": "#008b22",
+    "--color-fg-faint": "#008b20",
     "--color-border": "#003d10",
     "--color-border-subtle": "#002009",
     "--color-accent": "#00ff41",
@@ -91,6 +91,11 @@
     "brightCyan": "#66ffcc",
     "brightWhite": "#ccffcc"
   },
-  "themeCss": "theme.css",
-  "effects": "effects.js"
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/scifi-drone.m4a",
+    "srcFallback": "/static/assets/audio/scifi-drone.ogg",
+    "volume": 0.6,
+    "fadeMs": 2500
+  }
 }

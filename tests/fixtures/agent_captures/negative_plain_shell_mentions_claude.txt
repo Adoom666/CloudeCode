@@ -1,0 +1,22 @@
+Welcome to: example-host.local
+
+Model          : Mac16,11
+OS Version     : macOS 26.5.2 (25F84)
+Architecture   : arm64
+Shell          : /bin/zsh
+Claude Config  : diverged
+
+Detected OS : mac
+_________________________________________________________________________
+
+user@host: $ ls -al
+total 123440
+drwxr-x---+ 80 user  staff   2.5K Aug 16 14:26 ./
+drwxr-xr-x@  9 user  staff   288B Aug 16 09:48 .cache/
+drwxr-xr-x  32 user  staff   1.0K Aug 16 14:19 .claude/
+-rw-r--r--@  1 user  staff    51K Aug 16 14:19 .claude.json
+drwxr-xr-x@ 22 user  staff   704B Mar 19 10:34 .codex/
+drwxr-xr-x  21 user  staff   672B Jun 26 08:44 .docker/
+drwxr-xr-x   4 user  staff   128B Jun 16 13:20 Pictures/
+user@host: $
+user@host: $

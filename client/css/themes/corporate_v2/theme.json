@@ -1,7 +1,7 @@
 {
   "id": "corporate_v2",
   "name": "Corporate Modern v2.0",
-  "description": "Linear/Vercel/Stripe 2026 — single indigo accent on cool near-black.",
+  "description": "Linear/Vercel/Stripe 2026 - single indigo accent on cool near-black.",
   "author": "Cloude Code",
   "version": "2.0.0",
   "cssVars": {
@@ -11,15 +11,17 @@
     "--color-header-bg": "#06060a",
     "--color-fg": "#fafafa",
     "--color-fg-muted": "#a1a1aa",
-    "--color-fg-subtle": "#52525b",
+    "--color-fg-subtle": "#8c8c96",
     "--color-border": "#27272a",
     "--color-border-subtle": "#1c1c1f",
     "--color-accent": "#6366F1",
-    "--color-accent-strong": "#4f46e5",
+    "--color-accent-strong": "#766eeb",
     "--color-success": "#10b981",
     "--color-warning": "#f59e0b",
     "--color-danger": "#ef4444",
-    "--color-info": "#6366F1"
+    "--color-info": "#6669f1",
+    "--color-fg-faint": "#8c8c8c",
+    "--color-on-accent": "#050505"
   },
   "xterm": {
     "background": "#0A0A0B",
@@ -41,5 +43,12 @@
     "brightMagenta": "#c084fc",
     "brightCyan": "#22d3ee",
     "brightWhite": "#fafafa"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/cyber-city.m4a",
+    "srcFallback": "/static/assets/audio/cyber-city.ogg",
+    "volume": 0.45,
+    "fadeMs": 2000
   }
 }

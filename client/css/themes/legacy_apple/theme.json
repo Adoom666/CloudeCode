@@ -1,11 +1,11 @@
 {
   "id": "legacy_apple",
   "name": "Legacy Apple",
-  "description": "Mac OS Classic / Platinum — cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
+  "description": "Mac OS Classic / Platinum - cream desktop, Chicago-era nostalgia, rainbow Apple in ANSI brights.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'Monaco', 'Andale Mono', 'Courier New', monospace",
+    "--font-mono": "Monaco, 'Andale Mono', ui-monospace, SFMono-Regular, 'Courier New', monospace",
     "--color-bg": "#DCD0BD",
     "--color-bg-page": "#cfc4b4",
     "--color-bg-elevated": "#EAEAEA",
@@ -17,8 +17,8 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.12)",
     "--color-fg": "#000000",
     "--color-fg-muted": "#555555",
-    "--color-fg-subtle": "#999999",
-    "--color-fg-faint": "#777777",
+    "--color-fg-subtle": "#595959",
+    "--color-fg-faint": "#696969",
     "--color-border": "#999999",
     "--color-border-subtle": "#bbbbbb",
     "--color-accent": "#3D5BAA",
@@ -36,10 +36,10 @@
     "--color-accent-glow-strong": "rgba(61, 91, 170, 0.45)",
     "--color-accent-shadow-soft": "rgba(61, 91, 170, 0.25)",
     "--color-on-accent": "#FFFFFF",
-    "--color-success": "#5CAB58",
-    "--color-warning": "#F0A028",
-    "--color-danger": "#D03028",
-    "--color-info": "#3D5BAA",
+    "--color-success": "#356433",
+    "--color-warning": "#7f4f09",
+    "--color-danger": "#aa2721",
+    "--color-info": "#3a56a2",
     "--color-danger-bg": "rgba(208, 48, 40, 0.10)",
     "--color-danger-bg-hover": "rgba(208, 48, 40, 0.20)",
     "--color-danger-border": "rgba(208, 48, 40, 0.35)",
@@ -62,7 +62,7 @@
     "--color-badge-tmux-bg": "#D8DEEC",
     "--color-badge-tmux-fg": "#2C4080",
     "--color-badge-external-bg": "#F2DCB8",
-    "--color-badge-external-fg": "#8A5A10",
+    "--color-badge-external-fg": "#885810",
     "--badge-color-claude": "#D03028",
     "--badge-color-codex": "#5CAB58",
     "--badge-color-hermes": "#3D5BAA",
@@ -96,5 +96,12 @@
     "brightMagenta": "#9E4F9E",
     "brightCyan": "#F0A028",
     "brightWhite": "#FFFFFF"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/out-there.m4a",
+    "srcFallback": "/static/assets/audio/out-there.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
   }
 }

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>session attribution prompt harness</title>
+<!--
+  STAGE C - MEASURE THE CARD, DO NOT EYEBALL IT.
+
+  Loads the real client/js/launchpad.js, the real client/css/styles.css
+  and the real client/css/attribution-prompt.css, stubs window.API with
+  canned response SHAPES, calls the real render path, and reports REAL
+  getBoundingClientRect() and getComputedStyle() readings.
+
+  WHY THIS EXISTS AT ALL. This codebase has shipped three visibly broken
+  features through fully green suites: a badge that rendered the literal
+  string "~~claude" while every test read .textContent, a button that
+  fell through to the bare user-agent stylesheet as an unstyled grey
+  square while "the button exists" passed, and a feature carrying 282
+  passing state assertions that rendered zero pixels. A DOM assertion
+  proves the markup; it proves nothing about what rendered. So the
+  consumer of this harness (scripts/verify_attribution_prompt.py) asserts
+  on measured boxes and computed backgrounds.
+
+  Fixtures:
+    ?fixture=pending      three unattributed sessions, mixed reasons.
+    ?fixture=unavailable  the datastore could not be read.
+    ?fixture=none         the ladder ran and left nothing to ask.
+
+  A TRAP THIS HARNESS DOES NOT HIDE. A headless or backgrounded tab often
+  reports document.hidden === true, which collapses window.innerWidth to
+  0 and silently zeroes every getBoundingClientRect(). The report carries
+  viewport.innerWidth and viewport.hidden as its FIRST keys, and every
+  consumer must assert innerWidth > 0 and hidden === false BEFORE
+  trusting a single rect below. A zero-width report is not evidence of a
+  layout bug; it is evidence that nothing was measured.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<link rel="stylesheet" href="../../client/css/attribution-prompt.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 44vw;
+         max-height: 92vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<pre id="out">rendering...</pre>
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+const PENDING = {
+    state: 'pending',
+    notice: '3 sessions we could not attribute. These were running on the tmux socket when Cloude Code upgraded, and we have no record of whether we started them. Adopting a session lets Cloude Code manage it; it does not change or restart anything inside it.',
+    sessions: [
+        {
+            tmux_name: 'cloude_ses_deadbeef',
+            epoch: 1755000000,
+            hints: ['its name matches the auto-generated form Cloude Code uses when you do not type one'],
+            reason: 'no_admissible_evidence',
+        },
+        {
+            tmux_name: 'cloude_test pause',
+            epoch: 1755000100,
+            hints: ['it is running in your project folder /Users/x/Development'],
+            reason: 'no_admissible_evidence',
+        },
+        {
+            tmux_name: 'cloude_scrolltest',
+            epoch: 1755000200,
+            hints: [],
+            reason: 'could_not_evaluate',
+        },
+    ],
+};
+
+// The same question set, but two of the three sessions carry a LABEL -
+// what a user called them - alongside their tmux name. The prompt asks
+// the user to RECOGNISE a session, so showing an internal handle instead
+// of the name they typed makes recognition harder. The third row keeps a
+// null label, because most unattributed sessions genuinely have none and
+// that row must render exactly as it always did.
+//
+// The labels carry every character the old rename validator refused, and
+// one of them carries markup: a label is free-form user text and must
+// never reach the DOM raw.
+const PENDING_LABELLED = {
+    state: 'pending',
+    notice: PENDING.notice,
+    sessions: [
+        { ...PENDING.sessions[0], label: 'client: acme v2.1 "prod" $rate' },
+        { ...PENDING.sessions[1], label: '<b>not html</b>' },
+        { ...PENDING.sessions[2], label: null },
+    ],
+};
+
+const FIXTURES = {
+    pending: PENDING,
+    'pending-labelled': PENDING_LABELLED,
+    unavailable: {
+        state: 'unavailable',
+        sessions: [],
+        notice: 'Whether any sessions need attributing CANNOT BE DETERMINED: the datastore could not be read.',
+    },
+    none: { state: 'none', sessions: [], notice: null },
+};
+
+const params = new URLSearchParams(location.search);
+const fixtureName = params.get('fixture') || 'pending';
+const fixture = FIXTURES[fixtureName] || FIXTURES.pending;
+
+window.__declined = [];
+window.__adopted = [];
+
+window.API.getProjects = async () => [];
+window.API.getProjectsPresence = async () => [];
+window.API.getProjectsAuthority = async () => ({ degraded: false, mode: 'db', writable: true, diff: null });
+window.API.listAttachableSessions = async () => [];
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => [];
+window.API.getSessionAttributionPrompt = async () => fixture;
+window.API.declineSessionAttribution = async (names) => {
+    window.__declined.push(...names);
+    return { declined: names, not_eligible: [], unknown: [] };
+};
+window.API.adoptSession = async (name) => {
+    window.__adopted.push(name);
+    return { ok: true };
+};
+
+// Measure ONE element as a box plus the colours actually painted on it.
+function box(el) {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+        tag: el.tagName.toLowerCase(),
+        className: el.className,
+        width: r.width,
+        height: r.height,
+        top: r.top,
+        left: r.left,
+        // NON-ZERO BOX is the assertion that catches "rendered zero
+        // pixels" while every state assertion passed.
+        nonZeroBox: r.width > 0 && r.height > 0,
+        display: cs.display,
+        visibility: cs.visibility,
+        opacity: cs.opacity,
+        background: cs.backgroundColor,
+        color: cs.color,
+        borderTopWidth: cs.borderTopWidth,
+        borderTopStyle: cs.borderTopStyle,
+        padding: cs.padding,
+        fontSize: cs.fontSize,
+    };
+}
+
+function report() {
+    const slot = document.getElementById('attribution-prompt');
+    const card = document.querySelector('.attribution-prompt');
+    const rows = Array.from(document.querySelectorAll('.attribution-prompt__row'));
+    const btns = Array.from(document.querySelectorAll('.attribution-prompt__btn'));
+    return {
+        viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            hidden: document.hidden,
+            visibilityState: document.visibilityState,
+        },
+        fixture: fixtureName,
+        slotPresent: !!slot,
+        slotHtmlLength: slot ? slot.innerHTML.length : -1,
+        // The slot sits FIRST inside .launchpad-container, ahead of the
+        // help disclosure. Two node tests used to guard "nothing may sit
+        // there and add height back" by asserting the first tag was the
+        // <details> - a markup proxy that a legitimate zero-cost element
+        // breaks. What actually matters is measured here: when there is
+        // nothing to ask, the slot must paint NO box at all.
+        slotBox: box(slot),
+        card: box(card),
+        cardState: card ? card.getAttribute('data-attribution-state') : null,
+        notice: card ? (card.querySelector('.attribution-prompt__notice') || {}).textContent || null : null,
+        rows: rows.map((row) => ({
+            name: row.getAttribute('data-tmux-name'),
+            // The RENDERED name, read off the element that paints it, so
+            // a stray character injected by a CSS ::before rule is
+            // visible here instead of hiding behind a .textContent that
+            // reads the same either way. See the family-pill "~~claude"
+            // defect this project shipped.
+            renderedName: (row.querySelector('.attribution-prompt__name') || {}).textContent || null,
+            nameBox: box(row.querySelector('.attribution-prompt__name')),
+            box: box(row),
+            reason: (row.querySelector('.attribution-prompt__why') || {}).getAttribute
+                ? row.querySelector('.attribution-prompt__why').getAttribute('data-reason')
+                : null,
+            whyText: (row.querySelector('.attribution-prompt__why') || {}).textContent || null,
+            hintTexts: Array.from(row.querySelectorAll('.attribution-prompt__hint')).map((h) => h.textContent),
+            hintBoxes: Array.from(row.querySelectorAll('.attribution-prompt__hint')).map(box),
+            checkboxDisplay: (() => {
+                const c = row.querySelector('.attribution-prompt__check');
+                return c ? getComputedStyle(c).display : null;
+            })(),
+        })),
+        buttons: btns.map((b) => ({ id: b.id, text: b.textContent, ...box(b) })),
+        closeButton: box(document.getElementById('attribution-prompt-close')),
+        pickedRowVisible: (() => {
+            const el = document.querySelector('.attribution-prompt__actions--picked');
+            return el ? { hidden: el.hidden, ...box(el) } : null;
+        })(),
+        declined: window.__declined,
+        adopted: window.__adopted,
+    };
+}
+window.__attributionReport = report;
+window.__choose = () => document.getElementById('attribution-choose').click();
+window.__declineAll = () => document.getElementById('attribution-decline-all').click();
+window.__close = () => document.getElementById('attribution-prompt-close').click();
+
+window.__attributionReady = false;
+(async () => {
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    window.__attributionReady = true;
+    document.getElementById('out').textContent =
+        'fixture=' + fixtureName + '\n' + JSON.stringify(report(), null, 1);
+})();
+</script>
+</body>
+</html>

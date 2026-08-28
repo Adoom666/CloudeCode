@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>attribution adopt-all harness</title>
+<!--
+  DOES CLICKING "ADOPT ALL" MAKE THE CARD STOP PAINTING?
+
+  The sibling harness (attribution-prompt-harness.html) answers canned
+  response SHAPES, which is right for measuring how one state renders and
+  useless for measuring a TRANSITION between two, because the second
+  shape would be one this file invented.
+
+  So nothing here is canned. window.API.getSessionAttributionPrompt and
+  window.API.adoptSession both delegate to Playwright bindings that call
+  the REAL FastAPI route and the REAL adoption write against a REAL
+  SQLite database in scripts/verify_adopt_clears_prompt.py. The only
+  thing stubbed out is tmux, which is replaced by a synthetic listing -
+  this harness never touches a socket, and specifically never touches
+  the user's live 'cloude' socket.
+
+  WHY IT IS A PIXEL HARNESS AND NOT A DOM TEST. This codebase has shipped
+  three visibly broken features through fully green suites: a badge that
+  rendered the literal "~~claude" while every test read .textContent, a
+  button that fell through to the bare user-agent stylesheet while "the
+  button exists" passed, and a feature carrying 282 passing state
+  assertions that rendered zero pixels. "The card went away" is exactly
+  the kind of claim a DOM assertion gets wrong, so it is measured as a
+  painted box.
+
+  THE SAME TRAP THE SIBLING HARNESS NAMES APPLIES HERE. A backgrounded
+  tab reports document.hidden === true and zeroes every rect, so the
+  report carries viewport.hidden and viewport.innerWidth first and the
+  consumer asserts both BEFORE trusting anything below them.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/home-bar.css" />
+<link rel="stylesheet" href="../../client/css/attribution-prompt.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 44vw;
+         max-height: 92vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<pre id="out">rendering...</pre>
+<!-- THE ONE RESOLVER for a session's displayed name. Loaded first,
+     exactly as client/index.html does it. Without it launchpad.js takes
+     its script-missing fallback branch and this harness would measure a
+     path no browser runs. -->
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/api.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/launchpad.js"></script>
+<script>
+// Everything the launchpad asks for that is not the subject of this
+// measurement. Each one answers the shape its caller expects, so a
+// failure here can only ever come from the prompt path.
+window.API.getProjects = async () => [];
+window.API.getProjectsPresence = async () => [];
+window.API.getProjectsAuthority = async () => ({ degraded: false, mode: 'db', writable: true, diff: null });
+window.API.listAttachableSessions = async () => [];
+window.API.listSessions = async () => [];
+window.API.getCurrentSession = async () => null;
+window.API.listRecentSessions = async () => ({ state: 'ok', sessions: [], notice: null });
+window.API.listSessionRecords = async () => [];
+
+// THE CALLS UNDER MEASUREMENT, all answered by the real server.
+//
+// The counters exist so the driver can wait for the ACTION to finish
+// rather than for the OUTCOME. Waiting for "the rows are gone" would
+// make an unfixed server time out and report CANNOT DETERMINE, when
+// what actually happened is a card that is still painted - a measurable
+// FAIL. They are counted HERE, in the page, because the driver's own
+// thread cannot service these bindings while it is blocked polling.
+window.__calls = { prompts: 0, adopts: 0, declines: 0 };
+window.API.getSessionAttributionPrompt = async () => {
+    const out = await window.__srvPrompt();
+    window.__calls.prompts += 1;
+    return out;
+};
+window.API.adoptSession = async (name) => {
+    const out = await window.__srvAdopt(name);
+    window.__calls.adopts += 1;
+    return out;
+};
+window.API.declineSessionAttribution = async (names) => {
+    const out = await window.__srvDecline(names);
+    window.__calls.declines += names.length;
+    return out;
+};
+
+// Measure ONE element as a box plus the colours actually painted on it.
+function box(el) {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+        className: el.className,
+        width: r.width,
+        height: r.height,
+        // NON-ZERO BOX is the assertion that catches "rendered zero
+        // pixels" while every state assertion passed.
+        nonZeroBox: r.width > 0 && r.height > 0,
+        display: cs.display,
+        visibility: cs.visibility,
+        opacity: cs.opacity,
+        background: cs.backgroundColor,
+    };
+}
+
+function report() {
+    const slot = document.getElementById('attribution-prompt');
+    const card = document.querySelector('.attribution-prompt');
+    const rows = Array.from(document.querySelectorAll('.attribution-prompt__row'));
+    return {
+        viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            hidden: document.hidden,
+            visibilityState: document.visibilityState,
+        },
+        slotPresent: !!slot,
+        slotHtmlLength: slot ? slot.innerHTML.length : -1,
+        // The painted area of the SLOT, not just the card. A card removed
+        // from the DOM while its container kept a rendered box would look
+        // like a pass on card alone.
+        slotBox: box(slot),
+        card: box(card),
+        cardState: card ? card.getAttribute('data-attribution-state') : null,
+        rowNames: rows.map((r) => r.getAttribute('data-tmux-name')),
+        renderedNames: rows.map(
+            (r) => (r.querySelector('.attribution-prompt__name') || {}).textContent || null
+        ),
+        errorText: (document.querySelector('.error-message, #error-message') || {}).textContent || null,
+    };
+}
+window.__attributionReport = report;
+
+// Drive the real click handlers the real user drove. Returns false when
+// the control is absent, so a missing button reads as a failed action
+// rather than as a silently skipped step.
+window.__clickAdoptAll = () => {
+    const b = document.getElementById('attribution-adopt-all');
+    if (!b) return false;
+    b.click();
+    return true;
+};
+window.__clickChoose = () => {
+    const b = document.getElementById('attribution-choose');
+    if (!b) return false;
+    b.click();
+    return true;
+};
+// Every row renders ALREADY ticked, so a partial pick is made by
+// UNticking, not by ticking. Returns false when the row is absent.
+window.__setRow = (name, checked) => {
+    const cb = document.querySelector(
+        `.attribution-prompt__check[data-tmux-name="${name}"]`
+    );
+    if (!cb) return false;
+    cb.checked = checked;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+};
+window.__clickAdoptPicked = () => {
+    const b = document.getElementById('attribution-adopt-picked');
+    if (!b) return false;
+    b.click();
+    return true;
+};
+window.__clickDeclineAll = () => {
+    const b = document.getElementById('attribution-decline-all');
+    if (!b) return false;
+    b.click();
+    return true;
+};
+
+window.__attributionReady = false;
+(async () => {
+    const lp = new Launchpad();
+    window.__lp = lp;
+    lp.init();
+    await lp.loadProjects();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    window.__attributionReady = true;
+    document.getElementById('out').textContent = JSON.stringify(report(), null, 1);
+})();
+</script>
+</body>
+</html>

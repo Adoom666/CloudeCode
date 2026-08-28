@@ -46,7 +46,7 @@ npm run build
     ▼
 ┌────────────────────────────────┐
 │  Python FastAPI Server         │
-│  (../venv/bin/python3)         │
+│  (<serverDir>/venv/bin/python3)│
 │                                │
 │  API: http://localhost:8000    │
 │  • GET /api/v1/health          │
@@ -85,7 +85,18 @@ Quit Cloude Code
 
 ### Server Management
 
-1. **Start**: Spawns `../venv/bin/python3 -m src.main` subprocess
+1. **Start**: Spawns `<serverDir>/venv/bin/python3 -m src.main` subprocess,
+   with `cwd` set to `<serverDir>` and `CLOUDE_APP_VERSION` injected from
+   `app.getVersion()`.
+
+   `<serverDir>` is **NOT** `../` in a packaged app. `bootstrap.js` superseded
+   that model: it provisions
+   `~/Library/Application Support/cloude-code-menubar/server/` with its own
+   copy of `src/`, `client/`, `requirements.txt`, a `venv`, `.env`,
+   `config.json` and a generated `VERSION` stamp, and re-syncs the bundled
+   artifacts into it on every packaged launch. Only in dev (`npm start`) does
+   `serverDir` resolve to the repo root one level up. Anything that assumes
+   a sibling `../venv` is describing the dev tree, not the shipped app.
 2. **Monitor**: Polls `GET /api/v1/health` every 5 seconds
 3. **Restart**: Calls `POST /api/v1/shutdown`, waits 2s, then starts
 4. **Stop**: Sends shutdown API call + SIGTERM signal

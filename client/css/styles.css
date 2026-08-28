@@ -1,5 +1,5 @@
 /* =====================================================================
- * Design tokens (Phase 1 — CSS variables)
+ * Design tokens (Phase 1 - CSS variables)
  * ---------------------------------------------------------------------
  * All color / shadow / radius / font values used throughout this file
  * are sourced from semantic tokens defined here. A downstream theme
@@ -7,12 +7,23 @@
  * selectors WITHOUT touching component rules below.
  *
  * Naming rule: tokens describe ROLE, not literal value. Defaults below
- * preserve the original Claude-coral dark palette — pixel-identical to
+ * preserve the original Claude-coral dark palette - pixel-identical to
  * pre-refactor when no `data-theme` attribute is set on <html>.
  * ===================================================================== */
 :root {
     /* ---- Fonts -------------------------------------------------- */
-    --font-mono: 'SF Mono', monospace;
+    /* This used to be `'SF Mono', monospace`, which silently degrades on
+     * phones. The literal family name "SF Mono" is NOT exposed to web
+     * content on iOS, so every iOS browser (all of them are WebKit,
+     * including Brave and Chrome) skipped straight past it to the generic
+     * `monospace`, landing on Courier - a different metric from what the
+     * desktop measures. `ui-monospace` is the correct way to ask for the
+     * platform monospace face and DOES resolve to SF Mono on iOS and
+     * macOS. The rest of the chain is an explicit, metric-compatible
+     * fallback per platform so that a miss degrades to a known face
+     * instead of whatever `monospace` happens to mean. */
+    --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco,
+                 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace;
 
     /* ---- Backgrounds -------------------------------------------- */
     --color-bg:               #1e1e1e;            /* body / terminal / modal */
@@ -35,7 +46,7 @@
     --color-border:        #3e3e42;
     --color-border-subtle: #2d2d30;   /* row separators inside lists */
 
-    /* ---- Accent (Claude coral — primary brand) ------------------ */
+    /* ---- Accent (Claude coral - primary brand) ------------------ */
     --color-accent:                #d77757;
     --color-accent-strong:         #e88768;                 /* hover variant */
     --color-accent-bg-soft:        rgba(215, 119, 87, 0.08);
@@ -90,6 +101,16 @@
     --color-badge-external-bg: #4a3a2a;
     --color-badge-external-fg: #fbbf24;
 
+    /* feat/agent-family-pills - a FACT (explicit wrapper/family) and a
+       GUESS (fingerprint/derived_deepest) must not look alike; unknown
+       is a third, visibly neutral state - see .family-pill below. */
+    --color-family-fact-bg:    #2a3a3a;
+    --color-family-fact-fg:    #5eead4;
+    --color-family-guess-bg:   #3a2a3a;
+    --color-family-guess-fg:   #e879f9;
+    --color-family-unknown-bg: #333333;
+    --color-family-unknown-fg: #999999;
+
     /* ---- Agent badges (Phase 8 will consume these) -------------- */
     --badge-color-claude:    #d77757;
     --badge-color-codex:     #4ade80;
@@ -109,6 +130,103 @@
     --radius-lg:   8px;
     --radius-pill: 50px;
     --radius-full: 50%;
+
+    /* Floating action buttons on the terminal screen: slash commands, the
+     * session editor, the d-pad and the terminal tools button. ONE set of
+     * numbers for all four. They used to be restated per button and had
+     * already drifted - the attach button sat at right:16px/44px against
+     * the d-pad's right:20px/45px, so their centres were 4.5px apart and
+     * the vertical stack visibly wobbled. */
+    --fab-size: 45px;
+    --fab-edge: 20px;
+    /* Gap between two adjacent FABs. */
+    --fab-gap: 12px;
+
+    /* THE BOTTOM ROW hovers over the command line. One slot is one
+     * button plus one gap, so the slot tokens are the only place a
+     * horizontal offset is ever written.
+     *
+     *   slot 0  terminal tools   (the right edge)
+     *   slot 1  d-pad
+     *
+     * Slash commands keeps the LEFT edge: it is the one control that
+     * types into the prompt rather than acting on the session, and the
+     * left thumb is where it has always been.
+     *
+     * There is no slot 2. The session editor USED to sit there and now
+     * lives in the top-right rail below; a token nothing reads is how a
+     * dead layout gets revived by accident. */
+    --fab-step: calc(var(--fab-size) + var(--fab-gap));
+    --fab-slot-0: var(--fab-edge);
+    --fab-slot-1: calc(var(--fab-edge) + var(--fab-step));
+
+    /* THE TOP-RIGHT RAIL. A DIFFERENT AXIS, NOT A THIRD BOTTOM SLOT.
+     *
+     * The session editor is the only control up here. It shares the
+     * bottom row's right edge (--fab-slot-0), so it and the terminal
+     * tools button sit on ONE vertical rail against the right edge
+     * rather than at two unrelated insets, and it is offset DOWNWARD
+     * from the header rather than from the viewport top.
+     *
+     * A wide three-icon strip used to cover the terminal's top edge
+     * here. It was removed and the uncovered top edge was a real gain.
+     * This rail is deliberately expressed as a single vertical offset
+     * with NO step token: there is nothing to lay a second control out
+     * against, so adding one takes a deliberate edit rather than a
+     * copy-paste of `--fab-top-slot-1`.
+     *
+     * --header-h is derived, not measured. Its three parts are the same
+     * tokens .header and the bare `button` rule use at each breakpoint,
+     * so the clearance cannot drift when the header is restyled. The
+     * standalone safe-area inset is added in ios-chrome.css, where the
+     * header takes it too. */
+    --header-pad-y: 12px;
+    /* The header's side padding, and therefore the gap between the
+     * viewport edge and the first control in the header. Tokenised
+     * because the docked-sidebar rule in session-sidebar.css has to ADD
+     * this gap back on top of the sidebar's width - the toggle sat flush
+     * against the docked bar's border when that rule paid the sidebar
+     * width alone. Restated per breakpoint below, same as --header-pad-y. */
+    --header-pad-x: 20px;
+    /* Horizontal padding inside #launchpad-screen. A token rather than a
+     * literal because the docked-sidebar rule in session-sidebar.css has
+     * to ADD to it: `#launchpad-screen` is an ID selector and outranks
+     * `body.session-sidebar-pinned .screen`, so the generic docked rule
+     * lost to it and the home screen paid no layout for a pinned bar at
+     * all - the bar simply covered the content. Measured, not guessed:
+     * padding-left read back as 20px with the bar docked at 320px wide. */
+    --screen-pad-x: 20px;
+    --header-border: 2px;
+    /* HOME-HEADER-CONSOLIDATION: the launchpad's second header row
+     * (`.home-subheader`) adds real height that fixed-position consumers
+     * of --header-h (e.g. .fab-menu-notice) must clear too, or they land
+     * under the subheader text instead of below the header. Zero on every
+     * screen except the launchpad, which stamps `.header--home` on
+     * <body> (app.js setHeaderIdentity) alongside the header itself. */
+    --home-subheader-extra: 0px;
+    --header-h: calc(var(--control-size) + var(--header-pad-y) * 2
+                     + var(--header-border) + var(--home-subheader-extra));
+    --fab-top-edge: calc(var(--header-h) + var(--fab-gap));
+
+    /* The app's default round control, and therefore what sets the
+     * header's height. Bumped to a thumb target on touch widths. */
+    --control-size: 36px;
+}
+
+@media (max-width: 768px) {
+    :root {
+        --header-pad-y: 10px;
+        --header-pad-x: 15px;
+        --control-size: 44px;
+    }
+}
+
+@media (max-width: 480px) {
+    :root {
+        --header-pad-y: 8px;
+        --header-pad-x: 12px;
+        --control-size: 40px;
+    }
 }
 
 /* Base styles */
@@ -118,15 +236,63 @@
     box-sizing: border-box;
 }
 
+/* APP SHELL HEIGHT - the terminal depends on this being DEFINITE.
+ *
+ * This used to be `min-height: 100vh` with `height: auto`. A flex column
+ * whose own height is auto has no free space to distribute, so
+ * `.screen { flex: 1 }` and `.terminal-container { flex: 1 }` degraded to
+ * content sizing: the terminal's height was set by the xterm element,
+ * whose height was set by `rows`, which FitAddon derived from the
+ * terminal's height. That loop can only ratchet UP. Measured on a
+ * 390x844 phone shell: rotate to landscape (390 tall) and rows stayed at
+ * 45 with the terminal 720px tall inside a 390px window - the prompt sat
+ * below the fold and tmux kept the taller geometry. Same failure for the
+ * on-screen keyboard.
+ *
+ * A DEFINITE height breaks the loop: the shell is exactly one viewport,
+ * `.screen` gets the leftover, and the terminal shrinks as well as grows.
+ * `100dvh` tracks the iOS URL bar collapsing; `100vh` is the fallback for
+ * browsers without dynamic viewport units. `overflow: hidden` on the
+ * shell is the consequence of a fixed height - each `.screen` is its own
+ * scroll container (see `.screen` below), so nothing loses scrollability.
+ */
+/* PAGE BACKGROUND LIVES ON `html`, NEVER ON `body`.
+ *
+ * Theme effects mount a `position: fixed; z-index: -1` canvas as a child of
+ * body. CSS 2.1 Appendix E paints, within the root stacking context, in this
+ * order: (1) the root element's own background, (2) child stacking contexts
+ * with NEGATIVE z-index, (3) the backgrounds of in-flow non-positioned
+ * block-level descendants. The effects canvas is step 2; `body`'s background
+ * box is step 3. So ANY opaque background on body paints straight over the
+ * canvas and the effect becomes invisible while still running perfectly.
+ *
+ * This is not hypothetical - it is the defect this rule was written to fix.
+ * Every one of the 23 themes measured a maximum composited RGB delta of 0
+ * against a canvas-hidden plate, including matrix, whose canvas contained
+ * pixels spanning the full 0-255 green range.
+ *
+ * `body` background propagation would normally rescue this (a transparent
+ * root adopts body's background and paints it at step 1, below the canvas),
+ * but ios-chrome.css gives `html` its own background to paint the notch and
+ * home-indicator insets, and a non-transparent root cancels propagation.
+ *
+ * Invariant, enforced by tests/test_theme_effects_visibility.node.mjs:
+ *   html paints the page colour; body's background stays transparent.
+ */
+html {
+    background: var(--color-bg);
+}
+
 body {
     font-family: var(--font-mono);
-    background: var(--color-bg);
+    background: transparent;
     color: var(--color-fg);
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     margin: 0;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 /* Header */
@@ -135,34 +301,314 @@ body {
     top: 0;
     z-index: 1000;
     background: var(--color-bg-page);
-    padding: 12px 20px;
-    border-bottom: 2px solid var(--color-accent);
+    /* Vertical padding and the border are two of the three parts of
+     * --header-h, which the top-right FAB clears itself against. Write
+     * the number here and the FAB slides under the header. */
+    padding: var(--header-pad-y) var(--header-pad-x);
+    border-bottom: var(--header-border) solid var(--color-accent);
+}
+
+/* HOME-HEADER-CONSOLIDATION: the actual flex row (toggle / title /
+ * controls) used to be `.header` itself. It is now `.header-row`, a
+ * dedicated wrapper, so `#home-subheader` (launchpad only, second row of
+ * `.header`) is never a SIBLING of `h1` inside the same flex/grid parent
+ * - header-title-fit.js's slotWidth() computes the title's shrink budget
+ * from `h1`'s parent's children on the documented assumption that they
+ * are all fixed-size, single-row content. A full-width second row in
+ * that same parent broke that assumption and starved the budget to
+ * negative, which its own fallback silently read as "always fits" and
+ * left CSS `text-overflow: ellipsis` to truncate mid-word instead. See
+ * `.header--home` below for why the wrapper's own layout still changes
+ * on the launchpad. */
+.header-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 15px;
 }
 
+/* HEADER TITLE MUST SHRINK, CONTROLS MUST NOT.
+ *
+ * This rule used to be `white-space: nowrap` and nothing else. As a flex
+ * item of `.header` that is a layout bug with a very specific shape: a
+ * flex item's `min-width` defaults to `auto`, which is its MIN-CONTENT
+ * size, and min-content for a nowrap single line is the whole string. So
+ * the title refused to shrink below its own text and pushed everything
+ * after it out of the box instead. Measured on a 390px viewport with a
+ * real session name: h1 ran x=63..413 (23px past the edge), `.controls`
+ * sat at x=428..488 entirely off screen, `#header-menu-toggle` was 58px
+ * of fully invisible kebab, and documentElement.scrollWidth was 488
+ * against a 390 innerWidth - 98px of horizontal overflow.
+ *
+ * `min-width: 0` is the required half of the fix, not an optimisation.
+ * This is the third time the min-width:auto flex trap has bitten this
+ * codebase; see `.session-row` and `.cloude-session-theme__head`.
+ *
+ * h1 becomes a flex CONTAINER too, so the icon, the version chip and the
+ * rename pencil can each opt out of shrinking (`flex-shrink: 0`) and all
+ * the shrinking is concentrated in `#header-title-text`, which is the
+ * only part that is safe to truncate.
+ */
+/* THE ICON AND THE TITLE MUST SHARE ONE LINE BOX.
+ *
+ * `line-height` here is an ALIGNMENT declaration, not typography. h1 is a
+ * flex row with `align-items: center`, so the icon BOX and the title BOX
+ * are centred against each other correctly and always were - measured
+ * delta 0.01px at 1280 and 0.00px at 390. The glyphs inside them were
+ * not. `#header-icon` holds a bare emoji, so its content is an ANONYMOUS
+ * flex item whose line box is sized by the colour-emoji fallback font,
+ * whose ascent is far larger than the monospace strut's: with
+ * `line-height: normal` that line box measured 23px inside a 19.19px icon
+ * box at 390px (scrollHeight 23 vs clientHeight 19). Centring an oversized
+ * line box centres the BOX, not the baseline inside it, so the cloud sat
+ * 1.5px below the title's centre at 390px and 0.52px at 1280 - the report
+ * was "top header cloud icon and title are not aligned vertically".
+ *
+ * A fixed unitless line-height on the SHARED parent gives both children
+ * the same line box height, so neither child's font metrics can move its
+ * own baseline relative to the other's. Measured after: 0.00px delta at
+ * BOTH 1280 and 390. 1.2 specifically, because it equals `.header-icon`'s
+ * own 1.2em box, so the line box never exceeds the h1 content height and
+ * `overflow: hidden` above cannot clip a descender out of a session name.
+ * Header height is unchanged at both widths (58px at 390px).
+ */
 h1 {
     font-size: 1.3rem;
+    line-height: 1.2;
     margin: 0;
     color: var(--color-accent);
     white-space: nowrap;
     cursor: pointer;
     transition: opacity 0.2s ease;
+    display: flex;
+    align-items: center;
+    /* Take the leftover space, give it back before .controls does. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
 }
 
 h1:hover {
     opacity: 0.8;
 }
 
+/* The only shrinkable, truncatable part of the header identity. The CSS
+ * end-ellipsis here is the FLOOR, not the finished behaviour: it is what
+ * renders if header-title-fit.js never runs. When that module is alive it
+ * replaces the text with a MIDDLE-elided string, because session names
+ * share long project prefixes (`cloude_claude-config-sync-2`) and an
+ * end-ellipsis would truncate away the only part that distinguishes one
+ * session from another. See client/js/header-title-fit.js. */
+#header-title-text {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Version chip. TYPE AND COLOUR ONLY - this rule no longer places anything.
+ *
+ * NO `margin-left` HERE, AND IT MUST NOT COME BACK. This chip used to be a
+ * flex child of the header h1, which is a gapless flex row, so it sat flush
+ * against the title (measured 0px at both 1527px and 390px) and a 10px
+ * margin-left was the fix for that. The chip has since MOVED OUT of the
+ * header entirely: it is the home screen's bottom bar now, rendered by
+ * launchpad.js as `.version.home-bar__version` and placed by
+ * client/css/home-bar.css. There is no longer a title to be flush against,
+ * so the margin has nothing to separate - it would just be 10px of dead
+ * space inside a flex row that already sets its own gap. Placement belongs
+ * to whoever owns the box the chip sits in, and that is home-bar.css. */
 .version {
     font-size: 0.7rem;
     color: var(--color-fg-faint);
     font-weight: normal;
+    flex-shrink: 0;
 }
 
-/* SESSION-IDENTITY-V2 — header identity icon. Wraps either an emoji
+/* HOME-HEADER-CONSOLIDATION - launchpad-only header-row layout.
+ *
+ * Toggled on/off by setHeaderIdentity() in app.js (only showLaunchpad()
+ * passes a `subheader`), never applied on auth or terminal. Applies to
+ * `.header-row` (the wrapper around spacer/toggle/title/controls - see
+ * its own comment above for why it exists as a separate element from
+ * `.header`).
+ *
+ * STAYS FLEXBOX. A first version switched `.header-row` to a 3-column
+ * CSS Grid (`minmax(flank, 1fr) auto minmax(flank, 1fr)`) to reserve
+ * equal space on both sides of the title. It centred correctly
+ * (0.008px off at 1280px, 0px at 390px) but broke the title's own text
+ * fit: header-title-fit.js's slotWidth() (client/js/header-title-fit.js)
+ * computes the title's shrink budget by walking `.header-row`'s actual
+ * DOM children and summing their RENDERED widths - an empty grid track
+ * with no element in it (the reserved-but-content-less left column,
+ * since `#session-sidebar-toggle` is `display: none` here) is invisible
+ * to that walk. The JS concluded the full "Cloude Code Launcher" fit
+ * (its math never subtracted the reserved column it couldn't see) and
+ * left the untruncated string in the DOM, while the grid actually
+ * rendered the title only 160px of room - so plain CSS
+ * `text-overflow: ellipsis` silently clipped it to "Cloude Code L…" with
+ * nothing in the DOM saying so. Confirmed by comparing the DOM
+ * `textContent` (full) against the rendered box in a screenshot
+ * (truncated) - a genuine "the two disagree" case, not a JS bug.
+ *
+ * `#header-home-spacer` (a real, `visibility: hidden` element, not a grid
+ * track) fixes this at the root: it is an actual DOM sibling of `h1`
+ * with a real rendered width, so it is counted correctly by both the
+ * BROWSER's flex layout and header-title-fit.js's DOM walk - the two can
+ * no longer disagree, because they are now reading the same geometry.
+ * `#appTitle` gets `flex: 1 1 auto` (grows AND shrinks) with
+ * `justify-content: center` on itself so the icon+text pair centres
+ * within whatever room is actually left, and shrinks through
+ * header-title-fit.js's normal, correct middle-elision path if that room
+ * ever gets tighter than the full string - the SAME mechanism session
+ * titles already use, not a new one.
+ *
+ * `--home-header-flank-w` mirrors `.controls`' own real width (TWO
+ * buttons, not three - header-menu.js permanently re-parents logoutBtn
+ * and settingsBtn into its overflow panel at every width, so only
+ * `#configEditorBtn` and its kebab `#header-menu-toggle` stay inline).
+ * Verified after the fix, both widths, full "Cloude Code Launcher" text
+ * renders untruncated, 0px / 0.008px off-centre.
+ */
+/* Hidden by default - never touches the terminal/auth header layout.
+ * Only `.header--home` (below) turns it into a real, invisible, but
+ * SIZED sibling. */
+.header-home-spacer {
+    display: none;
+}
+
+.header--home {
+    --home-header-flank-w: calc(var(--control-size) * 2 + 8px);
+}
+
+.header--home .header-home-spacer {
+    display: block;
+    visibility: hidden;
+    flex-shrink: 0;
+    width: var(--home-header-flank-w);
+}
+
+/* Stamped on <body> as `.home-header-active` - DELIBERATELY NOT the same
+ * class as `.header--home`. `.header--home` is a bare class selector, so
+ * reusing it on <body> would make it match here too and put the WHOLE
+ * PAGE in `display: grid` (caught in the browser: bodyDisplay flipped to
+ * 'grid', header collapsed to grid-content width instead of the
+ * viewport). --home-subheader-extra has to reach .fab-menu-notice, which
+ * is not a descendant of .header, hence the separate body class, toggled
+ * in lockstep with `.header--home` by app.js (setHeaderIdentity's doc
+ * comment). Value = subheader line box (0.8rem * 1.2 line-height =
+ * 15.36px) + its 4px top margin, rounded up. */
+body.home-header-active {
+    --home-subheader-extra: 20px;
+}
+
+@media (max-width: 480px) {
+    body.home-header-active {
+        /* .home-subheader drops to 0.72rem under 480px (see media query
+         * below) - its line box shrinks with it. */
+        --home-subheader-extra: 18px;
+    }
+}
+
+/* THE SIDEBAR TOGGLE IS VISIBLE ON THE HOME SCREEN, AND THIS COMMENT
+ * USED TO SAY THE OPPOSITE.
+ *
+ * It read: "#session-sidebar-toggle stays `display: none` here (app.js
+ * never shows it on the launchpad) - no rule needed, it contributes
+ * nothing to the flex row either way." That stopped being true when the
+ * conversation bar became available (and pinnable) on the home screen:
+ * app.js's showLaunchpad() calls SessionSidebar.show(), which strips the
+ * `.hidden` class off the toggle. Its own doc comment says so - "Called
+ * on entering the terminal screen AND the home screen". So the flank
+ * arithmetic below was reasoning about an element it believed was not
+ * rendered, and the element was rendered.
+ *
+ * Two things went wrong as a result, both measured at 1280px before the
+ * fix:
+ *
+ * 1. THE TOGGLE WAS NOT AT THE TOP LEFT. `#header-home-spacer` precedes
+ *    it in DOM order, and on the home screen the spacer becomes a real,
+ *    80px, invisible-but-SIZED flex item. So the hamburger was pushed
+ *    80px inboard of the header's content edge and floated in dead space
+ *    between nothing and the title - measured left edge 100px against a
+ *    20px content edge. On the terminal screen the spacer is
+ *    `display: none`, so there the toggle is genuinely first and sits
+ *    where it belongs, which is why this only ever looked wrong at home.
+ *
+ * 2. THE TITLE WAS NOT CENTRED. The spacer exists for exactly one job:
+ *    be as wide as `.controls` so the title lands on the true centre.
+ *    The toggle added a further 36px (32px box + 4px margin) to the LEFT
+ *    flank with no counterpart on the right, so the left flank was
+ *    116px against a right flank of 80px and the title sat 18px right of
+ *    centre.
+ *
+ * The fix keeps both flanks equal by making them SHARE one budget rather
+ * than by adding a second invisible element: the toggle is ordered to
+ * the content edge, and the spacer gives back exactly the room the
+ * toggle takes. `order` is safe for the title-fit code, which walks DOM
+ * children and sums widths - a reordered row has the same children and
+ * the same total.
+ *
+ * --home-header-toggle-w MIRRORS session-sidebar.css's
+ * `.session-sidebar-toggle` (width 32px + margin-right 4px). That is a
+ * duplicated constant across two files, so it is not left on trust:
+ * tests/test_header_help_and_toggle.node.mjs measures the toggle's real
+ * outer width in a browser and fails if the two ever disagree, and the
+ * same suite asserts the two flanks are equal rather than asserting
+ * either number. */
+.header--home {
+    --home-header-toggle-w: 36px;
+}
+
+.header--home #session-sidebar-toggle:not(.hidden) {
+    order: -1;
+}
+
+/* Only shrink the spacer while the toggle is actually rendering. When
+ * the toggle is `.hidden` (it is `display: none` then, and contributes
+ * no width) the spacer must keep the full flank or the title would go
+ * off centre the other way. Three states, one rule each, never a guess
+ * about which one is live. */
+.header--home:has(#session-sidebar-toggle:not(.hidden)) .header-home-spacer {
+    width: calc(var(--home-header-flank-w) - var(--home-header-toggle-w));
+}
+
+.header--home #appTitle {
+    /* Grows to fill the room the spacer/controls leave AND shrinks
+     * through header-title-fit.js's normal middle-elision path if that
+     * room gets tight - same budget mechanism the terminal's session
+     * title already uses, just with a short fixed string here instead of
+     * a long session name. */
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: center;
+}
+
+.header--home .controls {
+    flex-shrink: 0;
+}
+
+/* Second row of `.header`, a sibling of `.header-row` (NOT a grid cell of
+ * it - see the `.header-row` comment above for why h1's actual parent
+ * must stay exactly the original three children). Centred by plain
+ * `text-align`, which is real centring against the header's own width at
+ * every viewport, not a fixed margin. */
+.home-subheader {
+    margin-top: 4px;
+    text-align: center;
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    /* Truncate rather than wrap: a second wrapped line on a phone would
+     * make the header taller than the block it replaced, which is exactly
+     * what this change must not do (see .header--home comment above). */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* SESSION-IDENTITY-V2 - header identity icon. Wraps either an emoji
  * (launchpad/auth) or the brand SVG (terminal). Sizing is consistent
  * across both modes so the title baseline doesn't jump on screen swap. */
 .header-icon {
@@ -171,8 +617,17 @@ h1:hover {
     justify-content: center;
     width: 1.2em;
     height: 1.2em;
-    vertical-align: -0.18em;
+    /* NO `vertical-align` HERE, AND IT MUST NOT COME BACK. This carried
+     * `vertical-align: -0.18em` from the days when the icon was an inline
+     * box on the title's baseline. h1 is `display: flex`, so the icon is a
+     * flex item and `vertical-align` does not apply to it at all - the
+     * declaration was inert, and the harm was that it made this box LOOK
+     * like alignment had been handled here. It has not: alignment is the
+     * `line-height` on h1 above. */
     margin-right: 0.15em;
+    /* h1 is a flex container now; the identity icon is a fixed-size
+     * marker and must never be squeezed to make room for the name. */
+    flex-shrink: 0;
 }
 
 .header-icon img {
@@ -182,7 +637,7 @@ h1:hover {
     display: block;
 }
 
-/* v0.7.2 — inline rename affordance in the page header. A small pencil
+/* v0.7.2 - inline rename affordance in the page header. A small pencil
  * button sits next to the title text and triggers inline edit mode.
  * Styled to match the launchpad's .running-session-rename for visual consistency. */
 .header-rename-pencil {
@@ -226,11 +681,43 @@ h1:hover {
     margin-left: 8px;
 }
 
-/* v0.7.2 — inline rename affordance on the launchpad's running-sessions
+/* v0.7.2 - inline rename affordance on the launchpad's running-sessions
  * rows. The pencil button triggers inline-edit mode (swaps the name span
  * for an input). Only rows with a known session_id render the pencil
  * (toggled in renderRunningSessions); external adopt-target rows get no
- * pencil — the user can adopt first, then rename from the in-session header. */
+ * pencil - the user can adopt first, then rename from the in-session header. */
+/* The UNAVAILABLE and CANNOT-DETERMINE rename states (see
+ * launchpad.js::_renderRenamePencilHtml). Same box as the live pencil so
+ * the row's layout does not shift between a renameable session and one
+ * that is not - the control occupies the same place either way, which is
+ * the whole point of drawing it instead of omitting it.
+ *
+ * It is dimmed and takes no hover treatment, so it reads as present but
+ * inert. `cursor: not-allowed` is the only cursor here that is not a lie:
+ * `pointer` would promise an action, and `default` would read as decorative
+ * text. No new colour - the same --color-fg-muted the live pencil rests
+ * at, carried at reduced opacity.
+ *
+ * DELIBERATELY NOT `.running-session-rename` plus a modifier. The
+ * delegated click handler selects on `.running-session-rename`, and a
+ * class token matches whole, so a separate token is what structurally
+ * guarantees this element can never reach the rename call. A modifier
+ * class would leave that guarantee to a runtime `if` somebody could
+ * later drop. */
+.running-session-rename-unavailable {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-fg-muted);
+    opacity: 0.4;
+    cursor: not-allowed;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    font-size: 14px;
+}
+
 .running-session-rename {
     width: 24px;
     height: 24px;
@@ -249,6 +736,58 @@ h1:hover {
     color: var(--color-accent);
     transform: scale(1.15);
     background: var(--color-accent-bg-soft);
+}
+
+/* The LOCAL (LM Studio) model step's status sentence.
+   Not a .folder-picker-item on purpose: it is a statement about why there
+   is nothing to pick, not a thing to pick, so it must not enter the nav
+   index or look Enter-able. Styled explicitly rather than left to the
+   user-agent stylesheet - an unclassed block here would render as bare
+   serif body text in the middle of a monospace picker. */
+.provider-local-status {
+    padding: 12px 14px;
+    color: var(--color-fg-muted);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: normal;
+}
+
+/* Fork control on a running session row.
+   Explicitly styled rather than left to the user-agent stylesheet: an
+   unclassed <button> in this app renders as a grey OS square, and that
+   exact defect has shipped here before through a green test suite,
+   because a DOM assertion can see the element exists and cannot see what
+   it looks like. Sized to sit with the rename pencil rather than matching
+   it exactly - this one carries a word, not a glyph. */
+.running-session-fork {
+    height: 24px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--color-fg-muted);
+    background: transparent;
+    border: 1px solid var(--color-border, #333);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+}
+
+.running-session-fork:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+}
+
+.running-session-fork:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
 }
 
 .running-session-rename-input {
@@ -274,6 +813,12 @@ h1:hover {
     display: flex;
     gap: 8px;
     align-items: center;
+    /* THE CONTROLS ARE THE LAST THING TO GIVE UP SPACE. Every child is a
+     * fixed-size hit target, so there is nothing here that can shrink
+     * gracefully - squeezing this box just pushes the buttons off screen,
+     * which is exactly the bug the h1 min-width fix above exists to kill.
+     * The title truncates; this does not. */
+    flex-shrink: 0;
     /* Was `overflow: hidden`. Children never exceed this box's static
      * bounds (fixed-size buttons + gap), so hidden was only ever clipping
      * intentional overflow effects: the button:hover scale/glow and the
@@ -282,54 +827,59 @@ h1:hover {
     overflow: visible;
 }
 
-/* v0.7.0+ — header background-music toggle. Muted by default; click is the
- * required user-gesture that grants AudioContext autoplay for the page
- * lifetime. Styled to match `.header-rename-pencil` so the header chrome
- * reads as one visual family. */
-.header-audio-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--color-fg-muted);
-    border-radius: var(--radius-md);
-    font-size: 14px;
-    line-height: 1;
-    flex-shrink: 0;
-    transition: color 120ms ease, transform 120ms ease, background 120ms ease;
-}
-
-.header-audio-toggle:hover {
-    color: var(--color-accent);
-    transform: scale(1.15);
-    background: var(--color-accent-bg-soft);
-}
-
-.header-audio-toggle[aria-pressed="true"] {
-    color: var(--color-accent);
-}
-
 /* Header control icons. Inline SVG paths use stroke="currentColor" so a
  * theme override of --color-accent re-skins them automatically. We pin
  * `color` on the <svg> itself (not the <button>) so danger-styled
- * buttons still render the icon in accent — preserves pre-token visual. */
+ * buttons still render the icon in accent - preserves pre-token visual. */
 .header .controls button > svg {
     color: var(--color-accent);
 }
 
-/* Buttons */
-button {
+/* The delete button's icon must read as destructive, not merely its
+ * border/background - a red-bordered button drawing its glyph in the
+ * default accent color muddies the "this is dangerous" signal the
+ * trash-can icon is there to give. Overrides the accent rule above for
+ * any button.danger specifically. */
+.header .controls button.danger > svg {
+    color: var(--color-danger);
+}
+
+/* Round header icon-button.
+ *
+ * This used to be a bare `button {}` element rule reaching every <button>
+ * in the DOM, not just these. That caused two separate incident classes:
+ * a `border-radius: 50%` turned the settings tabs into literal ellipses
+ * (fixed in place at the time, not at the source - see .settings-tab
+ * below), and `transform: scale(1.05)` on hover leaked onto the
+ * per-session theme picker rows and overflowed the list horizontally
+ * (fixed at terminal-tools.css instead of here, commit 842d333).
+ *
+ * Audited every <button> in the app (client/index.html's ~12 static
+ * tags, ~13 `createElement('button')` call sites in client/js/, plus
+ * every per-item row they render) before writing this class. Result:
+ * every one of them already carries its own class with EXPLICIT
+ * background/border/color/width/height/cursor - the comments scattered
+ * through config-editor-modal.css, config-editor.css, config-drawer.css,
+ * home-bar.css, header-menu.css, server-status.css, session-sidebar.css,
+ * toast.css and slash-command-chips.css record each one deliberately
+ * escaping this rule. Exactly two elements in the whole app never
+ * escaped it because they were never meant to: `#configEditorBtn` (the
+ * one header control that stays inline at every width - see
+ * client/js/header-menu.js) and `.header-menu-toggle` (the kebab
+ * trigger it builds). Both get this class explicitly rather than
+ * matching a bare element, and nothing else does. No fallback bare
+ * `button {}` reset is added: since every other button already declares
+ * every property this rule used to hand out for free, a reset would be
+ * dead weight, not a safety net. */
+.btn-icon {
     background: var(--color-accent-bg);
     color: var(--color-accent);
     border: 1px solid var(--color-accent-border);
     padding: 0;
-    width: 36px;
-    height: 36px;
+    /* The third part of --header-h: these are the controls in .header,
+     * so their size is the header's content height. */
+    width: var(--control-size);
+    height: var(--control-size);
     border-radius: var(--radius-full);
     cursor: pointer;
     font-size: 16px;
@@ -340,14 +890,14 @@ button {
     position: relative;
 }
 
-button:hover:not(:disabled) {
+.btn-icon:hover:not(:disabled) {
     background: var(--color-accent-bg-hover);
     border-color: var(--color-accent);
     box-shadow: 0 0 12px var(--color-accent-glow);
     transform: scale(1.05);
 }
 
-button:disabled {
+.btn-icon:disabled {
     background: rgba(62, 62, 66, 0.1);  /* TODO: theme-token candidate (disabled-bg) */
     border-color: rgba(62, 62, 66, 0.3); /* TODO: theme-token candidate (disabled-border) */
     color: var(--color-fg-subtle);
@@ -355,20 +905,39 @@ button:disabled {
     opacity: 0.4;
 }
 
-button.danger {
+.btn-icon.danger {
     color: var(--color-danger);
     border-color: var(--color-danger-border);
     background: var(--color-danger-bg);
 }
 
-button.danger:hover:not(:disabled) {
+.btn-icon.danger:hover:not(:disabled) {
     background: var(--color-danger-bg-hover);
     border-color: var(--color-danger);
     box-shadow: 0 0 12px var(--color-danger-glow);
 }
 
-/* Tooltip on hover (only for buttons with data-tooltip) */
-button[data-tooltip]::after {
+/* Tooltip on hover (only for icon buttons with data-tooltip - currently
+ * just #configEditorBtn; logoutBtn/settingsBtn carry data-tooltip too
+ * but live inside .header-menu-panel, which overrides this to a static
+ * row label - see header-menu.css).
+ *
+ * The button MUST be the containing block. Without this the tooltip's
+ * `position: absolute` resolved against whatever positioned ancestor
+ * happened to exist - `.controls` for the header cluster (so all six
+ * header tooltips stacked at one spot instead of under their own
+ * button), and the INITIAL containing block for the terminal tool strip,
+ * which has no positioned ancestor at all. The second case is what put a
+ * sideways scroll inside the session: a viewport-anchored `left: 50%`
+ * tooltip extended 42px past the right edge of `#terminal-screen`, and
+ * that element's `overflow: auto` turned the invisible pseudo-element
+ * into a real 42px horizontal scroll the user could drag. Measured
+ * before: `#terminal-screen.scrollLeft` reached 42 at 390px wide. */
+.btn-icon[data-tooltip] {
+    position: relative;
+}
+
+.btn-icon[data-tooltip]::after {
     content: attr(data-tooltip);
     position: absolute;
     bottom: -30px;
@@ -390,7 +959,7 @@ button[data-tooltip]::after {
     z-index: 1;
 }
 
-button[data-tooltip]:hover::after {
+.btn-icon[data-tooltip]:hover::after {
     opacity: 1;
 }
 
@@ -439,24 +1008,67 @@ button[data-tooltip]:hover::after {
     pointer-events: none;
     transition: opacity 0.2s;
     border: 1px solid var(--color-accent);
-    /* See button[data-tooltip]::after — same reasoning, .status is the
-     * last child of .controls so this also guards against sitting behind
-     * an earlier sibling's own tooltip. */
+    /* See button[data-tooltip]::after - same reasoning. The light no
+     * longer sits in .controls at all (it is a home-bar or FAB-rail item
+     * now), but the stacking guard still earns its place: in the bar it
+     * has a text label sibling, and on the rail it must clear the
+     * terminal output underneath. */
     z-index: 1;
 }
 
-.status:hover::after {
+/* Hover is a MOUSE affordance, and this tooltip was the only way the
+ * status text was ever revealed - so on a touch device the light was a
+ * coloured circle with no explanation. `:focus` is the touch and keyboard
+ * path: the span carries `tabindex="0"`, a tap focuses it, tapping
+ * elsewhere blurs it. Not `:focus-visible` - that deliberately does NOT
+ * match a pointer tap, which is the exact case this exists for. */
+.status:hover::after,
+.status:focus::after {
     opacity: 1;
 }
 
-/* Terminal container */
+/* The span is focusable only to reveal its own text, so it gets the ring
+ * treatment used elsewhere rather than the UA outline, which would draw a
+ * square around a 12px circle. */
+.status:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* Terminal container.
+ *
+ * `min-height: 0`, never a pixel floor. A floor here is the same ratchet
+ * as the one on `body`: it makes the container taller than the space it
+ * was given, the overflow goes below the fold, and FitAddon then reads
+ * the floor rather than the viewport and hands tmux too many rows. The
+ * old 400px floor (350px under 768px, 300px under 480px) is exactly what
+ * a phone in landscape or with the keyboard up cannot satisfy. */
 .terminal-container {
     flex: 1;
     padding: 15px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    min-height: 400px;
+    min-height: 0;
+
+    /* Pull-to-refresh barrier. A drag on the terminal lands on
+     * `canvas.xterm-link-layer`, which is NOT a descendant of
+     * `.xterm-viewport` - the two are siblings under `.xterm`. So when
+     * xterm's own touchmove handler declines the gesture (it calls
+     * preventDefault only while the viewport can still move, and
+     * deliberately releases it at either boundary), the browser walks
+     * the ancestor chain of the CANVAS, not of the scroller. That chain
+     * is `.xterm-screen` -> `.xterm` -> `#terminal` -> here, and every
+     * link above was `overscroll-behavior: auto`, so a downward drag at
+     * the top of the scrollback reached the document and iOS Safari
+     * read it as pull-to-refresh.
+     *
+     * This is the NARROWEST element that can stop it: the first
+     * ancestor of the touch target that is a scroll container at all
+     * (`overflow: hidden` makes one). `contain`, not `none`, so the
+     * terminal keeps its own local bounce. Nothing document-wide is
+     * touched, so page-level gestures everywhere else are unchanged. */
+    overscroll-behavior: contain;
 }
 
 #terminal {
@@ -485,8 +1097,15 @@ button[data-tooltip]:hover::after {
     font-kerning: normal !important;
 }
 
-/* Info footer */
+/* Info footer - the terminal screen's real bottom bar. Flex row so the
+ * session id (left) and the connection-light group (right, added by
+ * terminal-tools.css) can share the width without colliding; #sessionInfo
+ * and .terminal-bar__status both shrink with an ellipsis rather than
+ * fighting each other for space on a narrow phone. */
 .info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     background: var(--color-bg-elevated);
     padding: 10px 20px;
     border-top: 1px solid var(--color-border);
@@ -494,12 +1113,20 @@ button[data-tooltip]:hover::after {
     color: var(--color-fg-muted);
 }
 
+#sessionInfo {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------------- */
-/* Local Servers panel — pure detection readout. The server tracks any   */
+/* Local Servers panel - pure detection readout. The server tracks any   */
 /* dev port detected in pane output (Vite, Next, Flask, etc.) and pushes */
 /* `local_server_detected` / `local_server_lost` over the WebSocket. The */
 /* row is intentionally minimal: monospace port chip on the left, the    */
-/* clickable URL on the right. No CRUD affordances — display-only.       */
+/* clickable URL on the right. No CRUD affordances - display-only.       */
 /* ---------------------------------------------------------------------- */
 .local-servers {
     background: var(--color-bg-card);
@@ -566,6 +1193,10 @@ button[data-tooltip]:hover::after {
     display: none;
     flex: 1;
     overflow: auto;
+    /* A flex item's automatic minimum size is its CONTENT size, which
+     * would let a tall child (the terminal) push the shell past one
+     * viewport and re-open the ratchet described on `body`. */
+    min-height: 0;
 }
 
 .screen.active {
@@ -635,6 +1266,9 @@ button[data-tooltip]:hover::after {
 
 .auth-button {
     width: 100%;
+    /* Without this the generic `button` height wins and the 12px vertical
+     * padding is absorbed: a 36px pill under a 46px .auth-input. */
+    height: auto;
     padding: 12px 20px;
     background: var(--color-accent-bg);
     color: var(--color-accent);
@@ -688,26 +1322,13 @@ button[data-tooltip]:hover::after {
 /* Launchpad screen styles */
 #launchpad-screen {
     flex-direction: column;
-    padding: 20px;
+    padding: var(--screen-pad-x);
 }
 
 .launchpad-container {
     max-width: 800px;
     width: 100%;
     margin: 0 auto;
-}
-
-.launchpad-header {
-    color: var(--color-accent);
-    font-size: 1.3rem;
-    margin-bottom: 10px;
-    font-weight: bold;
-}
-
-.launchpad-prompt {
-    color: var(--color-fg-muted);
-    font-size: 0.95rem;
-    margin-bottom: 30px;
 }
 
 .launchpad-section {
@@ -722,8 +1343,21 @@ button[data-tooltip]:hover::after {
 }
 
 /* Heading row variant: text hugs left, inline action button hugs right.
- * Used by the "recent projects" section so the + speed-dial sits beside
+ * Used by the "running sessions" section so the + speed-dial sits beside
  * the heading instead of floating in the chrome. */
+/* The launchpad's global actions row. Holds the create control (#new-fab).
+ *
+ * ALWAYS DISPLAYED, deliberately, and it has no empty state because it has
+ * no contents to be empty of. Never give this rule a display:none branch,
+ * and never nest the create control inside a section that has one - that is
+ * the exact bug this row was carved out to fix. */
+.launchpad-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
+
 .launchpad-section-title--row {
     display: flex;
     align-items: center;
@@ -786,55 +1420,15 @@ button[data-tooltip]:hover::after {
     transform: rotate(90deg);
 }
 
-.new-session-btn {
-    width: 100%;
-    padding: 16px 20px;
-    background: var(--color-accent-bg);
-    color: var(--color-accent);
-    border: 1px solid var(--color-accent-border);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.new-session-btn:hover {
-    background: var(--color-accent-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
-
-.new-session-btn + .new-session-btn {
-    margin-top: 10px;
-}
-
-.reset-server-btn {
-    width: 100%;
-    padding: 16px 20px;
-    background: var(--color-accent-bg);
-    color: var(--color-accent);
-    border: 1px solid var(--color-accent-border);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.reset-server-btn:hover {
-    background: var(--color-accent-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
+/* .new-session-btn and .reset-server-btn used to live here. Both are gone,
+ * for the same reason and by two different routes: the "new session" button
+ * left index.html at 344d82d when the launchpad was consolidated, and
+ * "reset server" became the "restart server" row inside the bottom-bar
+ * server-controls popup at cc248bf. Neither class is emitted by any
+ * template or any JS any more, so the generic `button` height reset that
+ * fix/audit-sweep wrote for them corrected a box that nothing renders.
+ * Removed rather than merged - a rule for an absent element is furniture
+ * that reads as coverage. */
 
 .project-list {
     display: flex;
@@ -843,9 +1437,51 @@ button[data-tooltip]:hover::after {
 }
 
 .project-item {
-    background: var(--color-accent-bg-soft);
+    /* ITEM 41 - AN 80 PERCENT FILL, NOT AN 8 PERCENT ONE. This was
+     * `var(--color-accent-bg-soft)`, an alpha 0.06 to 0.08 accent wash,
+     * so effectively the whole card was the animated theme canvas at
+     * z-index -1 with a hint of colour on top, and body text sat
+     * directly on moving pixels. The fill is now 80 percent of the
+     * theme's own card surface token, with the original accent wash
+     * kept as a background-IMAGE layer on top so the card still reads
+     * the same colour. Because the base is a theme token, a light theme
+     * fills with its light page colour (codex #f7f7fa, legacy_windows
+     * #C0C0C0) and a dark theme with its dark one - a single hardcoded
+     * fill tuned for near-black would be wrong on both of those.
+     * The base is --color-bg, the PAGE colour, deliberately not
+     * --color-bg-elevated: over a still backdrop an 80 percent page
+     * colour composites back to exactly the colour this card already
+     * was, so the look is unchanged and only the transparency moved.
+     * --color-bg-elevated was measured first and rejected: on dracula it
+     * is #44475a against a #282a36 page, which lifted the card and
+     * dropped the muted path line from 4.6:1 to 4.37:1. Every muted
+     * token in every theme was chosen against --color-bg, so that is the
+     * colour the fill has to land on.
+     * background-color and background-image are declared separately on
+     * purpose: any rule below that wants a different tint sets only the
+     * IMAGE and keeps this base, and any rule that uses the `background`
+     * shorthand would silently discard one of the two layers. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    /* ITEM 37 - ONE BORDER, ONE COLOUR. This box used to declare a 1px
+     * ring in --color-border and then override the LEFT edge to 3px in
+     * --color-accent. Two adjacent borders of different widths and
+     * colours are joined by the painting algorithm with a diagonal
+     * miter, and under `border-radius` that miter is drawn along the
+     * corner arc - which is the smeared two-tone wedge at the top-left
+     * and bottom-left corners, the "bleed on the left side of a
+     * different color". It is not an overlay and not a theme bug; it is
+     * what a mismatched border shorthand renders as. The ring is now
+     * uniform, and the accent rail is an inset shadow instead: shadows
+     * are clipped to the border radius rather than mitered into the
+     * neighbouring edge, so the rail keeps its exact former width,
+     * colour and position with no corner transition at all. Every rule
+     * below that changes the rail colour changes THIS shadow, never a
+     * border-left-color, and every rule that adds a glow must re-declare
+     * the inset rail alongside it (box-shadow is one property, not a
+     * list that accumulates). */
     border: 1px solid var(--color-border);
-    border-left: 3px solid var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
     padding: 14px 40px 14px 16px;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -855,9 +1491,9 @@ button[data-tooltip]:hover::after {
 }
 
 .project-item:hover {
-    background: var(--color-bg-hover);
+    background-color: color-mix(in srgb, var(--color-bg-hover, #323235) 80%, transparent);
     border-color: var(--color-accent);
-    box-shadow: 0 0 8px var(--color-accent-border-soft);
+    box-shadow: inset 3px 0 0 var(--color-accent), 0 0 8px var(--color-accent-border-soft);
 }
 
 .project-name {
@@ -882,6 +1518,11 @@ button[data-tooltip]:hover::after {
     line-height: 1.4;
 }
 
+/* Edit + delete are ALWAYS rendered and ALWAYS visible (no `:hover`-only
+ * reveal anywhere in this file) so they are reachable on touch devices
+ * with no hover state at all - the user drives this from a phone. See
+ * the `@media (pointer: coarse)` block below for the touch-specific
+ * hit-area bump. */
 .project-delete-btn {
     position: absolute;
     top: 8px;
@@ -910,7 +1551,7 @@ button[data-tooltip]:hover::after {
     transform: scale(1.1);
 }
 
-/* Edit (pencil) button — sits immediately left of the delete ×. Calm
+/* Edit (pencil) button - sits immediately left of the delete ×. Calm
  * neutral default, amber on hover so it never competes with the
  * destructive red of delete. */
 .project-edit-btn {
@@ -941,6 +1582,107 @@ button[data-tooltip]:hover::after {
     transform: scale(1.1);
 }
 
+/* feat/projects-table (S3) - presence states. MISSING (confirmed gone,
+ * ENOENT) and UNREACHABLE (could not tell - EACCES/ELOOP/timeout/an
+ * unmounted volume) are DELIBERATELY given different colors as well as
+ * different labels: red reads as "this is gone", amber reads as
+ * "uncertain" (matching .project-edit-btn's own amber-for-uncertain use
+ * above). Collapsing the two into one look would recreate, on screen,
+ * the exact bug the four-state model in src/core/project_presence.py
+ * exists to prevent - telling the user his project is gone when the
+ * truth is a sleeping external drive. */
+.project-item.project-presence-disabled {
+    cursor: not-allowed;
+}
+
+/* The rail colour is the presence signal, so it moves from the old
+ * border-left-color onto the same inset shadow the base rule now uses.
+ * The two states keep their two DIFFERENT colours - red for "this is
+ * gone", amber for "I could not tell" - which is the whole point of the
+ * four-state model; only the mechanism that paints them changed. The
+ * state tint keeps riding as a background-IMAGE over the 80 percent
+ * base, so a disabled row is as readable as a normal one. */
+.project-item.project-presence-missing {
+    box-shadow: inset 3px 0 0 var(--color-danger);
+    background-image: linear-gradient(var(--color-danger-bg), var(--color-danger-bg));
+    opacity: 0.75;
+}
+
+.project-item.project-presence-missing:hover {
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-danger-bg), var(--color-danger-bg));
+    border-color: var(--color-border);
+    box-shadow: inset 3px 0 0 var(--color-danger);
+}
+
+.project-item.project-presence-unreachable {
+    box-shadow: inset 3px 0 0 var(--color-warning);
+    background-image: linear-gradient(var(--color-warning-bg), var(--color-warning-bg));
+    opacity: 0.75;
+}
+
+.project-item.project-presence-unreachable:hover {
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-warning-bg), var(--color-warning-bg));
+    border-color: var(--color-border);
+    box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.project-presence-disabled .project-edit-btn,
+.project-presence-disabled .project-delete-btn {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.project-presence-badge {
+    margin-top: 8px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.72rem;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    display: inline-block;
+    word-break: break-word;
+}
+
+.project-presence-badge-missing {
+    color: var(--color-danger);
+    background: var(--color-danger-bg-hover);
+    border: 1px solid var(--color-danger-border);
+}
+
+.project-presence-badge-unreachable {
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+}
+
+/* Touch hit-area bump. `pointer: coarse` covers phones/tablets - no
+ * `:hover` involved, since a coarse pointer generally can't hover at
+ * all. 44px is the standard minimum touch target (Apple HIG / WCAG
+ * 2.5.5); `.project-item` gets matching right padding so the wider
+ * buttons never overlap the description text. */
+@media (pointer: coarse) {
+    .project-item {
+        padding-right: 96px;
+    }
+
+    .project-delete-btn,
+    .project-edit-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .project-delete-btn {
+        right: 4px;
+    }
+
+    .project-edit-btn {
+        right: 48px;
+    }
+}
+
 .launchpad-empty {
     color: var(--color-fg-muted);
     font-size: 0.9rem;
@@ -949,15 +1691,74 @@ button[data-tooltip]:hover::after {
     text-align: center;
 }
 
-/* Adopt-external-session disclosure. Native <details>/<summary> — we
- * only restyle the summary marker so it's visible on the dark theme
- * and reads as an inline help affordance next to the section title. */
-.adopt-disclosure { display: inline-block; margin-left: 8px; font-size: 0.85rem; font-weight: normal; }
-.adopt-disclosure > summary { cursor: help; color: var(--color-accent); list-style: none; display: inline; padding: 0 6px; border: 1px solid var(--color-accent-glow); border-radius: var(--radius-full); }
+/* Adopt-external-session disclosure. Native <details>/<summary>.
+ *
+ * Sits at the TOP of the launchpad pane, under the launcher title and its
+ * subtitle - see the markup comment in launchpad.js for why it moved out
+ * of the running-sessions heading row.
+ *
+ * The marker used to be a bare "?" character in a bordered pill: a 21.7 x
+ * 17 box of 12.75px text, the only glyph on the pane that was not an SVG,
+ * and visibly heavier than its neighbours. It is now a 16 x 16 inline SVG
+ * drawn from the same family as `.new-fab__icon` (viewBox "0 0 24 24",
+ * stroke-width 1.8) and smaller than both the old pill and that 18px
+ * family, which is what "it can be smaller" asked for.
+ *
+ * NO `stroke-width` HERE ON PURPOSE. The value is a presentation attribute
+ * on the <svg> in the markup, inherited by the paths. A CSS rule targeting
+ * `svg` loses to a presentation attribute on a child `path`, so declaring
+ * it in both places is how a restyle ends up silently ignored - it has
+ * happened twice in this codebase. One home for the value, and it is the
+ * markup. */
+.adopt-disclosure { display: block; margin: 0 0 22px; font-size: 0.85rem; font-weight: normal; }
+.adopt-disclosure > summary {
+    cursor: help;
+    color: var(--color-fg-muted);
+    list-style: none;
+    /* inline-flex, not inline: the box must be exactly the icon so the
+     * 16px figure is the whole visible affordance. */
+    display: inline-flex;
+    align-items: center;
+    /* Anchor for the invisible touch target below. */
+    position: relative;
+    transition: color 160ms ease;
+}
+.adopt-disclosure > summary:hover,
+.adopt-disclosure[open] > summary { color: var(--color-accent); }
+/* 44px touch target WITHOUT a 44px layout box. The user asked for a
+ * smaller icon; a finger still needs 44px. A pseudo-element takes no part
+ * in layout, so the summary's own rect stays 16 x 16 while the tappable
+ * area is 44 x 44 centred on it. The 22px of margin below the disclosure
+ * is what keeps this overlay clear of the next section's heading. */
+.adopt-disclosure > summary::after {
+    content: '';
+    position: absolute;
+    inset: -14px;
+}
+.adopt-disclosure > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; border-radius: var(--radius-sm); }
+.adopt-disclosure__icon { display: block; }
 .adopt-disclosure > summary::-webkit-details-marker { display: none; }
 .adopt-disclosure-body { margin-top: 10px; padding: 12px 14px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-left: 3px solid var(--color-accent); border-radius: var(--radius-md); color: var(--color-fg); font-size: 0.85rem; line-height: 1.5; font-weight: normal; }
 .adopt-disclosure-body p + p { margin-top: 10px; }
 .adopt-disclosure-body code { background: var(--color-bg-overlay-faint); padding: 2px 6px; border-radius: var(--radius-sm); color: var(--color-accent); }
+/* README link - was a bare <a> with NO rule targeting it at all, so every
+ * theme showed the browser's default blue (link) / purple (visited)
+ * instead of the theme's own accent. Underlined at rest (not just on
+ * hover) so it stays distinguishable from the surrounding body text by
+ * more than color alone; focus-visible gets the same outline treatment
+ * as the disclosure's own summary above. */
+.adopt-disclosure-body a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.adopt-disclosure-body a:visited { color: var(--color-accent-strong); }
+.adopt-disclosure-body a:hover { color: var(--color-accent-strong); }
+.adopt-disclosure-body a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
 .adopt-disclosure-code { background: var(--color-accent-bg-soft); border: 1px solid var(--color-accent-bg-hover); padding: 0.5rem; margin: 0.4rem 0; overflow-x: auto; font-size: 0.85em; white-space: pre-wrap; word-break: break-all; }
 
 /* Adopt row: reuses .project-item base; overlays an attach button
@@ -965,52 +1766,39 @@ button[data-tooltip]:hover::after {
 .adopt-item { padding-right: 100px; }
 .adopt-attach-btn { position: absolute; top: 12px; right: 12px; width: auto; height: auto; padding: 6px 14px; font-size: 0.85rem; }
 
-.launchpad-footer {
-    margin-top: 40px;
-    padding: 20px 0;
-    text-align: center;
-    border-top: 1px solid var(--color-accent-border-soft);
-}
+/* THE LAUNCHPAD FOOTER IS GONE. It was a centred block at the end of the
+ * scrolled home-screen content holding one link, so you only ever saw it
+ * if you scrolled to the bottom. It is now a real bottom bar pinned to the
+ * home screen: client/css/home-bar.css. Do not reintroduce a
+ * `.launchpad-footer` rule here - the bar is a different box in a
+ * different place, not a restyle of this one. */
 
-.launchpad-footer a {
-    display: inline-block;
-    transition: all 0.3s ease;
-    opacity: 0.7;
-    color: var(--color-fg-muted);
-}
-
-.launchpad-footer a:hover {
-    opacity: 1;
-    transform: scale(1.1);
-    color: var(--color-accent);
-}
-
-.launchpad-footer svg {
-    filter: drop-shadow(0 0 8px var(--color-accent-shadow-soft));
-}
-
-.launchpad-footer a:hover svg {
-    filter: drop-shadow(0 0 16px var(--color-accent-border-strong));
-}
-
-/* Terminal screen */
+/* Terminal screen.
+ *
+ * `position: relative` was the containing block for the tool strip that
+ * used to overlay the terminal's top-right corner. That strip is gone
+ * (see terminal-tools.css); this stays because the terminal screen is
+ * still a positioning context for anything mounted inside it.
+ *
+ * `overflow: hidden` overrides `.screen`'s `auto`. The terminal screen
+ * must never scroll in either axis: xterm owns vertical scrolling inside
+ * `.xterm-viewport`, and horizontal scroll here is always a bug - it
+ * means something escaped the viewport width. Belt and braces alongside
+ * the tooltip containing-block fix above. */
 #terminal-screen {
     flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
 }
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-    .header {
-        padding: 10px 15px;
-    }
-
     h1 {
         font-size: 1.1rem;
     }
 
-    button {
-        width: 44px;
-        height: 44px;
+    .btn-icon {
         font-size: 18px;
     }
 
@@ -1025,9 +1813,18 @@ button[data-tooltip]:hover::after {
 
     .terminal-container {
         padding: 10px;
-        min-height: 350px;
     }
 
+    /* `.info` is `display: none` below 768px again. The connection light
+     * moved into this bar (449afe3, 2026-08-17) so it could avoid being a
+     * `position: fixed` floating chip, but that made the bar visible on
+     * mobile for the first time - `#sessionInfo` (the session id/PID
+     * readout, the bar's only other content) was never shown below this
+     * breakpoint either, so nothing previously visible on a phone is lost
+     * by hiding the whole bar again. Hiding the parent hides the status
+     * light with it - no separate rule needed for the child. Reclaims the
+     * 17px / 2.2% this bar cost at 390x844 (measured 786px -> 769px in
+     * 449afe3) back for the terminal. */
     .info {
         display: none;
     }
@@ -1038,7 +1835,12 @@ button[data-tooltip]:hover::after {
     }
 
     .project-item {
-        padding: 12px 14px;
+        /* Left/top/bottom only - right stays whatever the base rule (or
+         * the pointer:coarse touch bump above) set, so edit/delete never
+         * get clipped under the description text on a narrow phone. */
+        padding-top: 12px;
+        padding-bottom: 12px;
+        padding-left: 14px;
     }
 }
 
@@ -1047,37 +1849,31 @@ button[data-tooltip]:hover::after {
         font-size: 1rem;
     }
 
-    button {
-        width: 40px;
-        height: 40px;
-    }
-
-    .header {
-        padding: 8px 12px;
-    }
-
     .terminal-container {
         padding: 8px;
-        min-height: 300px;
     }
 
     .auth-prompt {
         font-size: 1.1rem;
     }
 
-    .launchpad-header {
-        font-size: 1.1rem;
+    .home-subheader {
+        font-size: 0.72rem;
     }
 }
 
-/* Mobile D-Pad Styles */
+/* Mobile D-Pad Styles
+ *
+ * Slot 1 of the bottom row, not the corner. The terminal tools button
+ * sits to its right at slot 0 so every floating control hovers over the
+ * command line together instead of stacking up the right edge. */
 .dpad-float-button {
     display: none; /* Hidden by default, shown on mobile via JS */
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 45px;
-    height: 45px;
+    bottom: var(--fab-edge);
+    right: var(--fab-slot-1);
+    width: var(--fab-size);
+    height: var(--fab-size);
     border-radius: var(--radius-full);
     background: var(--color-accent-bg);
     border: 2px solid var(--color-accent-border);
@@ -1124,6 +1920,7 @@ button[data-tooltip]:hover::after {
     from {
         opacity: 0;
         transform: translate(calc(50vw - 50%), calc(50vh - 50%)) scale(0.3);
+        transform: translate(calc(50vw - 50%), calc(50dvh - 50%)) scale(0.3);
     }
     to {
         opacity: 1;
@@ -1170,28 +1967,6 @@ button[data-tooltip]:hover::after {
 }
 
 .dpad-shift-tab:active {
-    background: var(--color-accent-bg-active);
-    border-color: var(--color-accent-border-strong);
-    transform: scale(0.95);
-}
-
-.dpad-tab {
-    position: absolute;
-    bottom: -20px;
-    right: -20px;
-    width: 50px;
-    height: 50px;
-    border-radius: var(--radius-full);
-    background: var(--color-accent-bg);
-    border: 2px solid var(--color-accent-border);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    cursor: pointer;
-    animation: slideInFromBottomRight 0.3s ease-out;
-}
-
-.dpad-tab:active {
     background: var(--color-accent-bg-active);
     border-color: var(--color-accent-border-strong);
     transform: scale(0.95);
@@ -1397,10 +2172,10 @@ button[data-tooltip]:hover::after {
 /* Slash Commands Button */
 .slash-commands-btn {
     position: fixed;
-    bottom: 20px;
-    left: 20px;
-    width: 45px;
-    height: 45px;
+    bottom: var(--fab-edge);
+    left: var(--fab-edge);
+    width: var(--fab-size);
+    height: var(--fab-size);
     background: var(--color-accent-bg);
     border: 2px solid var(--color-accent-border);
     border-radius: var(--radius-full);
@@ -1451,6 +2226,7 @@ button[data-tooltip]:hover::after {
     width: 90%;
     max-width: 700px;
     max-height: 85vh;
+    max-height: 85dvh;
     display: flex;
     flex-direction: column;
     animation: slideUp 0.3s ease;
@@ -1592,6 +2368,22 @@ button[data-tooltip]:hover::after {
     transform: translateX(4px);
 }
 
+/* overflow-wrap is LOAD-BEARING. Command descriptions come from scraped
+ * docs and user-authored skill frontmatter, and some contain a single
+ * unbreakable token - a filesystem path, a URL, a hostname. With the
+ * default `overflow-wrap: normal` such a token never breaks: measured at
+ * 375px, `~/Development/.../config/servers.yaml.` rendered 491.3px inside a
+ * 234.3px line box, which pushed `.modal-body` (overflow-x: auto) to
+ * scrollWidth 520 against clientWidth 292. That 228px of slack is what made
+ * the whole list slide left and right while scrolling vertically. Breaking
+ * inside the token keeps every row inside the container. */
+.command-name,
+.command-description {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .command-name {
     color: var(--color-accent);
     font-family: var(--font-mono);
@@ -1603,6 +2395,83 @@ button[data-tooltip]:hover::after {
     color: var(--color-fg-muted);
     font-size: 0.85rem;
     line-height: 1.4;
+}
+
+/* A flex item defaults to min-width: auto (its min-content width), so a
+ * wide child would still be able to push these containers past the
+ * viewport even after the wrapping fix above. Belt and braces: the list
+ * can never be wider than the modal body that scrolls it. */
+.all-commands-list,
+.command-category,
+.command-item {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* The "more"/"less" control that reveals a truncated description in place.
+ * A phone has no hover, so the full text has to be reachable by a tap;
+ * a title attribute would be a control the user can never see.
+ *
+ * SQUARE, not a pill. It was `--radius-pill` (50px), which on a 17px-tall
+ * control is a full oval - the same shape defect the settings tab strip
+ * was fixed for. It also now shares a row with the favorites star, and
+ * two controls on one row should not be told apart by their corner
+ * radius: `more` is a WORD in normal flow at the bottom left, the star is
+ * an ICON pinned to the top right. */
+.command-more {
+    width: auto;
+    height: auto;
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    color: var(--color-fg-subtle);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+
+.command-more:hover,
+.command-more:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    outline: none;
+}
+
+/* Live-filter input (Task 4) - sits above the all-commands list, inside
+   the modal that's already open. Does not affect open/close behavior. */
+.command-filter-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--color-bg-elevated);
+    border: 2px solid var(--color-accent-border);
+    color: var(--color-fg);
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    margin-bottom: 16px;
+}
+
+.command-filter-input:focus {
+    outline: none;
+    border-color: var(--color-accent-border-strong);
+    box-shadow: 0 0 12px var(--color-accent-glow-strong);
+}
+
+/* Keyboard-selected row while filtering - mirrors the existing :hover
+   treatment so arrow-key navigation looks the same as a mouse hover. */
+.command-item.keyboard-active {
+    background: var(--color-border);
+    border-color: var(--color-accent);
+    transform: translateX(4px);
+}
+
+.command-category.filter-hidden,
+.command-item.filter-hidden {
+    display: none;
 }
 
 /* Folder picker modal */
@@ -1720,7 +2589,7 @@ button[data-tooltip]:hover::after {
     color: var(--color-accent);
 }
 
-/* Keyboard / type-ahead selection — stronger than hover, with an inset
+/* Keyboard / type-ahead selection - stronger than hover, with an inset
    accent bar so the active row reads clearly during arrow + type nav. */
 .folder-picker-item-active {
     background: var(--color-accent-bg);
@@ -1733,6 +2602,12 @@ button[data-tooltip]:hover::after {
     flex-shrink: 0;
 }
 
+/* No `min-width: 0` here on purpose. A flex item's automatic minimum size
+ * is its content size ONLY while its main-axis overflow is `visible`; the
+ * `overflow: hidden` below already zeroes it, so this shrinks and
+ * ellipsizes correctly as written. Measured at 390px with a 460px name:
+ * item 230px wide, list scrollWidth == clientWidth == 278. Same for
+ * .provider-item-name below. */
 .folder-picker-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1747,7 +2622,7 @@ button[data-tooltip]:hover::after {
     font-style: italic;
 }
 
-/* Provider selector modal — reuses .folder-picker-list/-item/-status above.
+/* Provider selector modal - reuses .folder-picker-list/-item/-status above.
    provider-item-name gets flex:1 so the remove "x" (model rows only) and
    the "+ add model" affordance line up flush right. */
 .provider-item-name {
@@ -1812,6 +2687,7 @@ button[data-tooltip]:hover::after {
     .slash-commands-modal-content {
         width: 95%;
         max-height: 90vh;
+        max-height: 90dvh;
     }
 
     .slash-commands-modal-content .modal-body {
@@ -1853,28 +2729,116 @@ button[data-tooltip]:hover::after {
     margin-bottom: 1.5rem;
 }
 
+/* Count / state line beside the "running sessions" heading. It renders a
+ * measured number, or the words "count could not be determined" when a
+ * probe did not answer - never a fabricated zero. The [data-listing-ok]
+ * attribute is what the not-determined styling keys off, so the state is
+ * never colour-only. */
+.launchpad-section-count {
+    flex: 0 0 auto;
+    margin-left: 8px;
+    font-size: 0.78rem;
+    opacity: 0.66;
+    white-space: nowrap;
+}
+
+.launchpad-section-count[data-listing-ok="0"] {
+    color: var(--color-warning, #d79921);
+    opacity: 1;
+}
+
+/* NEEDS ATTENTION block: the visible form of "could not evaluate". It sits
+ * at the top of the list, carries no action controls on purpose (see
+ * _renderListingAttentionHtml in launchpad.js), and is styled as a notice
+ * rather than a session row so it is never mistaken for one. */
+.running-sessions-attention {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning, #d79921);
+    background: var(--color-accent-bg-soft);
+    cursor: default;
+}
+
+.running-sessions-attention__head {
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: var(--color-warning, #d79921);
+}
+
+.running-sessions-attention__title {
+    margin-top: 3px;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.running-sessions-attention__detail,
+.running-sessions-attention__note {
+    margin-top: 3px;
+    font-size: 0.74rem;
+    opacity: 0.75;
+    word-break: break-word;
+}
+
 .running-session-row {
     display: flex;
     flex-direction: column;
     padding: 10px 12px;
     margin-bottom: 6px;
-    background: var(--color-accent-bg-soft);
+    /* ITEM 41, same two-layer fill as .project-item above: 80 percent of
+     * the theme's card surface, with the original accent wash kept as an
+     * image layer so the row's colour is unchanged. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    /* ONE BORDER, ONE COLOUR, FOUR SIDES - the same ring .project-item
+     * above already draws. This row used to have NO border at all except
+     * a 3px left edge in the session-TYPE colour (see the removed
+     * ownership-stripe block below), so three sides were bare and the
+     * fourth was a coloured bar. The border is now a theme token on all
+     * four edges, which is what "just the border and background based
+     * upon the theme" asks for: nothing on this box encodes what KIND of
+     * session it is any more, and the TMUX / EXTERNAL badge in the row
+     * is the single source of truth for that. */
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease;
 }
 
+/* Hover changes the TINT layer only. Written as a `background` shorthand
+ * it would reset background-color too and drop the row back to a 14
+ * percent fill on hover, which is exactly the legibility problem item 41
+ * is about - and it would only show up while the pointer was down the
+ * list. */
 .running-session-row:hover {
-    background: rgba(215, 119, 87, 0.14); /* TODO: theme-token candidate (accent-bg-mid) */
+    background-image: linear-gradient(rgba(215, 119, 87, 0.14), rgba(215, 119, 87, 0.14)); /* TODO: theme-token candidate (accent-bg-mid) */
 }
 
-.running-session-row.owned {
-    border-left: 3px solid var(--color-success);
-}
-
-.running-session-row.external {
-    border-left: 3px solid var(--color-warning);
-}
+/* THE OWNERSHIP STRIPE IS GONE, AND `.owned` / `.external` NOW PAINT
+ * NOTHING. Deliberately no rule here, so this comment is the record of
+ * why the selectors still exist in launchpad.js and carry no colour.
+ *
+ * It was a 3px `border-left` in --color-badge-tmux-fg /
+ * --color-badge-external-fg: the SAME tokens as the TMUX / EXTERNAL
+ * badge pill in the same row, chosen so the bar and the badge could
+ * never disagree. Keeping them in step is the problem, not the fix. Two
+ * places encoding one fact is two sources of truth, and the user hit the
+ * failure mode directly - a card whose left bar was the wrong colour for
+ * its badge. The badge is the cue that says the word out loud and is
+ * never colour-only, so it wins; the bar was a colour-only restatement
+ * of it and is the one that goes.
+ *
+ * What replaces it is nothing, on purpose. `.running-session-row` above
+ * now carries a uniform 1px --color-border ring, so the left edge is the
+ * same theme colour as the other three rather than a bare edge where a
+ * coloured bar used to be. Nothing on the row's box encodes session type
+ * any more.
+ *
+ * The `.owned` / `.external` classes are still written by
+ * launchpad.js:976 and still select correctly; they are simply not a
+ * paint hook. Do not reintroduce a colour here without also deciding
+ * which of the two signals is authoritative. */
 
 .running-session-top {
     display: flex;
@@ -1883,36 +2847,46 @@ button[data-tooltip]:hover::after {
     margin-bottom: 4px;
 }
 
-.running-session-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
-    display: inline-block;
-    animation: pulse-glow 1.5s ease-in-out infinite;
-}
-
-.running-session-row.owned .running-session-dot {
-    background: var(--color-success);
-    box-shadow: 0 0 8px var(--color-success);
-}
-
-.running-session-row.external .running-session-dot {
-    background: var(--color-warning);
-    box-shadow: 0 0 8px var(--color-warning);
-}
+/* .running-session-dot replaced by the shared .status-dot classes
+ * (client/css/session-sidebar.css) which color by REAL activity status
+ * (running/idle/dead/unknown) instead of by ownership. */
 
 .running-session-name {
     flex: 1;
+    /* Unlike .folder-picker-name above this had NO overflow at all, so
+     * its automatic minimum size really was its content size and the row
+     * could not shrink. Measured at 390px with an all-underscore tmux
+     * name: the name laid out 501px wide in a 280px row, and the kill
+     * control's right edge landed at 573px - 293px off-screen, reachable
+     * only by scrolling #launchpad-screen sideways. `overflow: hidden`
+     * is what actually zeroes the automatic minimum; min-width: 0 states
+     * the same intent explicitly so a later overflow change cannot
+     * silently bring the bug back.
+     *
+     * No `white-space: nowrap`: ordinary multi-word names should still
+     * wrap. This bounds the unbreakable-token case only. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-weight: bold;
     color: var(--color-accent);
 }
 
+/* The row's one destructive control: X (close) on a running row, trash
+ * (remove) on a stopped one, built by client/js/session-row-actions.js.
+ * It is a real <button> now, not a role="button" span, so it is
+ * keyboard-operable without per-surface key handling - hence the
+ * background/border/padding/font resets, which a span never needed. */
 .running-session-kill {
     width: 32px;
     height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    font: inherit;
     cursor: pointer;
     color: var(--color-danger-soft);
     border-radius: var(--radius-md);
@@ -1920,10 +2894,77 @@ button[data-tooltip]:hover::after {
     transition: color 120ms ease, transform 120ms ease, background 120ms ease;
 }
 
-.running-session-kill:hover {
+/* Restore the pre-refactor glyph weight on THIS surface.
+ *
+ * The old launcher X was inlined at width/height 18 on a `0 0 24 24`
+ * viewBox at stroke-width 2.5, i.e. a 9x9 rendered glyph drawn with a
+ * 1.875px stroke (24 -> 18 scales by 0.75). The shared helper in
+ * session-status-ui.js draws a 16x16 viewBox at 16px and stroke-width
+ * 1.5, which lands at an 8x8 glyph with a 1.5px stroke: visibly lighter
+ * and smaller than the pencil and envelope it sits beside.
+ *
+ * Sizing is the host surface's job by design (SessionRowActions.html()
+ * takes a surfaceClass for exactly this), so correct it here rather than
+ * in the shared glyph, which the sidebar draws at its own smaller scale.
+ * 18px render on a 16 viewBox scales by 1.125, and both glyph paths span
+ * half their viewBox in either family, so the arms land back at 9x9;
+ * stroke-width 1.67 then renders as 1.88px.
+ *
+ * The stroke rule has to target the paths, NOT the svg: every path in
+ * the shared glyphs carries its own `stroke-width="1.5"` presentation
+ * attribute, and an inherited value loses to an element's own
+ * presentation attribute. A CSS declaration matching the path itself
+ * does beat it. Applies to the trash too, deliberately: the two are one
+ * control in two states and must carry the same weight. */
+.running-session-kill svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* The RESTART control on a dead row - the one action in this family that
+ * destroys nothing, so it must not wear the destructive palette.
+ *
+ * It sits directly beside the trash on the same row, and that is the only
+ * place in the app where a harmless control and a permanent one are
+ * adjacent. Color is the fastest thing the eye resolves, so painting
+ * restart in the same danger red would make the safe button look exactly
+ * as consequential as the one that deletes an uploads bucket - and, worse,
+ * would make the trash beside it stop reading as a warning at all. Shape
+ * carries the meaning (a circular arrow, not a play triangle - see
+ * restartIconSvg); color carries only the stakes.
+ *
+ * ONE RULE FOR BOTH SURFACES, matched on the shared BASE_CLASS plus the
+ * modifier rather than on either host's own class. The launcher
+ * (.running-session-kill, here) and the sidebar
+ * (.session-sidebar-row-delete, session-sidebar.css) size the control
+ * differently but agree on this, and session-sidebar.css is at its
+ * 500-line budget. The doubled class is what makes the selector (0,3,0),
+ * which is what lets it beat the sidebar's own (0,2,0) danger hover from
+ * an EARLIER stylesheet - equal specificity would have lost on source
+ * order and silently painted the safe button red in the sidebar only. */
+.session-row-action.session-row-action-restart {
+    color: var(--color-fg-faint);
+}
+
+.session-row-action.session-row-action-restart:hover,
+.session-row-action.session-row-action-restart:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+.running-session-kill svg path {
+    stroke-width: 1.67;
+}
+
+.running-session-kill:hover,
+.running-session-kill:focus-visible {
     color: var(--color-danger-strong);
     transform: scale(1.15);
     background: var(--color-danger-strong-bg);
+    border-color: var(--color-danger-strong);
+    outline: none;
 }
 
 .running-session-badges {
@@ -1934,21 +2975,253 @@ button[data-tooltip]:hover::after {
     flex-wrap: wrap;
 }
 
+/* Non-blocking error banners, replacing a native alert().
+   Fixed and stacked at the top so they are unmissable without halting
+   the page - the whole point of the change is that an error message must
+   not stop the program it is describing. Styled explicitly: an unclassed
+   div here would render as bare serif text over the app. */
+#launchpad-error-stack {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(640px, calc(100vw - 32px));
+    pointer-events: none;
+}
+
+.launchpad-error-card {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--color-bg-elevated, #1a1a1a);
+    border: 1px solid var(--color-danger-strong, #e64);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-strong, #fff);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.launchpad-error-text {
+    flex: 1;
+    min-width: 0;
+    /* A server detail can be long and can carry a path. Wrap it rather
+       than truncating: an error you cannot read whole is not actionable. */
+    overflow-wrap: anywhere;
+}
+
+.launchpad-error-dismiss {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.launchpad-error-dismiss:hover { color: var(--color-fg-strong, #fff); }
+
+/* The durable session id, pinned to the BOTTOM RIGHT of a session box.
+   `margin-left: auto` is what puts it there: the badges row is a flex
+   line, so this takes the remaining space and the id lands hard right
+   while the badges stay left. Styled explicitly rather than inheriting -
+   an unclassed span here picks up the row's body size and reads as a
+   badge, which is the one thing it is not. It is a quiet identifier the
+   eye should find when it goes looking, not a status. */
+.running-session-id {
+    margin-left: auto;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.68em;
+    color: var(--color-fg-muted);
+    opacity: 0.75;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* The "forked from" pointer, rendered inside the id. Deliberately dimmer
+   than the id itself: the session's OWN id is the thing being identified
+   and the parent is context for it, so the two must not read as equals. */
+.running-session-fork-of {
+    margin-left: 4px;
+    opacity: 0.7;
+}
+
 .badge {
     font-size: 0.7em;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     letter-spacing: 0.5px;
+    /* THE TRANSPARENT BORDER IS LOAD-BEARING, and its absence was
+     * visible. `.family-pill` below carries `border: 1px solid
+     * transparent` so a coloured variant can fill it without shifting
+     * layout. `.badge` did not, so two pills with identical font and
+     * padding rendered 16px and 18px tall - measured side by side in one
+     * centre-aligned flex strip, which is exactly where a 2px
+     * disagreement reads as bad spacing.
+     *
+     * box-sizing: border-box does not save this: it only stops padding
+     * and border eating into a SET height, and neither of these sets
+     * one, so both are content-sized and the border simply adds 2px. */
+    border: 1px solid transparent;
 }
 
-.badge-running  { background: var(--color-badge-owned-bg);    color: var(--color-badge-owned-fg); }
 .badge-tmux     { background: var(--color-badge-tmux-bg);     color: var(--color-badge-tmux-fg); }
 .badge-external { background: var(--color-badge-external-bg); color: var(--color-badge-external-fg); }
+
+/* feat/agent-family-pills - THREE-OUTCOME RULE applied to the family
+ * badge. Three states, never collapsed into each other:
+ *   --fact    a stored/explicit answer (solid border, filled)
+ *   --guess   an inferred answer (fingerprint scan or a wrapper with no
+ *             recorded family) - DASHED border so a guess never reads
+ *             identically to a fact at a glance, not just on hover
+ *   --unknown could not be determined at all - literally says so
+ */
+.family-pill {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.3px;
+    border: 1px solid transparent;
+}
+
+.family-pill--fact {
+    background: var(--color-family-fact-bg);
+    color: var(--color-family-fact-fg);
+    border-style: solid;
+    border-color: var(--color-family-fact-fg);
+}
+
+.family-pill--guess {
+    background: var(--color-family-guess-bg);
+    color: var(--color-family-guess-fg);
+    border-style: dashed;
+    border-color: var(--color-family-guess-fg);
+}
+
+.family-pill--guess::before {
+    content: "~";
+    margin-right: 2px;
+}
+
+.family-pill--unknown {
+    background: var(--color-family-unknown-bg);
+    color: var(--color-family-unknown-fg);
+    border-style: dotted;
+    border-color: var(--color-family-unknown-fg);
+    font-style: italic;
+}
 
 .running-session-age {
     color: var(--color-fg-faint);
     font-size: 0.75em;
     align-self: center;
+}
+
+/* S9 - RECENT section (datastore-backed, see launchpad.js
+ * loadRecentSessions/renderRecentSessions). Reuses the running-sessions
+ * attention-block visual language for the CANNOT DETERMINE state so the
+ * two three-outcome surfaces read as the same idiom. */
+.recent-sessions-attention {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning, #d79921);
+    background: var(--color-accent-bg-soft);
+    cursor: default;
+}
+
+.recent-sessions-attention__title {
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.recent-sessions-attention__detail {
+    margin-top: 3px;
+    font-size: 0.74rem;
+    opacity: 0.75;
+    word-break: break-word;
+}
+
+/* LAID OUT LIKE .project-session-row, which reads correctly and this
+ * did not. The difference was `justify-content: space-between` over FOUR
+ * children: that distributes the free space BETWEEN every pair, so the
+ * name, the lifecycle word and the two buttons ended up evenly scattered
+ * across the row instead of grouped. The project row avoids it by
+ * letting one child absorb the slack.
+ *
+ * Here the slack goes into the first button's auto margin instead of the
+ * name, so the order reads name, ENDED badge, then buttons pinned right -
+ * the badge stays WITH the name it describes rather than drifting over to
+ * the controls. */
+.recent-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: var(--color-accent-bg-soft);
+    border-radius: var(--radius-md);
+}
+
+.recent-session-name {
+    font-size: 0.86rem;
+    /* min-width:0 is what lets a long name actually ellipsis inside a
+     * flex row: without it the item's min-content width wins and the
+     * name pushes the buttons off the right edge instead of truncating. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A BADGE, not a word. Same box as .badge / .family-pill - including the
+ * 1px transparent border, so it sits at the identical height beside them
+ * (see .badge for why that border is load-bearing). */
+.recent-session-lifecycle {
+    flex: 0 0 auto;
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--color-fg-faint);
+    background: var(--color-accent-bg-soft);
+}
+
+/* THE SLACK LANDS ON THE FIRST BUTTON, whichever it is. Both controls
+ * are <button>, so one selector covers both cases: restart+delete, and
+ * delete alone (a lifecycle we could not evaluate gets no restart). The
+ * auto margin absorbs the row's free space, pinning every button right
+ * while the name and its badge stay left. */
+.recent-session-row button:first-of-type {
+    margin-left: auto;
+}
+
+.recent-session-restart {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm, 6px);
+    border: 1px solid var(--color-badge-tmux-fg);
+    background: transparent;
+    color: var(--color-badge-tmux-fg);
+    cursor: pointer;
+}
+
+.recent-session-restart:hover {
+    background: var(--color-accent-bg-mid, rgba(215, 119, 87, 0.14));
 }
 
 @keyframes pulse-glow {
@@ -1957,13 +3230,15 @@ button[data-tooltip]:hover::after {
 }
 
 /* =====================================================================
- * Phase 2 — Theme selector
+ * Phase 2 - Theme selector
  * ---------------------------------------------------------------------
- * Native <select> mounted into `.header .controls` by themeSelector.js.
- * Sits to the LEFT of the destroy button. Theme-aware via CSS vars so
- * each bundled theme re-skins it automatically with no per-theme rule.
+ * Native <select> mounted by themeSelector.js. feat/settings-screen:
+ * mount point moved from `.header .controls` into the settings panel's
+ * appearance section (see settings-panel.js's mountThemeSlot) - this
+ * class itself is unchanged, still theme-aware via CSS vars so each
+ * bundled theme re-skins it automatically with no per-theme rule.
  * Native control = free keyboard nav + accessible by default. The
- * dropdown is constrained to 60vh via `size` proxy on the popup
+ * dropdown is constrained to 60dvh via `size` proxy on the popup
  * (browser-specific; we set max-height as a hint where supported).
  * ===================================================================== */
 .theme-selector {
@@ -1981,7 +3256,7 @@ button[data-tooltip]:hover::after {
     cursor: pointer;
     transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
     /* Caret rendered as inline SVG in currentColor so it tracks the foreground
-     * across all themes — encoded background-image instead of an extra
+     * across all themes - encoded background-image instead of an extra
      * pseudo-element keeps this a pure single-selector rule. */
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M3 5l3 3 3-3'/></svg>");
     background-repeat: no-repeat;
@@ -2001,29 +3276,46 @@ button[data-tooltip]:hover::after {
     box-shadow: 0 0 0 2px var(--color-accent-bg);
 }
 
-/* Native <select> popup max-height — supported in Chromium-based browsers
+/* Native <select> popup max-height - supported in Chromium-based browsers
  * via the `size` attribute; this rule is a hint that some UA stylesheets
  * honor for the dropdown panel itself. */
 .theme-selector option {
     background: var(--color-bg-elevated);
     color: var(--color-fg);
     max-height: 60vh;
+    max-height: 60dvh;
+}
+
+/* Inside the settings panel there's a full-width field column to work
+ * with (unlike the cramped header), so drop the 160px cap that kept it
+ * from crowding the other header controls. */
+#settings-theme-slot .theme-selector {
+    max-width: none;
+    width: 100%;
 }
 
 /* =====================================================================
  * New-action speed-dial FAB
  * ---------------------------------------------------------------------
- * Floating "+" anchored to the top-right of the viewport (visually
- * sitting just under the header's right edge). Tap to fan out 3
+ * Inline "+" sitting at the right end of the "running sessions" section
+ * heading row (NOT floating in the chrome, and NOT the "recent projects"
+ * heading - both of those descriptions are stale). Tap to fan out 6
  * sub-action buttons in a vertical column. All colors flow through
  * theme tokens so every theme retints automatically. All animations
- * use transform + opacity ONLY (GPU compositor) — no layout thrash.
+ * use transform + opacity ONLY (GPU compositor) - no layout thrash.
  * Reduced-motion gated at the bottom of the block.
  * ===================================================================== */
 /* ---- Inline FAB wrapper (lives inside the section heading row) ----- */
 /* The wrapper is the absolute-positioning context for the fan-out menu.
- * It sits as a flex child of .launchpad-section-title--row, so .hidden
- * isn't needed (it shows/hides naturally with the launchpad screen). */
+ * It sits as a flex child of .launchpad-actions - a row that is ALWAYS
+ * present - so .hidden isn't needed (it shows/hides with the launchpad
+ * screen and nothing else).
+ *
+ * It used to be a child of the "running sessions" section title instead,
+ * and that section is display:none while the user has no sessions. The
+ * comment here previously read "shows/hides naturally with the launchpad
+ * screen", which was the assumption that hid it: it also hid with the
+ * SECTION, so a fresh install had no create control at all. */
 .new-fab {
     position: relative;
     display: inline-flex;
@@ -2036,13 +3328,13 @@ button[data-tooltip]:hover::after {
 
 /* When open, lift ABOVE the backdrop (1050) so item clicks land on the
  * pills, not the backdrop. Without this, the backdrop intercepts every
- * click and silently closes the menu — which presents to the user as
+ * click and silently closes the menu - which presents to the user as
  * "the buttons don't do anything." */
 .new-fab--open { z-index: 1100; }
 
 .new-fab.hidden { display: none; }
 
-/* ---- Trigger ("+" / "×") — ghost style ----------------------------- */
+/* ---- Trigger ("+" / "×") - ghost style ----------------------------- */
 .new-fab__trigger {
     /* Outline/ghost: transparent fill, visible border + readable glyph at rest.
      * Border + glyph use --color-fg-muted (always contrasts against bg because
@@ -2089,11 +3381,11 @@ button[data-tooltip]:hover::after {
 .new-fab__trigger:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-    /* Keep ghost discipline on focus — no solid fill */
+    /* Keep ghost discipline on focus - no solid fill */
     background: transparent;
 }
 
-/* When OPEN: × glyph + border in accent color (still ghost — no fill) */
+/* When OPEN: × glyph + border in accent color (still ghost - no fill) */
 .new-fab--open .new-fab__trigger {
     color: var(--color-accent);
     border-color: var(--color-accent);
@@ -2112,10 +3404,31 @@ button[data-tooltip]:hover::after {
 }
 
 /* ---- Menu (vertical fan-out column) -------------------------------- */
+/* FIXED, NOT ABSOLUTE, AND WHY. This used to be `position: absolute;
+ * top: 44px; right: 0`, which pinned the column BELOW the trigger
+ * unconditionally and left it a descendant of `.launchpad-scroll`
+ * (client/css/home-bar.css) - a real `overflow-y: auto` box. So whenever
+ * the heading sat low in the viewport the ~318px column was CLIPPED by
+ * the scroller instead of flipping above the trigger. The home bar did
+ * not cause that, it only moved the clip point up by the bar's height
+ * (36px, 44px on a coarse pointer) and made it easy to hit.
+ *
+ * `position: fixed` takes the menu out of the scroller's clip entirely
+ * (no ancestor here establishes a containing block via transform /
+ * filter / will-change, so fixed really is viewport-relative), and
+ * client/js/anchor-popover.js supplies left/top: above the anchor by
+ * default, below only when there is no room above, clamped into the
+ * VISUAL viewport either way. Same primitive the two terminal FAB menus
+ * use via client/js/fab-menu.js.
+ *
+ * left/top here are only the pre-measurement values. Launchpad.openNewFab()
+ * overwrites both before the menu becomes visible. Do NOT put `right: 0`
+ * back: AnchorPopover writes `left`, and a competing `right` would
+ * stretch the box and destroy the shared right edge below. */
 .new-fab__menu {
-    position: absolute;
-    top: 44px;              /* trigger height (36) + 8px gap */
-    right: 0;
+    position: fixed;
+    top: 0;
+    left: 0;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -2131,12 +3444,33 @@ button[data-tooltip]:hover::after {
 }
 
 .new-fab__item {
-    /* Pill row: circular icon + slide-in label. Width grows from icon-only
-     * to full pill once open so the label slides into existing space. */
+    /* Pill row: slide-in label + circular icon. Width grows from icon-only
+     * to full pill once open so the label slides into existing space.
+     *
+     * ICON ON THE RIGHT, AND WHY IT HAS TO BE. The menu is a column with
+     * `align-items: flex-end`, so every pill shares a right edge and each
+     * one is a different width because each label is a different length.
+     * With the icon first in the visual order its x was therefore a
+     * function of label length: measured live at 1527px the six icons
+     * started at 969.5 / 984 / 976.8 / 962.2 / 976.8 / 1020.4 - a 58.2px
+     * ragged column, and 55.2px ragged at 390px. Reversing the row anchors
+     * the icon to the shared right edge instead, so all six x-positions
+     * collapse to one value and the column lines up under the trigger "+",
+     * which is right-aligned too.
+     *
+     * `row-reverse` rather than reordering the markup: DOM order stays
+     * icon-then-label, which is the order a screen reader should read and
+     * the order `transform-origin: top right` was written against.
+     * The padding flips with it - the free edge is now the LEFT one. */
     width: auto;
-    height: 40px;
-    padding: 0 14px 0 0;
-    border-radius: 20px;
+    flex-direction: row-reverse;
+    /* 44px is the iOS minimum touch target, and these are the primary
+     * "start something" controls on the launchpad. Was 40px here and,
+     * worse, 38px under the max-width:600px rule below - the phone got
+     * the SMALLEST target of the three. */
+    height: 44px;
+    padding: 0 0 0 14px;
+    border-radius: 22px;
     background: var(--color-bg-elevated);
     color: var(--color-fg);
     border: 1px solid var(--color-border);
@@ -2176,7 +3510,10 @@ button[data-tooltip]:hover::after {
 .new-fab__icon {
     width: 38px;
     height: 38px;
-    margin-left: 1px;
+    /* Hugs the pill's right edge (the shared one) now that the row is
+     * reversed. This margin is what makes the icon column's x constant,
+     * so it must stay on the same side as the shared edge. */
+    margin-right: 1px;
     border-radius: var(--radius-full);
     background: var(--color-accent-bg);
     color: var(--color-accent);
@@ -2264,8 +3601,16 @@ button[data-tooltip]:hover::after {
 /* ---- Mobile tweaks ------------------------------------------------- */
 @media (max-width: 600px) {
     .new-fab__trigger { width: 34px; height: 34px; }
-    .new-fab__menu { top: 42px; gap: 8px; }
-    .new-fab__item { height: 38px; font-size: 0.74rem; }
+    /* `top` is JS-owned now (see the placement note on .new-fab__menu);
+     * this rule used to also set `top: 42px`, which is exactly the value
+     * that pinned the column below the trigger and let the scroller clip
+     * it. Only the gap is a phone concern. */
+    .new-fab__menu { gap: 8px; }
+    /* Height deliberately NOT shrunk. The label gets smaller on a phone;
+     * the touch target must not. This rule used to set 38px, which put
+     * the launchpad's primary actions under the 44px minimum on the only
+     * device where they are touched rather than clicked. */
+    .new-fab__item { font-size: 0.74rem; }
     .new-fab__icon { width: 36px; height: 36px; }
 }
 
@@ -2285,71 +3630,43 @@ button[data-tooltip]:hover::after {
     }
 }
 
-/* =====================================================================
- * IMG-PASTE — image attach button (mobile / touch only)
- * ---------------------------------------------------------------------
- * Hidden by default; revealed on coarse-pointer devices (phones /
- * tablets) where the desktop paste-event path is unreliable on iOS
- * Safari. Fixed-positioned over the bottom-right; sits BELOW the
- * dpad-float-button (z-index 9998) so the d-pad always wins z-order
- * priority but the attach button remains tappable on its own slot.
- * ===================================================================== */
-.cloude-image-attach-button {
-    display: none;
-    position: fixed;
-    right: 16px;
-    bottom: 80px;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-full);
-    background: var(--color-bg-elevated);
-    color: var(--color-fg);
-    border: 1px solid var(--color-border);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    z-index: 60;
-    box-shadow: var(--shadow-modal);
-    padding: 0;
-    align-items: center;
-    justify-content: center;
-}
-
-.cloude-image-attach-button:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-accent);
-    box-shadow: 0 0 12px var(--color-accent-glow);
-}
-
-.cloude-image-attach-button:active {
-    transform: scale(0.95);
-}
-
-@media (pointer: coarse) {
-    .cloude-image-attach-button {
-        display: flex;
-    }
-    /* Hide the attach FAB on the launchpad — it's terminal-only.
-     * `#launchpad-screen.active` is set by app.js#showLaunchpad and
-     * cleared by hideAllScreens() before any other screen is activated,
-     * so this reliably scopes the FAB to live sessions only. */
-    body:has(#launchpad-screen.active) .cloude-image-attach-button {
-        display: none !important;
-    }
-}
+/* The image attach button that used to live here is GONE. Its two jobs -
+ * opening the OS picker and pasting the device clipboard - are now rows
+ * of the terminal tools menu, and the button that opens that menu is
+ * `.terminal-tools-fab` in client/css/terminal-tools.css, where its
+ * geometry is derived from the same --fab-* tokens as the d-pad button
+ * so every floating control shares one bottom row. */
 
 /* =====================================================================
- * IMG-PASTE — inline status pill
+ * IMG-PASTE - inline status pill
  * ---------------------------------------------------------------------
  * Top-center toast for upload progress + result. Three semantic kinds
  * driven by ``data-kind`` attribute: info (uploading), success (paste
  * complete), error (upload failure). Animates in via opacity +
- * translateY (compositor-only — no layout thrash). Auto-dismissed by
+ * translateY (compositor-only - no layout thrash). Auto-dismissed by
  * the JS controller (3s info/success, 5s error).
  * ===================================================================== */
-.cloude-status-pill {
+/* THE ONE TOAST. Was .cloude-status-pill, built by terminal.js at
+ * `z-index: 70` - under the sticky header (1000), which sits in exactly
+ * this band, and under every overlay a menu row can open. So every
+ * caller reported invisibly. The element and this rule are now the same
+ * thing that fab-menu.js's notify() builds, and there is no second
+ * mechanism to drift.
+ *
+ * NO z-index HERE ON PURPOSE. fab-menu.js writes it inline from
+ * NOTICE_Z, because "above every chrome layer" is an invariant a test
+ * asserts against the other stylesheets, not a styling choice.
+ *
+ * BELOW THE HEADER, NOT OVER IT. Raising the stacking alone put the
+ * toast on top of the header title, and the kind backgrounds are
+ * deliberately 10% alpha (--color-danger-bg), so the title read
+ * straight through it and BOTH became unreadable - measured in the
+ * browser 2026-08-16. Being on top of the header is not the goal; not
+ * being hidden is. Clearing --header-h means it never argues with the
+ * title, while the stacking still beats every overlay a row can open. */
+.fab-menu-notice {
     position: fixed;
-    top: 16px;
+    top: calc(var(--header-h) + 12px);
     left: 50%;
     transform: translateX(-50%) translateY(-12px);
     padding: 8px 14px;
@@ -2363,25 +3680,24 @@ button[data-tooltip]:hover::after {
     opacity: 0;
     pointer-events: none;
     transition: opacity 200ms ease, transform 200ms ease;
-    z-index: 70;
     max-width: 80vw;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.cloude-status-pill.visible {
+.fab-menu-notice.visible {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
 }
 
-.cloude-status-pill[data-kind="error"] {
+.fab-menu-notice[data-kind="error"] {
     background: var(--color-danger-bg);
     color: var(--color-danger);
     border-color: var(--color-danger-border);
 }
 
-.cloude-status-pill[data-kind="success"] {
+.fab-menu-notice[data-kind="success"] {
     background: var(--color-accent-bg);
     color: var(--color-accent);
     border-color: var(--color-accent-border);
@@ -2389,7 +3705,7 @@ button[data-tooltip]:hover::after {
 
 
 /* =====================================================================
- * CLIPBOARD — 📎 attach menu
+ * CLIPBOARD - 📎 attach menu
  * ---------------------------------------------------------------------
  * Small fixed-position popup anchored above the 📎 button (bottom-right
  * slot) by clipboard.js#positionMenu. Token-only styling, mirroring the
@@ -2432,7 +3748,7 @@ button[data-tooltip]:hover::after {
 }
 
 /* =====================================================================
- * TOUCH-SELECT — floating copy button (touch-select.js)
+ * TOUCH-SELECT - floating copy button (touch-select.js)
  * ---------------------------------------------------------------------
  * Small fixed-position action shown at the finger lift point after a
  * long-press drag selection. Token-only styling, mirroring the attach
@@ -2440,6 +3756,14 @@ button[data-tooltip]:hover::after {
  * ===================================================================== */
 .cloude-touch-copy {
     position: fixed;
+    /* The generic `button` rule pins every button to a
+     * var(--control-size) SQUARE, and with border-box that swallowed the
+     * padding below whole: the box measured 38x36 on desktop and 40x40 at
+     * 390px, a 0-2px content box for a 33.7px label. Reset both axes to
+     * auto, the way .launchpad-section-toggle does, so this is a real
+     * labelled pill sized by its own padding. */
+    width: auto;
+    height: auto;
     padding: 10px 18px;
     background: var(--color-bg-elevated);
     color: var(--color-fg);
@@ -2465,4 +3789,1213 @@ button[data-tooltip]:hover::after {
     #terminal .xterm {
         -webkit-touch-callout: none;
     }
+}
+
+/* ===========================================================================
+ * Settings panel (feat/settings-screen) - client/js/settings-panel.js.
+ * Reuses the app's existing .modal-overlay / .modal-input / .modal-btn
+ * primitives (see the "Modals" block above) for the chrome; this block
+ * only adds the settings-specific layout (wide scrollable content, one
+ * `.settings-section` per APPEARANCE/AGENT/NOTIFICATIONS/SERVER block,
+ * and the field/hint/warning styles data-driven fields render into).
+ * =========================================================================== */
+
+.settings-modal-content {
+    background: var(--color-bg);
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-lg);
+    width: 92%;
+    max-width: 560px;
+    max-height: 88vh;
+    max-height: 88dvh;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+    position: relative;
+}
+
+.settings-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0;
+}
+
+.settings-panel-header h2 {
+    color: var(--color-accent);
+    font-size: 1.2rem;
+    margin: 0;
+    font-weight: bold;
+    text-transform: lowercase;
+}
+
+.settings-panel-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.settings-section {
+    margin-bottom: 28px;
+}
+
+.settings-section:last-child {
+    margin-bottom: 4px;
+}
+
+.settings-section-title {
+    color: var(--color-accent);
+    font-size: 1rem;
+    margin: 0 0 4px 0;
+    font-weight: bold;
+    text-transform: lowercase;
+}
+
+.settings-section-description {
+    color: var(--color-fg-muted);
+    font-size: 0.82rem;
+    margin-bottom: 12px;
+}
+
+.settings-restart-note {
+    color: var(--color-warning);
+    font-size: 0.78rem;
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    border-radius: var(--radius-md);
+    display: inline-block;
+}
+
+.settings-field {
+    margin-bottom: 14px;
+}
+
+.settings-field-checkbox .settings-field-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-fg);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.settings-field-checkbox input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    accent-color: var(--color-accent);
+}
+
+.settings-field-label {
+    color: var(--color-accent);
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+    display: block;
+    text-transform: lowercase;
+}
+
+.settings-field-hint {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    margin-top: 4px;
+}
+
+.settings-field-effective {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    margin-top: 6px;
+}
+
+.settings-field-effective code {
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.settings-warning {
+    color: var(--color-warning);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    padding: 10px 12px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    border-radius: var(--radius-md);
+    margin-top: 10px;
+}
+
+.settings-panel-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid var(--color-border);
+    margin-top: 0;
+}
+
+.settings-save-status {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    margin-right: auto;
+}
+
+/* feat/launch-wrappers - wrapper list/editor (client/js/agent-wrappers-panel.js) */
+
+.settings-wrapper-security-note {
+    margin-bottom: 14px;
+}
+
+.settings-wrapper-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+/* A wrapper row is TWO STACKED LINES: the title line (label, id, badges,
+ * action buttons) and, under it, the description at the row's FULL width.
+ * It used to be a single horizontal row with the description sharing the
+ * left column, which made the description's width a function of the
+ * button count in the right column - 272.1px on a two-button row and
+ * 115.5px on a three-button row, measured in a 556px modal. See the
+ * renderRow docstring in client/js/agent-wrappers-view.js. */
+.settings-wrapper-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+/* THE TITLE LINE WRAPS. Moving the DESCRIPTION onto its own full-width
+ * line (see the comment above) fixed the description and left the LABEL
+ * standing in the same squeezed column, so the defect simply moved up one
+ * line and kept the same numbers. Measured in a 556px modal at 1400px,
+ * before this rule:
+ *     row `claude` (2 buttons, actions 164.9px)  label block 272.1 x 20
+ *     row `cld`    (3 buttons, actions 321.5px)  label block 115.5 x 57
+ *     worst case   (3 buttons, long label)       label block 115.5 x 210
+ * 115.5px at this type size is about fourteen characters, which is why
+ * `cld (keychain-backed)` rendered as a three-line ribbon and a long
+ * label as a ten-line one. The actions group is `flex-shrink: 0`, so
+ * every pixel a third button costs comes out of the label.
+ *
+ * `flex-wrap: wrap` with the label keeping `flex-basis: auto` is what
+ * fixes it for the WORST case rather than for one row: the wrap decision
+ * uses the label's max-content size, so a title line that fits stays on
+ * one line, and one that does not puts the buttons on their own line and
+ * hands the label the row's full width. It needs no width threshold, no
+ * button count and no media query, so it cannot be outgrown by a fourth
+ * button or a longer label. `min-width: 0` on the label block still does
+ * the second job - keeping one unbreakable token from setting a floor
+ * wider than the row. */
+.settings-wrapper-row-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+/* Full-width by construction: it is a block child of a column flex
+ * container, so nothing above it can squeeze it. min-width:0 keeps a
+ * single unbreakable token (a long entry name in <code>) from setting a
+ * floor wider than the row. */
+.settings-wrapper-row-desc {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* A flex item defaults to min-width:auto, so a long id/label/description
+ * sets a floor wider than the container and the whole row overflows
+ * sideways instead of wrapping. This is what pushed the delete button off
+ * the right edge on a phone. */
+.settings-wrapper-row-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.settings-wrapper-row-main code {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+}
+
+.settings-wrapper-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* THE DEFAULT MARKER. Was an outlined, rounded chip in --color-accent -
+ * a lozenge, and accent-on-background besides, which is the contrast
+ * problem `.settings-tab--active` was already fixed for (the `calming`
+ * accent is about 2.6:1 on its own background, under the 4.5:1 floor).
+ *
+ * It now carries the SAME cue set the active tab carries, deliberately,
+ * so the settings screen has one flat way of saying "this is the
+ * selected one": --color-fg text, a soft accent tint, an accent
+ * underline, bold weight. Square. Three cues, and the state survives
+ * losing any one of them. The word "default" is unchanged - the shape
+ * went, the information did not. */
+.settings-wrapper-badge {
+    display: inline-block;
+    color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
+    border: none;
+    border-bottom: 2px solid var(--color-accent);
+    border-radius: 0;
+    font-size: 0.7rem;
+    font-weight: bold;
+    padding: 1px 6px;
+    margin-left: 6px;
+    text-transform: lowercase;
+}
+
+.settings-wrapper-actions-row {
+    display: flex;
+    gap: 8px;
+}
+
+/* The save affordance for a family's legacy static command, folded in
+ * from the removed "agents" settings tab. `min-width: 0` on the flex
+ * items is deliberate: a flex child defaults to `min-width: auto`, which
+ * refuses to shrink below its content, and the status line here can carry
+ * a whole server error message. Without it that message pushes the button
+ * off the edge of a 390px modal instead of wrapping. */
+.settings-legacy-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.settings-legacy-actions > * {
+    min-width: 0;
+}
+
+.settings-legacy-status {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.settings-wrapper-editor {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin-bottom: 12px;
+    background: var(--color-bg-elevated);
+}
+
+.settings-wrapper-script-input {
+    font-family: var(--font-mono);
+    white-space: pre;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+.settings-wrapper-editor-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.modal-btn-danger {
+    background: transparent;
+    border: 1px solid var(--color-danger, #c0392b);
+    color: var(--color-danger, #c0392b);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.modal-btn-danger:hover {
+    background: var(--color-danger, #c0392b);
+    color: var(--color-bg, #fff);
+}
+
+/* ===========================================================================
+ * Settings tabs + terminal commands (feat/settings-tabs-and-commands).
+ * client/js/settings-tabs.js and client/js/terminal-commands-panel.js.
+ * =========================================================================== */
+
+/* Horizontal, scrollable strip. Deliberately NOT wrapping: this app is
+ * driven from a phone, where a wrapped two-row tab strip steals the
+ * modal's already-tight vertical budget. The strip sticks to the top of
+ * the scrolling body so the active tab stays reachable in a long pane. */
+.settings-tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    border-bottom: 1px solid var(--color-border);
+    margin: -20px -20px 18px -20px;
+    padding: 0 20px;
+    position: sticky;
+    top: -20px;
+    background: var(--color-bg);
+    z-index: 2;
+}
+
+.settings-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+/* SCROLL AFFORDANCE. Five tabs do not fit a phone - at a 390px viewport
+ * the strip is 355px against a 444px scroll width and the fifth tab
+ * ("general") sits entirely off-screen - and the strip gave no signal
+ * whatsoever that there was more, because the last visible tab ended in
+ * clean whitespace. Fading the overflowing edge says "keep going" without
+ * costing a row of vertical space, which is the reason this strip does
+ * not wrap in the first place.
+ *
+ * A mask rather than an overlaid gradient: the strip IS the scroll
+ * container, so an absolutely positioned child would scroll away with
+ * the tabs, and a wrapper element would mean restructuring markup that
+ * carries role="tablist".
+ *
+ * The classes are set from measurement in settings-tabs.js
+ * (updateEdgeHints), so a strip that fits gets NO fade at either edge
+ * rather than a permanent decorative one. */
+.settings-tabs--more-after {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.settings-tabs--more-before {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+}
+
+.settings-tabs--more-before.settings-tabs--more-after {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+.settings-tab {
+    flex: 0 0 auto;
+    /* There is a bare `button { width: 36px; display: flex }` rule
+     * earlier in this file (the header icon-button reset). Without these
+     * two overrides every tab collapses to a 36px square and the labels
+     * render on top of each other. Do not remove them. */
+    width: auto;
+    /* THE OVAL. Same trap, third property. That bare `button` rule also
+     * sets `border-radius: var(--radius-full)`, which is 50% - not a
+     * rounded corner, an ELLIPSE - and a class only beats the element
+     * rule for properties it actually declares. This one did not, so
+     * every tab was a 62.3x44 to 116.2x44 ellipse (measured at 390px);
+     * the active tab's tint painted it and made it visible, which is why
+     * it read as an oval sitting behind the label.
+     *
+     * It also ATE the active tab's underline: `border-bottom: 2px solid`
+     * gets clipped to the ellipse, so the third of the three state cues
+     * was curved away to nothing. Squaring the tab is what puts it back.
+     * Do not remove this either. */
+    border-radius: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--color-fg-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-transform: lowercase;
+    padding: 12px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    /* Comfortable phone tap target without making the strip tall. */
+    min-height: 44px;
+}
+
+.settings-tab:hover {
+    color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
+}
+
+/* THE ACTIVE TAB, in every theme including the light ones.
+ *
+ * It used to be accent-coloured text plus an accent underline, and the
+ * text colour was doing most of the work. That reads well on the dark
+ * themes the app was built against and badly on the light ones: the
+ * `calming` accent #7ba374 on its #F5F1E8 background is about 2.6:1,
+ * under the 4.5:1 floor for body text, so the ACTIVE tab was the
+ * hardest one on the strip to read.
+ *
+ * So the text now uses --color-fg, which every theme picks to sit on its
+ * own background, and the accent stays only where it is a marker rather
+ * than a glyph: the underline and a soft tinted panel. Three cues
+ * (weight, fill, underline), and the state survives losing any one.
+ *
+ * Measured contrast of the active tab's TEXT against the strip, before
+ * (accent) and after (--color-fg):
+ *     calming         2.54 -> 10.13      codex           4.06 -> 16.28
+ *     legacy_apple    4.21 -> 13.80      legacy_windows  8.80 -> 11.54
+ *     claude          5.29 -> 11.25      gameboy         6.02 -> 6.02
+ * Worst case moves from 2.54:1 to 6.02:1.
+ *
+ * NOT --color-accent-strong for the underline, which reads like the
+ * higher-contrast choice and is not: themes define it as a BRIGHTER
+ * accent, tuned for dark backgrounds. legacy_windows pairs accent
+ * #000080 (8.80:1 on its silver) with accent-strong #1084D0 (2.21:1), so
+ * "strong" would have made that underline four times worse. */
+.settings-tab--active {
+    color: var(--color-fg);
+    background: var(--color-accent-bg-soft);
+    border-bottom-color: var(--color-accent);
+    font-weight: bold;
+}
+
+.settings-tab:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: -2px;
+}
+
+/* Panes are hidden, never removed - that is what preserves unsaved edits
+ * across a tab switch. See settings-tabs.js's module docstring. */
+.settings-tabpanel.hidden {
+    display: none;
+}
+
+/* Collapsed "advanced" disclosure (the legacy claude_command row). */
+.settings-advanced-summary {
+    color: var(--color-fg-muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+    text-transform: lowercase;
+    padding: 6px 0;
+}
+
+.settings-advanced[open] .settings-advanced-summary {
+    color: var(--color-fg);
+}
+
+/* Terminal command list. */
+.settings-command-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.settings-command-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.settings-command-row-main {
+    flex: 1 1 180px;
+    min-width: 0;
+}
+
+.settings-command-line {
+    margin-top: 3px;
+    overflow-x: auto;
+}
+
+.settings-command-line code {
+    color: var(--color-fg-muted);
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.settings-command-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.settings-command-editor {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin-bottom: 12px;
+    background: var(--color-bg-elevated);
+}
+
+.settings-command-editor-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+/* feat/universal-wrappers - one group per command family on the wrappers
+ * settings screen. The group is a visual container only; every wrapper row
+ * inside it keeps the markup it already had. */
+.settings-wrapper-family {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    margin-bottom: 14px;
+}
+
+/* The heading now does its own grouping work with a rule under it,
+ * rather than leaning on a bordered chip to look like a heading. */
+.settings-wrapper-family-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+    text-transform: lowercase;
+    color: var(--color-accent);
+}
+
+/* The count was a bordered, rounded 20.8x15 chip. It is now a plain
+ * muted numeral parked at the end of the heading rule - the table-header
+ * idiom - so the number is still there and the box is not. */
+.settings-wrapper-family-count {
+    color: var(--color-fg-muted);
+    border: none;
+    border-radius: 0;
+    background: none;
+    font-size: 0.72rem;
+    padding: 0;
+    margin-left: auto;
+    font-weight: normal;
+}
+
+/* "takes model" is an ANNOTATION, not a state, so it gets neither the
+ * tint nor the underline the default marker gets. A muted run of text
+ * behind a hairline separator: still legible as its own field, with no
+ * chip around it. */
+.settings-wrapper-badge-model {
+    color: var(--color-fg-muted);
+    background: none;
+    border: none;
+    border-left: 1px solid var(--color-border);
+    border-radius: 0;
+    font-weight: normal;
+    padding: 0 0 0 6px;
+}
+
+/* Provider picker: a non-selectable family heading between wrapper
+ * groups. Deliberately NOT a .folder-picker-item so it stays out of the
+ * keyboard nav index. */
+.provider-family-heading {
+    color: var(--color-fg-muted);
+    font-size: 0.7rem;
+    text-transform: lowercase;
+    letter-spacing: 0.06em;
+    padding: 10px 12px 4px;
+    border-top: 1px solid var(--color-border);
+    margin-top: 4px;
+}
+
+.provider-family-heading:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 4px;
+}
+
+/* Provider picker: marks a wrapper row that leads to a model step. */
+.provider-item-more {
+    color: var(--color-fg-muted);
+    font-size: 0.72rem;
+    margin-left: auto;
+    padding-left: 8px;
+    white-space: nowrap;
+}
+
+/* Narrow phones: let action buttons take the full row rather than
+ * squeezing the command text to nothing. */
+@media (max-width: 480px) {
+    .settings-tab {
+        padding: 12px 8px;
+        font-size: 0.8rem;
+    }
+
+    .settings-command-row-actions,
+    .settings-wrapper-row-actions {
+        width: 100%;
+    }
+
+    .settings-command-row-actions .modal-btn,
+    .settings-wrapper-row-actions .modal-btn {
+        flex: 1 1 auto;
+    }
+
+    /* Widening the action group alone was not enough: the ROW is still a
+     * horizontal flex container, so the buttons kept being pushed off the
+     * right edge and the modal body scrolled sideways. Stack the row on a
+     * phone so the actions sit under the text they act on.
+     * `.settings-wrapper-row` is a column at every width now, so what has
+     * to stack here is its TITLE LINE, not the row. */
+    .settings-wrapper-row-head,
+    .settings-command-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    /* The head is a column here, so its own gap has to supply the space
+     * the horizontal `gap: 12px` used to. */
+    .settings-wrapper-row-head {
+        gap: 8px;
+    }
+
+    /* A family group's own padding is a meaningful slice of a 375px
+     * viewport; trim it so the rows inside keep their readable width. */
+    .settings-wrapper-family {
+        padding: 8px;
+    }
+
+    /* Both add buttons on one line leaves each too narrow to read. */
+    .settings-wrapper-actions-row {
+        flex-wrap: wrap;
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * feat/project-session-tree (S8) - the two-level project-to-session
+ * tree on the home screen. `.project-node` wraps one project's existing
+ * `.project-item` row (unchanged) plus its child sessions; `.badge`,
+ * `.family-pill`, the status dot and the presence badges are ALL
+ * reused verbatim from the flat running-sessions list / S3 - nothing
+ * here re-themes them. See client/js/launchpad.js renderProjectList().
+ * --------------------------------------------------------------------- */
+
+.project-node {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-node__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.project-node__row .project-item {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Chevron toggle for a project's child sessions. A project with zero
+ * matched running sessions never renders this button at all - there is
+ * nothing to expand, so no control is drawn (see renderProjectList()). */
+.project-node__toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-top: 14px;
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary, var(--color-text));
+    cursor: pointer;
+    font-size: 0.78rem;
+}
+
+.project-node__chevron {
+    display: inline-block;
+    transition: transform 150ms ease;
+}
+
+.project-node__toggle[aria-expanded="true"] .project-node__chevron {
+    transform: rotate(90deg);
+}
+
+.project-node__sessions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 4px 28px;
+}
+
+.project-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    /* ITEM 41, same two-layer fill as .project-item / .running-session-row. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.project-session-row:hover {
+    background-image: linear-gradient(rgba(215, 119, 87, 0.14), rgba(215, 119, 87, 0.14));
+}
+
+.project-session-row__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.86rem;
+}
+
+/* Synthetic "no project" group - a real, measured answer
+ * (project_attribution === 'none'), styled as an ordinary collapsible
+ * group, deliberately NOT as a warning - it is not the same claim as
+ * NEEDS ATTENTION below. */
+.project-node--virtual > .project-node__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary, var(--color-text));
+    cursor: pointer;
+    text-align: left;
+}
+
+.project-node--virtual .project-node__title {
+    flex: 1;
+    font-weight: 600;
+}
+
+.project-node--virtual .project-node__count {
+    font-size: 0.74rem;
+    opacity: 0.7;
+}
+
+.project-node--virtual .project-node__sessions {
+    margin-left: 12px;
+}
+
+/* NEEDS ATTENTION group - a session whose project could not be
+ * determined (working directory unreadable, or the attribution fetch
+ * itself failed). Never collapsible, never offers an action - same
+ * visual language as `.running-sessions-attention` on purpose. */
+.project-node--attention {
+    margin-top: 4px;
+}
+
+.project-node__header--attention {
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning, #d79921);
+    background: var(--color-accent-bg-soft);
+}
+
+.project-node__attention-head {
+    display: block;
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: var(--color-warning, #d79921);
+}
+
+.project-node--attention .project-node__title {
+    display: block;
+    margin-top: 3px;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.project-node--attention .project-node__sessions {
+    margin-left: 12px;
+    margin-top: 4px;
+}
+
+/* ---- ENDED session rows (feat/ended-sessions-visibility) -----------
+ * Shown on the home tree and, via .ended-session-delete, on RECENT.
+ *
+ * WHY THIS IS NOT JUST A DIMMED LIVE ROW. A dead row that looks like a
+ * live one is worse than a hidden one, because the user clicks it and
+ * tries to attach to a tmux session that does not exist. So the row
+ * loses the clickable affordance entirely - `cursor: default`, no hover
+ * fill - and gains two controls that CAN act on a record with no
+ * process behind it. The word ENDED and the stopped status dot carry
+ * the state; the reduced fill only reinforces it, and is never the
+ * only signal, because a fill is invisible to anyone who cannot see
+ * the difference between two near-identical greys.
+ */
+.project-session-row--ended {
+    cursor: default;
+    background-image: none;
+    border: 1px dashed var(--color-border-subtle, var(--color-border));
+}
+
+.project-session-row--ended:hover {
+    /* Explicitly cancels the base row's hover fill. Without this the row
+     * would light up under the cursor exactly like an attachable one and
+     * re-teach the click it must not invite. */
+    background-image: none;
+}
+
+.project-session-row--ended .project-session-row__name {
+    /* Legible, deliberately not faded to the point of being hard to
+     * read: this row still names real work the user did. */
+    opacity: 0.8;
+}
+
+.badge-ended {
+    background: var(--color-badge-ended-bg, transparent);
+    color: var(--color-fg-faint);
+    border: 1px solid var(--color-border);
+}
+
+/* Same shape as .recent-session-restart so the two controls read as one
+ * family wherever they appear together, in a muted colour because
+ * deleting a row from a list is not the primary action on it. */
+.ended-session-delete,
+.ended-session-restart {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm, 6px);
+    background: transparent;
+    cursor: pointer;
+}
+
+.ended-session-restart {
+    border: 1px solid var(--color-badge-tmux-fg);
+    color: var(--color-badge-tmux-fg);
+}
+
+.ended-session-delete {
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-faint);
+}
+
+.ended-session-restart:hover,
+.ended-session-delete:hover {
+    background: var(--color-accent-bg-mid, rgba(215, 119, 87, 0.14));
+}
+
+.project-session-row--attention {
+    cursor: default;
+    /* Stays deliberately unfilled: NEEDS ATTENTION is an outlined,
+     * non-actionable row, not a card, and the 80 percent fill above is
+     * for surfaces that carry a clickable session. */
+    background: transparent;
+    border: 1px solid var(--color-border);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.project-session-row--attention:hover {
+    background: transparent;
+}
+
+.project-session-row__attention-reason {
+    font-size: 0.74rem;
+    opacity: 0.75;
+}
+
+/* feat/db-is-authoritative - the project list's provenance banner.
+ *
+ * Four states, four visibly distinct looks, because the whole point of
+ * the banner is that they must not be mistaken for each other:
+ *   unknown   the authority check did not answer. Neutral, not green.
+ *   fallback  cloude.db unreachable, list served from config.json,
+ *             writes refused. Danger - the app is degraded.
+ *   empty     database readable but holding no projects while
+ *             config.json holds some. Warning, not danger: nothing is
+ *             broken, but "no projects" is not what is being claimed.
+ *   disagree  both sources readable and they differ. Warning.
+ *
+ * The healthy case draws NOTHING. A banner that is always present is
+ * furniture and stops being read. */
+.project-authority-banner {
+    padding: 8px 10px;
+    margin: 0 0 10px 0;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.project-authority-banner-unknown {
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+}
+
+/* THE ONE DEGRADED BANNER. There used to be three classes here, for
+ * three modes that could render two banners at once and contradict each
+ * other. Projects are DB-only now, so the only degraded state is "the
+ * datastore did not answer", and it is danger-coloured because writes
+ * are refused while it lasts. */
+.project-authority-banner-unreadable {
+    color: var(--color-danger);
+    background: var(--color-danger-bg-hover);
+    border: 1px solid var(--color-danger-border);
+}
+
+/* ---------------------------------------------------------------------
+ * feat/home-screen-mechanics - home screen behaviour round. Mechanics
+ * only: no new palette, no new tokens, every colour below already
+ * existed and is read from the same theme variables it was read from
+ * before.
+ * --------------------------------------------------------------------- */
+
+/* ITEM 48 - THE HELP CONTROL MOVES, THE HELP PANEL DOES NOT.
+ * The panel is still the first child of `.launchpad-container`, still a
+ * native <details>, still rendered by launchpad.js. Only its control
+ * moved into the header's top-right cluster. The in-pane <summary> stays
+ * in the markup because that is what makes the element a disclosure at
+ * all, but it is taken out of the layout so there is exactly ONE control
+ * on screen rather than two that toggle the same thing.
+ * `visibility: hidden` would still cost its box; `display: none` on a
+ * <summary> leaves the <details> perfectly openable via its `open`
+ * property, which is what the header button sets. */
+#launchpad-screen .adopt-disclosure > summary {
+    display: none;
+}
+
+/* THE WHITE SQUARE, AND WHY IT WAS THERE.
+ *
+ * This button used to carry NO class at all. It was written on the
+ * assumption, stated in its old comment, that it "inherits the shared
+ * header icon-button look from the `.controls button` rules far above".
+ * There are no such rules. The only `.controls`-scoped declarations in
+ * this file are `.header .controls button > svg { color }` and its
+ * `.danger` sibling - both of which style the GLYPH, neither of which
+ * styles the BUTTON. The button look lives in `.btn-icon` (far above),
+ * and that rule replaced an earlier bare `button {}` element reset which
+ * was deliberately deleted; its comment records that exactly two
+ * elements were expected to opt in by class and that no fallback reset
+ * would be added. This button was written after that deletion and opted
+ * into nothing.
+ *
+ * So it fell through to the USER-AGENT stylesheet. Measured in Chromium
+ * before the fix: `background-color: rgb(239, 239, 239)` (UA ButtonFace),
+ * `border: 2px outset`, `border-radius: 0px`, `appearance: auto`,
+ * 20x20 shrink-wrapped around its 16px glyph instead of the
+ * `--control-size` box every sibling uses. A near-white, hard-cornered,
+ * bevelled square with a correctly-coloured "?" drawn on top of it -
+ * which is the white square the user reported. It was never an asset
+ * problem: the glyph is inline SVG with `stroke="currentColor"` and it
+ * resolved correctly the whole time (measured `rgb(215, 119, 87)`, the
+ * accent). Nothing here introduces a colour; `.btn-icon` on the element
+ * hands it the same theme tokens every other header icon button has
+ * always used.
+ *
+ * Note this cannot be caught by a DOM assertion. The element, its class,
+ * its glyph and its aria were all correct while it rendered wrong, so
+ * the test for it reads `getComputedStyle` in a real browser - see
+ * scripts/ci/mutate-header-icons-and-menu.sh and
+ * tests/test_header_help_and_toggle.node.mjs.
+ *
+ * Home screen only, gated on the class app.js already stamps on the
+ * header for the launchpad, so no screen-switch code has to remember to
+ * show or hide this button. The ID selector here outranks `.btn-icon`'s
+ * own `display: flex`, so the gate keeps working. */
+#launchpad-help-btn {
+    display: none;
+}
+
+/* BESIDE THE TITLE, NOT IN THE RIGHT-HAND CLUSTER. The button is a child
+ * of `#appTitle` now (see client/index.html), so it inherits that box's
+ * centring and stays glued to the title text at every width.
+ *
+ * `flex-shrink: 0` is load-bearing, not cosmetic: header-title-fit.js's
+ * availableWidth() enumerates the h1's LIVE children and subtracts each
+ * one's outer width from the title's elision budget, and its doc comment
+ * states the invariant that every such child is fixed-size. A shrinkable
+ * child would make the measured budget disagree with what the browser
+ * actually lays out, which is the precise failure mode that once clipped
+ * the title to "Cloude Code L..." with the full string still in the DOM.
+ * The same function skips `display: none` children, so this button costs
+ * the terminal screen's session title exactly nothing. */
+.header--home #launchpad-help-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+
+/* THE HOME SCREEN'S THEMED-ROW OVERRIDE IS GONE, because there is
+ * nothing left for it to override. Deliberately no rule here, so this
+ * comment is the record of why.
+ *
+ * It was `box-shadow: inset 0 0 0 1px var(--session-theme-ring)` on
+ * `.launchpad-container .running-session-row[data-session-theme]`,
+ * existing for exactly one reason: session-theme-tint.css declared a 3px
+ * inline-start rail plus the ring for BOTH surfaces, and the home screen
+ * was not to carry a left-side colour bar, so this re-declared the ring
+ * alone and won on specificity. The sidebar kept the rail.
+ *
+ * The sidebar does not keep it any more ("get rid of the thick left bar
+ * like on the homepage and clean it like the homepage looks now"), so
+ * the shared rule in session-theme-tint.css is now ring-only for both
+ * and this rule would be a byte-for-byte duplicate of it. A rule that
+ * restates what it overrides is not a safety net, it is a second place
+ * to forget to change.
+ *
+ * If a left-side rail is ever wanted on one surface and not the other,
+ * this is where the exception goes - but decide it here rather than
+ * declaring it for both and cancelling it in one place. */
+
+
+/* ITEMS 51/52/53 - the speed-dial's first item now carries the app's own
+ * icon FILE rather than a drawn glyph. Sized to the same 18px box every
+ * sibling <svg> uses so the icon column stays one width. */
+.new-fab__icon-img {
+    width: 18px;
+    height: 18px;
+    display: block;
+    object-fit: contain;
+}
+
+/* The shared choice modal (`_showChoiceModal`) reuses
+ * `.folder-picker-list` / `.folder-picker-item` verbatim. These three
+ * rules only add what a two-line row and a refused row need; no colour
+ * here is new. */
+.folder-picker-item {
+    /* Rows in the choice modal stack a label over a subtitle. The picker
+     * this borrows from has single-line rows, so it centres them; column
+     * direction with a left alignment is the only change a two-line row
+     * needs, and a single-line row renders identically under it. */
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.folder-picker-item-sub {
+    font-size: 0.78rem;
+    color: var(--color-fg-muted);
+    word-break: break-all;
+}
+
+/* A project whose presence is 'missing' or 'unreachable' stays VISIBLE
+ * and NAMED in the picker and refuses to be chosen, the same treatment
+ * its row gets on the home screen. Hiding it would be the quieter bug:
+ * the user would think the project was gone from the launcher. */
+.folder-picker-item-disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.folder-picker-item-disabled:hover {
+    background: transparent;
+    color: var(--color-fg);
+}
+
+/* "you have none" and "I could not find out" are different answers and
+ * must not look the same. The second one is a WARNING colour because it
+ * is an unmeasured state, not a clean empty list. */
+.folder-picker-empty--unknown {
+    color: var(--color-warning);
+    font-style: normal;
+}
+
+/* ITEM 43 - a project node with a description but no running sessions is
+ * foldable too, and its toggle carries no count chip. Without a chip the
+ * button is chevron-only, so it needs its own minimum width to stay a
+ * real hit target and to keep the project cards left-aligned with each
+ * other whether or not they have children. */
+.project-node__toggle {
+    min-width: 24px;
+    justify-content: center;
+}
+
+/* ---------------------------------------------------------------------
+ * feat/settings-gui - the workspace tab's environment list.
+ *
+ * Every colour and corner is a token. Three themes (terminal, gameboy,
+ * legacy_apple) deliberately zero every radius, so a hardcoded corner
+ * here would be visibly wrong on them; a hardcoded colour would be
+ * illegible on roughly twenty.
+ *
+ * The row is a grid rather than flex so the NAME column stays the same
+ * width down the whole list - with flex, a long value on one row shrinks
+ * that row's name field and the column stops reading as a column.
+ * ------------------------------------------------------------------ */
+
+.settings-env-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.settings-env-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.settings-env-row .modal-input {
+    min-width: 0;
+}
+
+.settings-env-name {
+    font-family: var(--font-mono);
+}
+
+.settings-env-remove {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 6px 10px;
+}
+
+.settings-env-remove:hover {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.settings-env-add {
+    margin-top: 8px;
+}
+
+.settings-env-warnings {
+    margin-top: 4px;
+}
+
+.settings-env-warnings[hidden] {
+    display: none;
+}
+
+/* One column on a phone. The three-across grid put the remove button off
+ * the right edge of a 390px viewport, which is not a layout preference -
+ * the control was unreachable. */
+@media (max-width: 600px) {
+    .settings-env-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "name remove"
+            "value value";
+    }
+
+    .settings-env-name { grid-area: name; }
+    .settings-env-value { grid-area: value; }
+    .settings-env-remove { grid-area: remove; }
 }

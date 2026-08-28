@@ -1,9 +1,9 @@
 """Typed notification events.
 
-Privacy contract (Plan v3.1 correction #2 — ntfy privacy):
+Privacy contract (Plan v3.1 correction #2 - ntfy privacy):
 - ``session_slug`` is INTERNAL ONLY. It MUST NOT appear in any
   ntfy-bound field (Title, Body, Tags). The slug DOES appear in the
-  Click URL — that's an accepted trade-off (Plan v3.1 CUT 6 reverted
+  Click URL - that's an accepted trade-off (Plan v3.1 CUT 6 reverted
   the nonce indirection); threat model is LAN-only behind Tailscale.
 - ``snippet`` is INTERNAL ONLY (debug logging). It also MUST NOT be
   sent to ntfy.
@@ -26,7 +26,7 @@ class EventType(str, Enum):
     ERROR = "error"
     BUILD_COMPLETE = "build_complete"
     TEST_RESULT = "test_result"
-    # v0.7.0 Part 3/4 — Claude Code lifecycle hook kinds, sourced from the
+    # v0.7.0 Part 3/4 - Claude Code lifecycle hook kinds, sourced from the
     # hook endpoint via ``session_manager.record_toast``. Distinct from the
     # IdleWatcher's pattern-derived kinds so a Slack/ntfy presentation
     # table can render them with hook-specific copy.
@@ -40,7 +40,7 @@ class NotificationEvent:
     """A single notification to dispatch.
 
     Attributes:
-        kind: classification — drives Title/Priority/Tags selection.
+        kind: classification - drives Title/Priority/Tags selection.
         session_slug: internal-only identifier (filesystem-safe slug
             of the active project). Used to compose the Click URL deep
             link; NEVER placed in Title/Body/Tags.
@@ -48,7 +48,7 @@ class NotificationEvent:
             internal latency metrics and rate-limit decisions; not
             sent on the wire.
         snippet: optional last line of output, truncated to 200 chars.
-            Internal logging only — NEVER sent to ntfy. The IdleWatcher
+            Internal logging only - NEVER sent to ntfy. The IdleWatcher
             (Item 7) can populate this for its own debug trail.
     """
 
@@ -67,7 +67,7 @@ def build_deep_link(
     Args:
         event: the notification carrying the session_slug.
         public_base_url: e.g. ``"http://mac.lan:8000"``. When unset
-            (empty string or None) returns None — caller MUST omit the
+            (empty string or None) returns None - caller MUST omit the
             Click header rather than send a bogus URL.
 
     Returns:
@@ -85,7 +85,7 @@ def build_deep_link(
     """
     if not public_base_url:
         return None
-    # Re-slugify defensively — ASCII-only, tmux-legal, never empty.
+    # Re-slugify defensively - ASCII-only, tmux-legal, never empty.
     # Local import to avoid a circular dependency (tmux_backend imports
     # from src.core.session_backend which is in the same package tree).
     from src.core.tmux_backend import _slugify
@@ -93,7 +93,7 @@ def build_deep_link(
     safe_slug = _slugify(event.session_slug)
     # Strip trailing slashes so we don't double-up.
     base = public_base_url.rstrip("/")
-    # quote() with safe="" so ALL non-alphanumerics get encoded — slugs
+    # quote() with safe="" so ALL non-alphanumerics get encoded - slugs
     # are normally URL-safe, but encoding defensively means a hostile
     # slug can't sneak query params or fragments into the deep link.
     encoded_slug = quote(safe_slug, safe="")

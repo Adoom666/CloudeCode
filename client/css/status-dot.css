@@ -1,0 +1,154 @@
+/* Status dot - the shared session-state indicator.
+ *
+ * WHY ITS OWN FILE. This block lived in session-sidebar.css, which was
+ * exactly at the project's 500-line ceiling, so the next rule added to
+ * the family had nowhere to go. That was the prompt, but the seam was
+ * already there and named in the old file's own comment: the dot is
+ * SHARED between the launchpad's running-sessions list, the home
+ * project tree and the sidebar, so a file named for one of its three
+ * consumers was never its right home. Moved verbatim, no rule changed.
+ *
+ * The vocabulary is defined once in client/js/session-status-ui.js and
+ * every state here has a class there; a colour rule with no matching
+ * key would style nothing, and a key with no rule renders an unstyled
+ * dot. Colour NEVER carries the meaning alone - each dot is emitted with
+ * a matching title and aria-label.
+ *
+ * Loaded from client/index.html. Must be served alongside
+ * session-sidebar.css, not instead of it.
+ */
+
+/* ---- Status dot ----------------------------------------------------
+ * Shared between the launchpad's running-sessions list and this sidebar
+ * (see client/js/session-status-ui.js). Color communicates state, but
+ * title/aria-label (set in JS) carry the same meaning in words - the
+ * dot is never the ONLY way to know the state.
+ *
+ * feat/hook-driven-status - seven states now, listed here in the same
+ * display-priority order as session_status.ACTIVITY_STATUS_PRIORITY. */
+
+.status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: var(--radius-full);
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.status-dot--dead {
+    /* Deliberately the loudest treatment - a dead pane is the state the
+     * user most needs to notice (see CLAUDE.md hazard on false-green
+     * dead sessions). Steady (no pulse animation) so it reads as
+     * "stopped", not "busy", and a solid ring for a color-independent
+     * shape cue on top of the color + label. */
+    background: var(--color-danger);
+    box-shadow: 0 0 0 2px var(--color-danger-strong-bg, rgba(255, 68, 68, 0.35));
+}
+
+.status-dot--question {
+    /* "Your turn" - second-loudest treatment after dead. Fast pulse +
+     * the theme accent so it reads as "act now", distinct from the
+     * slower finished-unread pulse below. */
+    background: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-glow, var(--color-accent));
+    animation: status-dot-pulse 0.9s ease-in-out infinite;
+}
+
+.status-dot--working-subagent {
+    /* Same motion as plain "working" but a different hue (info/blue) so
+     * the two are distinguishable by color as well as by the title/
+     * aria-label text - never rely on the ring alone. */
+    background: var(--color-info);
+    box-shadow: 0 0 8px var(--color-info);
+    animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot--working {
+    background: var(--color-success);
+    box-shadow: 0 0 8px var(--color-success);
+    animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot--finished-unread {
+    /* The state this whole feature exists to surface: "there is
+     * something here for you". Warm color, slower pulse than question -
+     * noticeable but not as urgent as an open question. */
+    background: var(--color-warning);
+    box-shadow: 0 0 8px var(--color-warning);
+    animation: status-dot-pulse 2.4s ease-in-out infinite;
+}
+
+.status-dot--idle {
+    /* Nothing pending, already read - deliberately the lowest visual
+     * weight of any non-unknown state. FILLED, like every other state
+     * here, because idle is a DEFINITE answer: the session is alive and
+     * nothing is happening in it. */
+    background: var(--color-fg-faint);
+}
+
+.status-dot--stopped {
+    /* ENDED - the tmux instance is gone and only the stored record is
+     * left. FILLED, because this is a MEASURED answer, not a
+     * could-not-measure: the hollow ring below is reserved for that and
+     * overloading it would collapse the two the way idle/unknown were
+     * once collapsed.
+     *
+     * WHY OPACITY AND NOT A COLOUR. `idle` is already the lowest-weight
+     * filled dot in the set, and the nearest tokens to it
+     * (--color-fg-faint / --color-fg-subtle) are the SAME value under
+     * the `claude` theme - that identical-token trap is exactly what
+     * made idle and unknown pixel-identical before. Opacity is a
+     * property no theme redefines, so the difference from `idle` holds
+     * in every palette including the ones that flatten the greys, and it
+     * is measurable with getComputedStyle rather than by eye.
+     *
+     * The dot is NOT the primary signal. The row also carries the word
+     * ENDED and offers restart/delete instead of attach - see
+     * launchpad.js _renderTreeSessionRowHtml. Colour alone never carries
+     * meaning here. */
+    background: var(--color-fg-faint);
+    opacity: 0.55;
+}
+
+.status-dot--unknown {
+    /* THE ONLY HOLLOW DOT, and the shape is the whole point.
+     *
+     * `idle` and `unknown` used to be two colour rules,
+     * --color-fg-faint and --color-fg-subtle. Under the `claude` theme
+     * those tokens are the SAME value (#959595), so the two dots were
+     * pixel-identical; under `terminal` they are 5 levels apart, which
+     * no eye would call a difference. So a could-not-determine was
+     * rendered as a definite answer - the exact collapse the
+     * THREE-OUTCOME RULE forbids, in the indicator read most often.
+     *
+     * WHY HOLLOW RATHER THAN A NEW COLOUR. `unknown` is not a new
+     * severity; it is not worse than `dead`, and any colour loud enough
+     * to separate it from `idle` would say it was. Shape separates the
+     * two without ranking them. It also matches the macOS tray, where
+     * `tray-unknown` is the one hollow glyph and every measured state is
+     * a filled one (macOS/tray-status.js), so both surfaces speak one
+     * vocabulary instead of two.
+     *
+     * WHY AN INSET SHADOW RATHER THAN A BORDER OR A RADIUS TRICK. The
+     * rim is spread inward from the border box, so it is hollow at ANY
+     * border-radius. `terminal`, `gameboy` and `legacy_apple` set
+     * --radius-full to 0 on purpose (a deliberate sharp-edged look, not
+     * a bug - see the note in CLAUDE.md), which turns every dot here
+     * into a 9px square. A ring built out of a radius would collapse
+     * into a filled square there and silently take the fix with it.
+     * This one becomes a hollow SQUARE, which is still unmistakably not
+     * a filled one. A `border` would also work but costs a layout box
+     * this inline element does not need.
+     *
+     * The ink stays --color-fg-subtle: same quiet weight it always had,
+     * so nothing about this reads as an escalation. The centre is
+     * genuinely transparent, so it composites onto whatever the row is,
+     * in light themes and dark alike. */
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--color-fg-subtle);
+}
+
+@keyframes status-dot-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}

@@ -1,12 +1,12 @@
-"""Notification dispatcher — bounded queue, drop-oldest on overflow.
+"""Notification dispatcher - bounded queue, drop-oldest on overflow.
 
 Design contract:
 - ``emit()`` is SYNCHRONOUS and non-blocking. It is called from the
   WebSocket / PTY chunk handler (Item 7's IdleWatcher) and MUST NOT
-  await or stall — that would back up the terminal stream.
+  await or stall - that would back up the terminal stream.
 - The worker task drains the queue async and calls ``ntfy.send()``,
   ``slack.send()``, and ``pushover.send()`` per event, in that order.
-  Send failures never propagate — each backend's ``send`` already
+  Send failures never propagate - each backend's ``send`` already
   catches and logs.
 - Queue size 100. On overflow we drop the OLDEST event (best-effort:
   the most recent signal is usually most relevant) and log both the
@@ -31,7 +31,7 @@ from src.core.notifications.rate_limit import RateLimiter
 logger = structlog.get_logger()
 
 
-# Queue cap — 100 is plenty for human-paced terminal events. Burst
+# Queue cap - 100 is plenty for human-paced terminal events. Burst
 # pathology (a runaway stream of pattern matches) would drop oldest and
 # log; the next IdleWatcher refactor (Item 8) adds rate-limiting on top.
 _QUEUE_MAXSIZE = 100
@@ -61,7 +61,7 @@ class NotificationRouter:
         # doesn't half-apply mid-burst).
         self._public_base_url: str = getattr(config, "public_base_url", "") or ""
         self._topic_warned: bool = False
-        # Plan v3.1 Item 8 — rate limiter. Config-driven; defaults match plan.
+        # Plan v3.1 Item 8 - rate limiter. Config-driven; defaults match plan.
         # NOT thread-safe by design: only the single async worker invokes it.
         self.rate_limiter = RateLimiter(
             global_cap=int(getattr(config, "rate_limit_global_cap", 10)),
@@ -74,7 +74,7 @@ class NotificationRouter:
     async def start(self) -> None:
         """Spawn the background worker task.
 
-        If the topic is empty we log once and DO NOT start the worker —
+        If the topic is empty we log once and DO NOT start the worker -
         the router will silently drop emits (via the ``_topic_warned``
         guard in ``emit``) until the user runs setup_auth.
         """
@@ -86,7 +86,7 @@ class NotificationRouter:
         if not topic:
             logger.warning("notifications.topic_missing")
             self._topic_warned = True
-            # Still spin up the worker — emit() short-circuits on missing
+            # Still spin up the worker - emit() short-circuits on missing
             # topic. We want the router lifecycle to behave the same so
             # `stop()` is symmetric.
 
@@ -116,7 +116,7 @@ class NotificationRouter:
         if self._worker_task is None:
             return
         self._stopped = True
-        # Send a sentinel by cancelling — drain semantics aren't worth
+        # Send a sentinel by cancelling - drain semantics aren't worth
         # the complexity for fire-and-forget signals.
         self._worker_task.cancel()
         try:
@@ -134,12 +134,12 @@ class NotificationRouter:
         Behavior on a full queue: drop the OLDEST event (consume one
         with ``get_nowait``), log the drop, then re-attempt the put.
         If the second put still fails (race with the worker), log the
-        new event as dropped and return — never raise.
+        new event as dropped and return - never raise.
 
         Args:
             event: the typed notification to dispatch.
         """
-        # Master enable flag. When false, emit is a strict no-op — no
+        # Master enable flag. When false, emit is a strict no-op - no
         # log, no work. The router can still be wired into lifespan
         # cheaply.
         if not getattr(self._config, "enabled", False):
@@ -148,7 +148,7 @@ class NotificationRouter:
         if self._stopped:
             return
 
-        # v0.7.0 Part 4 — at least one channel must be configured for an
+        # v0.7.0 Part 4 - at least one channel must be configured for an
         # emit to be worth queueing. ntfy needs a topic; slack needs a
         # webhook URL; pushover needs BOTH a token and a user key. If
         # ALL are empty/incomplete, drop silently (we already warned at
@@ -182,7 +182,7 @@ class NotificationRouter:
             try:
                 self._queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Worker is wedged — give up rather than spin.
+                # Worker is wedged - give up rather than spin.
                 logger.warning(
                     "notify.dropped",
                     reason="queue_full_after_evict",
@@ -195,7 +195,7 @@ class NotificationRouter:
         try:
             while True:
                 event = await self._queue.get()
-                # Plan v3.1 Item 8 — rate-limit gate. Suppressed events
+                # Plan v3.1 Item 8 - rate-limit gate. Suppressed events
                 # are logged + dropped; suppression is NOT an error so
                 # we still mark the queue item done and move on.
                 allowed, reason = self.rate_limiter.check(event)
@@ -216,7 +216,7 @@ class NotificationRouter:
                         error=str(e),
                         kind=event.kind.value,
                     )
-                # v0.7.0 Part 4 — Slack fanout. Always called after ntfy
+                # v0.7.0 Part 4 - Slack fanout. Always called after ntfy
                 # so a slow Slack request never delays the (typically
                 # snappier) ntfy push. ``slack.send`` already swallows
                 # its own exceptions, but we wrap defensively for symmetry.
@@ -229,7 +229,7 @@ class NotificationRouter:
                         kind=event.kind.value,
                         channel="slack",
                     )
-                # Pushover fanout — same fire-and-forget posture as ntfy
+                # Pushover fanout - same fire-and-forget posture as ntfy
                 # and slack above. Dispatched last so it never delays
                 # either of the other two channels.
                 try:

@@ -1,11 +1,11 @@
 /**
- * Themes Registry — client-side theme manifest store + apply pipeline.
+ * Themes Registry - client-side theme manifest store + apply pipeline.
  *
  * Phase 2 surface (per spec sections "Architecture B" / "Architecture G"):
  *   - Themes.init()                  fetch /api/v1/themes, apply persisted global
  *   - Themes.applyGlobal(id)         set <html data-theme>, write CSS vars on :root,
  *                                    fire xterm listeners, persist to localStorage
- *   - Themes.applySession(agentType) STUB — sets terminal-screen attr + console.log
+ *   - Themes.applySession(agentType) STUB - sets terminal-screen attr + console.log
  *                                    Phase 5 wires the full xterm side
  *   - Themes.clearSession()          remove session attr; restore global xterm
  *   - Themes.getActiveGlobal()       active global manifest
@@ -17,7 +17,7 @@
  *           injected so the page still renders.
  * No localStorage cache of the manifest list (DAR cut).
  * No-FOUC: callers should set <html data-theme="..."> from localStorage SYNCHRONOUSLY
- *          before init() resolves — see app.js for that early-paint hook.
+ *          before init() resolves - see app.js for that early-paint hook.
  */
 (function () {
     'use strict';
@@ -27,9 +27,15 @@
     // Phase 9: 3-state allowlist for theme effects.js scripts.
     // Shape: { [themeId]: true | false }. Missing key = "ask".
     var JS_ALLOWLIST_KEY = 'cloude.themeJsAllowlist';
+    // Last-applied palette, cached so the PRE-AUTH login screen can paint
+    // the user's theme. `GET /api/v1/themes` is behind require_auth, so
+    // before login there is no manifest to read and `data-theme` alone
+    // paints nothing - no stylesheet in this app keys off that attribute.
+    // Shape: {"id": "<themeId>", "cssVars": { "--x": "y", ... }}.
+    var VARS_CACHE_KEY = 'cloude.theme.vars';
 
     // Hardcoded fallback so the page survives a missing/broken endpoint. This
-    // MUST stay in lock-step with client/css/themes/claude/theme.json — the
+    // MUST stay in lock-step with client/css/themes/claude/theme.json - the
     // values come from the :root block in styles.css. If those drift, the
     // fallback drifts; on real boot the endpoint wins so this only matters
     // when /api/v1/themes is down.
@@ -57,7 +63,7 @@
     var manifests = new Map();          // id -> ThemeManifest
     var activeGlobalId = DEFAULT_THEME_ID;
     var activeSessionAgent = null;
-    // SESSION-IDENTITY-V2 — name of the currently-active session, set by
+    // SESSION-IDENTITY-V2 - name of the currently-active session, set by
     // app.js when transitioning to/from the terminal screen. When non-null
     // applyGlobal() PATCHes the server-side pinned theme INSTEAD of writing
     // localStorage, so per-session pins survive reloads without polluting
@@ -93,8 +99,50 @@
     }
 
     /**
+     * Description: remember a theme's palette so the next page load can
+     *   paint it before the manifest endpoint is reachable. Keyed WITH the
+     *   theme id, so a cache written for one theme can never be painted
+     *   for another.
+     * Inputs: themeId (string). cssVars (object) - the manifest's vars.
+     * Output: void. Storage failures are ignored; the cache is an
+     *   optimisation and its absence is a supported state.
+     * Example: cacheThemeVars('terminal', {'--color-bg': '#000000'})
+     */
+    function cacheThemeVars(themeId, cssVars) {
+        try {
+            localStorage.setItem(VARS_CACHE_KEY, JSON.stringify({
+                id: themeId, cssVars: cssVars || {}
+            }));
+        } catch (_) { /* quota or private mode - not fatal */ }
+    }
+
+    /**
+     * Description: read back a cached palette, but ONLY if it was written
+     *   for the theme that is stored now. A mismatch means the user
+     *   switched themes in another tab, or the cache predates a rename;
+     *   either way painting it would show a palette nobody chose.
+     * Inputs: themeId (string) - the theme the cache must belong to.
+     * Output: object - the cssVars, or {} when there is no usable cache.
+     */
+    function readCachedThemeVars(themeId) {
+        try {
+            var raw = localStorage.getItem(VARS_CACHE_KEY);
+            if (!raw) return {};
+            var parsed = JSON.parse(raw);
+            if (!parsed || parsed.id !== themeId) return {};
+            var vars = parsed.cssVars;
+            if (!vars || typeof vars !== 'object' || Array.isArray(vars)) return {};
+            return vars;
+        } catch (_) {
+            // Corrupt JSON is the same as no cache: fall back to defaults
+            // rather than throwing on the pre-auth path.
+            return {};
+        }
+    }
+
+    /**
      * Resolve auth header from window.Auth if available. Returns {} if not yet
-     * initialized — the endpoint will then 401 and we fall back to the bundled
+     * initialized - the endpoint will then 401 and we fall back to the bundled
      * Claude manifest. Caller will retry post-auth via Themes.init().
      */
     function authHeaders() {
@@ -124,17 +172,17 @@
                 credentials: 'same-origin'
             });
             if (!res.ok) {
-                console.warn('Themes: /api/v1/themes returned HTTP ' + res.status + ' — using fallback');
+                console.warn('Themes: /api/v1/themes returned HTTP ' + res.status + ' - using fallback');
                 return [];
             }
             var data = await res.json();
             if (!Array.isArray(data)) {
-                console.warn('Themes: /api/v1/themes returned non-array — using fallback');
+                console.warn('Themes: /api/v1/themes returned non-array - using fallback');
                 return [];
             }
             return data;
         } catch (err) {
-            console.warn('Themes: /api/v1/themes fetch failed — using fallback', err);
+            console.warn('Themes: /api/v1/themes fetch failed - using fallback', err);
             return [];
         }
     }
@@ -182,10 +230,10 @@
     }
 
     // -----------------------------------------------------------------------
-    // Phase 9 — theme effects.js loader + consent prompt
+    // Phase 9 - theme effects.js loader + consent prompt
     //
     // User-authored effects.js is loaded same-origin per the LAN-only threat
-    // model — see spec section "Context" (Architecture F: Pluggability
+    // model - see spec section "Context" (Architecture F: Pluggability
     // Surface) for the security reasoning. Bundled themes ALSO go through
     // this gate (belt-and-suspenders) so a malicious diff that ships a
     // bundled effects.js still requires explicit user consent on first run.
@@ -227,7 +275,7 @@
             var current = readJsAllowlist();
             current[themeId] = !!value;
             localStorage.setItem(JS_ALLOWLIST_KEY, JSON.stringify(current));
-        } catch (_) { /* localStorage full or disabled — non-fatal */ }
+        } catch (_) { /* localStorage full or disabled - non-fatal */ }
     }
 
     /**
@@ -299,7 +347,7 @@
             });
 
             document.body.appendChild(overlay);
-            // Default focus on the safest option ("Allow once" — no persistence).
+            // Default focus on the safest option ("Allow once" - no persistence).
             var onceBtn = overlay.querySelector('button[data-action="once"]');
             if (onceBtn) { try { onceBtn.focus(); } catch (_) {} }
         });
@@ -327,12 +375,12 @@
     /**
      * Load the effects module via dynamic import() and call its exported
      * init(). Same-origin so it inherits the existing `script-src 'self'`
-     * CSP — no nonce needed.
+     * CSP - no nonce needed.
      *
      * effects.js files are authored as ES modules (export function init()),
      * so a classic <script src=> tag would SyntaxError on `export` and
      * never run. dynamic import() loads them as modules AND gives us the
-     * exported namespace so we can invoke init() ourselves — without it
+     * exported namespace so we can invoke init() ourselves - without it
      * the module would parse cleanly but do nothing (no top-level side
      * effects in our bundled FX files).
      *
@@ -391,14 +439,14 @@
 
     /**
      * Decide whether to load a manifest's effects.js, prompting the user on
-     * first encounter. Returns a Promise<void>; never throws to caller — any
+     * first encounter. Returns a Promise<void>; never throws to caller - any
      * failure degrades to "skip the script" so the CSS theme still applies.
      */
     async function maybeLoadEffects(manifest) {
         if (!manifest || !manifest.effects) return;
         if (loadedEffectsScripts.has(manifest.id)) return;
 
-        // Bundled themes ship with the app — they ARE our code, not third-party.
+        // Bundled themes ship with the app - they ARE our code, not third-party.
         // The consent prompt exists to gate user-authored themes dropped into
         // the /themes mount. Forcing users to click through a modal for a
         // theme we shipped in the repo is friction with no security upside
@@ -420,7 +468,7 @@
             return;
         }
 
-        // Unknown — prompt.
+        // Unknown - prompt.
         var decision;
         try {
             decision = await showConsentModal(manifest);
@@ -435,36 +483,48 @@
             // Don't persist. Inject this run only.
             injectEffectsScript(manifest);
         } else {
-            // 'never' (or unknown — fail-closed)
+            // 'never' (or unknown - fail-closed)
             writeJsAllowlistEntry(manifest.id, false);
         }
     }
 
     /**
-     * SESSION-IDENTITY-V2 — set / clear the active-session name. Called by
+     * SESSION-IDENTITY-V2 - set / clear the active-session name. Called by
      * app.js on screen transitions (showTerminal sets, showLaunchpad/Auth
      * clears). When set, applyGlobal() routes persistence to the server
      * via PATCH /api/v1/sessions/<name>/theme INSTEAD of localStorage
-     * (v0.7.0+ — project-scoped via <working_dir>/.cc.theme).
+     * (v0.7.0+ - project-scoped via <working_dir>/.cc.theme).
      */
     function setActiveSession(name) {
         activeSessionName = name || null;
     }
 
     /**
-     * SESSION-IDENTITY-V2 — pure DOM/effects apply. No persistence side-effects.
+     * The tmux session name currently in theme scope, or null on the
+     * launchpad / auth screens. Read by the per-session theme picker so
+     * it can key its own state (audio opt-in) off the same STABLE
+     * identifier the server pins themes against.
+     *
+     * @returns {string|null}
+     */
+    function getActiveSession() {
+        return activeSessionName;
+    }
+
+    /**
+     * SESSION-IDENTITY-V2 - pure DOM/effects apply. No persistence side-effects.
      * Returns true on success, false if id is unknown. The shared paint
      * pipeline used by both the user-driven applyGlobal() (which then
      * persists) and the screen-transition restore path in app.js (which
-     * MUST NOT persist — it's just re-painting whatever was already chosen).
+     * MUST NOT persist - it's just re-painting whatever was already chosen).
      *
      * @param {string} themeId
      * @param {object} [opts]
-     * @param {boolean} [opts.persist] — if true, write the choice to
+     * @param {boolean} [opts.persist] - if true, write the choice to
      *   localStorage as the new global default. Server-side per-session
      *   pinning is handled by applyGlobal() which calls this internally;
      *   this primitive intentionally does NOT touch the server.
-     * @param {boolean} [opts.forXterm] — three-state xterm-repaint override:
+     * @param {boolean} [opts.forXterm] - three-state xterm-repaint override:
      *   - true       → ALWAYS fire fireXtermChange regardless of activeSessionAgent.
      *                  Use when the caller is the authoritative source for the
      *                  session's terminal palette (session theme picker, session
@@ -478,7 +538,7 @@
     function applyTheme(themeId, opts) {
         var m = manifests.get(themeId);
         if (!m) {
-            console.warn('Themes.applyTheme: unknown theme id ' + themeId + ' — keeping current');
+            console.warn('Themes.applyTheme: unknown theme id ' + themeId + ' - keeping current');
             return false;
         }
         // Tear down the previously-active effects module if we're switching
@@ -504,6 +564,9 @@
         document.documentElement.dataset.theme = themeId;
         paintCssVars(m.cssVars || {});
         activeGlobalId = themeId;
+        // Cache the palette we just proved good, so the next visit's login
+        // screen can paint it before /themes is reachable.
+        cacheThemeVars(themeId, m.cssVars || {});
 
         if (opts && opts.persist === true) {
             try { localStorage.setItem(STORAGE_KEY, themeId); } catch (_) { /* ignore */ }
@@ -537,7 +600,7 @@
             });
         }
 
-        // v0.7.0+ — per-theme background audio plumbing.
+        // v0.7.0+ - per-theme background audio plumbing.
         // Optional `audio` manifest field; null = silence current track.
         // ThemeAudio gracefully no-ops when the field is absent or the
         // referenced asset fails to load (404 / CORS / codec).
@@ -552,13 +615,13 @@
     }
 
     /**
-     * v0.7.0 — PATCH the project-scoped theme for an active session.
+     * v0.7.0 - PATCH the project-scoped theme for an active session.
      *
      * Hits ``PATCH /api/v1/sessions/{name}/theme`` with body
      * ``{theme_id}``; the server persists to ``<working_dir>/.cc.theme``
      * so two browsers / two machines see the same theme.
      *
-     * Best-effort: failures are logged but never throw to the caller —
+     * Best-effort: failures are logged but never throw to the caller -
      * the DOM paint already succeeded; persistence is recoverable.
      * Server returns the updated SessionInfo; we don't consume it
      * (the local DOM is already the source of truth for this paint).
@@ -604,7 +667,7 @@
      */
     function applyGlobal(themeId) {
         // When the user picks a theme while inside a session, the pick IS
-        // for this session — force the xterm repaint so the terminal pane
+        // for this session - force the xterm repaint so the terminal pane
         // restyles immediately (otherwise only the page chrome would repaint
         // because the legacy gate blocks xterm whenever activeSessionAgent
         // is set, which is exactly when we're in a session). Outside a
@@ -645,7 +708,7 @@
      * through multiple themes when the queue drains).
      */
     function applySession(agentType) {
-        // Replay gate — defer until replay completes. Coalesce: only the
+        // Replay gate - defer until replay completes. Coalesce: only the
         // latest agentType matters when the queue drains.
         if (replayInProgress) {
             deferredSessionQueue.push(agentType);
@@ -660,7 +723,7 @@
         }
         var m = manifests.get(agentType);
         if (!m) {
-            console.log('Themes.applySession: no manifest for "' + agentType + '" — falling back to global');
+            console.log('Themes.applySession: no manifest for "' + agentType + '" - falling back to global');
             clearSession();
             return;
         }
@@ -735,7 +798,7 @@
         if (was && !replayInProgress && deferredSessionQueue.length) {
             var last = deferredSessionQueue[deferredSessionQueue.length - 1];
             deferredSessionQueue = [];
-            console.log('Themes: replay finished — draining deferred session apply', last);
+            console.log('Themes: replay finished - draining deferred session apply', last);
             applySession(last);
         }
     }
@@ -769,7 +832,7 @@
     }
 
     /**
-     * One-shot init — fetches manifests, applies the persisted global theme.
+     * One-shot init - fetches manifests, applies the persisted global theme.
      * Idempotent: subsequent calls re-fetch (useful after auth) but never
      * double-apply listeners or break state.
      */
@@ -781,7 +844,7 @@
         if (!manifests.has(stored)) stored = DEFAULT_THEME_ID;
         applyGlobal(stored);
         initialized = true;
-        console.log('Themes: initialized — ' + manifests.size + ' manifest(s), active=' + activeGlobalId);
+        console.log('Themes: initialized - ' + manifests.size + ' manifest(s), active=' + activeGlobalId);
     }
 
     window.Themes = {
@@ -789,6 +852,7 @@
         applyGlobal: applyGlobal,
         applyTheme: applyTheme,
         setActiveSession: setActiveSession,
+        getActiveSession: getActiveSession,
         applySession: applySession,
         clearSession: clearSession,
         setReplayInProgress: setReplayInProgress,
@@ -799,10 +863,24 @@
         STORAGE_KEY: STORAGE_KEY,
         DEFAULT_THEME_ID: DEFAULT_THEME_ID,
         // Sync helper used by app.js to set <html data-theme> BEFORE init()
-        // fetches anything — kills FOUC for repeat visitors.
+        // fetches anything - kills FOUC for repeat visitors.
         applyStoredThemeIdSync: function () {
             var id = getStoredThemeId();
             document.documentElement.dataset.theme = id;
+            // The attribute alone renders NOTHING: no stylesheet here keys
+            // off [data-theme]. Themes are delivered as cssVars painted
+            // inline on :root from a manifest behind require_auth, so
+            // without this the login screen showed the :root defaults out
+            // of styles.css under every theme.
+            //
+            // paintCssVars is the same painter init() uses and it tracks
+            // the names it applied, so when the real manifest arrives a
+            // moment later it diffs against this set and unsets anything
+            // stale. A cache that is missing, corrupt, or written for a
+            // different theme yields {} and leaves the defaults standing -
+            // which is exactly the old behaviour, so a first-ever visit is
+            // no worse than before.
+            paintCssVars(readCachedThemeVars(id));
             return id;
         },
         get initialized() { return initialized; }

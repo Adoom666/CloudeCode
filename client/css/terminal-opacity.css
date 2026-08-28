@@ -1,0 +1,37 @@
+/* ===========================================================================
+ * Terminal surface translucency, so the animated theme background (see
+ * client/css/themes/_shared/effects-base.js) shows a hint through the
+ * terminal in the session view instead of being fully blocked by it.
+ *
+ * OWNERSHIP NOTE: styles.css declares `#terminal { background:
+ * var(--color-bg) }` (opaque) and is owned by a sibling change in this
+ * same effort - this file overrides it rather than editing that rule
+ * directly. `html[data-theme-effects="..."] #terminal` outranks a bare
+ * `#terminal` on specificity alone (one id + one attribute + one type
+ * selector vs. one id), so load order relative to styles.css does not
+ * matter, but this is still linked after it in index.html to match the
+ * convention session-theme-tint.css already set.
+ *
+ * WHY THIS FILE EXISTS AT ALL, GIVEN xterm.js ALREADY PAINTS ITS OWN
+ * TRANSLUCENT CELL BACKGROUNDS (see client/js/terminal.js,
+ * withTerminalBackgroundOpacity): xterm's canvas covers exactly
+ * rows*cols cells. `.terminal-container` has real padding and the
+ * container is rarely an exact multiple of the cell grid, so a few
+ * pixels of `#terminal` itself are visible outside the glyph canvas.
+ * Left opaque, that margin would show a hard-edged opaque rectangle
+ * behind a translucent terminal - visibly wrong. Transparent here makes
+ * the whole surface consistent.
+ *
+ * THREE-OUTCOME RULE: the selector is gated on the SAME status attribute
+ * client/js/terminal.js reads to decide whether xterm's own background
+ * goes translucent (isThemeEffectVisible() there). RUNNING/PAUSED/STATIC
+ * mean a frame is actually painted behind the page; UNAVAILABLE/SKIPPED/
+ * INACTIVE, or the attribute never being set at all, fall through to no
+ * matching rule here and `#terminal` stays exactly as styles.css defined
+ * it - fully opaque, full legibility, never translucent over nothing.
+ * =========================================================================== */
+html[data-theme-effects="running"] #terminal,
+html[data-theme-effects="paused"] #terminal,
+html[data-theme-effects="static"] #terminal {
+    background: transparent;
+}

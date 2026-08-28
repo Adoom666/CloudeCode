@@ -66,6 +66,9 @@ class _StubSettings:
     def get_pinned_themes_path(self) -> Path:
         return self._pin_path
 
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
     @property
     def log_directory(self) -> str:
         return str(self._log_dir)
@@ -297,169 +300,136 @@ def _build_route_app(monkeypatch, tmp_path):
     return app, mgr
 
 
-def test_rename_valid_name_succeeds(monkeypatch, tmp_path):
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
+# THE ROUTE'S CONTRACT CHANGED, AND THIS SECTION RECORDS THE NEW ONE.
+#
+# ``PATCH /sessions/{id}/name`` used to call ``tmux rename-session``.
+# That moves ``tmux_name``, which is the field ``(socket, name, epoch)``
+# identity is keyed on, so the stored row matched no live listing row,
+# was reaped as ``tmux_missing``, and the same live session came back
+# through the adopt path as a stranger and got a SECOND row. Measured on
+# a live v1.0.4 install: one session, three rows, two of them corpses.
+#
+# The endpoint now writes ``sessions.title``, a free-form LABEL, and the
+# tmux name never moves. Three contracts went away with the tmux call
+# and their tests are gone rather than weakened:
+#
+#   409 CONFLICT   two sessions may now carry the same label, because a
+#                  label identifies nothing. There is no name to collide.
+#   500 TMUX FAIL  no tmux command runs, so it cannot fail.
+# SUPERSEDED 2026-08-26. This block used to list a third departure:
+#
+#   WS BROADCAST   ``session.renamed`` announced a tmux name change to
+#                  every attached tab. Nothing renames, so there is
+#                  nothing to announce; the label is read from the
+#                  session payload like any other field.
+#
+# That is WRONG and it is the dangerous direction. The tmux call went; the
+# broadcast did not. src/api/routes.py still sends a SessionRenamedMessage on
+# every successful label write, client/js/terminal.js still dispatches on it,
+# and tests/test_rename_broadcast_surfaces.node.mjs covers the client half.
+# What changed is what the frame ANNOUNCES - a label, not a tmux name - and a
+# tab that is already attached still has to hear about it or it shows a stale
+# name until reload.
+#
+# This comment nearly cost the message type its life: it was read on
+# 2026-08-26 as evidence that WSMessageType.SESSION_RENAMED had no sender and
+# could be deleted. The reason it was believed is structural and worth
+# naming - the harness in this file has no datastore, so every rename here
+# answers 404 and the success path that broadcasts is never reached. There
+# was no failing test to contradict the prose. There is now:
+# tests/test_session_renamed_broadcast_is_live.py measures the sender.
+#
+# ``SessionManager.rename_session`` is NOT gone and its tests above still
+# pass - an external ``tmux rename-session`` is still possible, and the
+# lifecycle reconciler heals it. What is gone is any USER path to it.
+
+
+def test_a_label_with_spaces_is_no_longer_rejected(monkeypatch, tmp_path):
+    """The user asked for this by name: "allow any chars including spaces".
+
+    The old route enforced ``^[A-Za-z0-9_-]{1,64}$`` and answered 400.
+    This harness has no datastore, so the write cannot land and the
+    honest answer is 404 - but 400 would mean the charset gate is still
+    there, and that is what this asserts against.
+    """
+    app, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
     resp = client.patch(
         "/api/v1/sessions/ses_route/name",
-        json={"new_name": "InsidersApp"},
+        json={"new_name": "Media Compression"},
     )
-    assert resp.status_code == 200, resp.text
-    payload = resp.json()
-    assert payload["tmux_session"] == "InsidersApp"
-    # Manager-side mirror.
-    assert mgr.sessions["ses_route"].tmux_session == "InsidersApp"
-    assert "InsidersApp" in mgr.owned_tmux_sessions
+    assert resp.status_code != 400, (
+        "a label containing a space must not be refused as malformed"
+    )
 
 
 @pytest.mark.parametrize(
-    "bad_name",
-    [
-        "has spaces",
-        "has:colon",
-        "has.dot",
-        "has/slash",
-        "has\\back",
-        "has!bang",
-        "",
-        "a" * 65,  # too long
-        "x" * 100,
-    ],
+    "label",
+    ["has:colon", "has.dot", "has/slash", "has!bang", "client (v2) 50%"],
 )
-def test_rename_invalid_chars_rejected(monkeypatch, tmp_path, bad_name):
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-    client = TestClient(app)
-
-    resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": bad_name},
-    )
-    assert resp.status_code == 400, resp.text
-    # Session unchanged.
-    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
-
-
-def test_rename_too_long_rejected(monkeypatch, tmp_path):
+def test_punctuation_is_no_longer_rejected(monkeypatch, tmp_path, label):
+    """Every one of these was a 400. None of them reaches tmux any more."""
     app, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
     resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": "a" * 65},
+        "/api/v1/sessions/ses_route/name", json={"new_name": label}
     )
-    assert resp.status_code == 400
+    assert resp.status_code != 400
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["", "   ", "line\nbreak", "tab\there", "a" * 201],
+)
+def test_a_label_that_cannot_be_rendered_is_still_a_400(
+    monkeypatch, tmp_path, label
+):
+    """Permissive is not unbounded.
+
+    Empty has nothing to show, a control character breaks every
+    single-line surface that renders it, and 200 characters is the
+    declared bound. All three are refused BEFORE any read or write.
+    """
+    app, mgr = _build_route_app(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    resp = client.patch(
+        "/api/v1/sessions/ses_route/name", json={"new_name": label}
+    )
+    assert resp.status_code == 400, resp.text
+    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
+
+
+def test_labelling_never_moves_the_tmux_name(monkeypatch, tmp_path):
+    """THE PROPERTY THE WHOLE CHANGE EXISTS FOR.
+
+    Whatever the endpoint answers - success or failure - the tmux name
+    the session was created with must be the tmux name it still has.
+    That is what makes a rename structurally incapable of splitting one
+    session into two rows.
+    """
+    app, mgr = _build_route_app(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    client.patch(
+        "/api/v1/sessions/ses_route/name",
+        json={"new_name": "Something Entirely Different"},
+    )
+
+    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
+    assert "cloude_route" in mgr.owned_tmux_sessions
+    assert "Something Entirely Different" not in mgr.owned_tmux_sessions
 
 
 def test_rename_unknown_session_id_404(monkeypatch, tmp_path):
+    """A definite negative: no such session to label."""
     app, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
     resp = client.patch(
-        "/api/v1/sessions/ses_nope/name",
-        json={"new_name": "anything"},
+        "/api/v1/sessions/does_not_exist/name",
+        json={"new_name": "Whatever"},
     )
     assert resp.status_code == 404
-
-
-def test_rename_conflict_via_route_returns_409(monkeypatch, tmp_path):
-    """Two sessions; rename A to B's name → 409."""
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-    # Register a second session so we have a collision target.
-    work2 = tmp_path / "second"
-    work2.mkdir()
-    _register(mgr, "ses_b", work2, "cloude_b", owned=True)
-
-    client = TestClient(app)
-    resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": "cloude_b"},
-    )
-    assert resp.status_code == 409, resp.text
-    # Neither side mutated.
-    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
-    assert mgr.sessions["ses_b"].tmux_session == "cloude_b"
-
-
-def test_rename_tmux_failure_returns_500(monkeypatch, tmp_path):
-    """If the backend raises RuntimeError (tmux command failed) → 500."""
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-    backend = mgr.backends["ses_route"]
-    backend.fail_next = True
-
-    client = TestClient(app)
-    resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": "newname"},
-    )
-    assert resp.status_code == 500
-
-
-def test_rename_broadcasts_ws_session_renamed(monkeypatch, tmp_path):
-    """The PATCH endpoint MUST fan ``session.renamed`` out via
-    ``connection_manager.broadcast_to_session`` with the right payload."""
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-
-    # Capture broadcast calls. ``connection_manager`` is a module-level
-    # singleton — monkeypatching its method swaps the bound coroutine for
-    # the lifetime of this test.
-    mock_broadcast = AsyncMock(return_value=1)
-    monkeypatch.setattr(
-        connection_manager, "broadcast_to_session", mock_broadcast
-    )
-
-    client = TestClient(app)
-    resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": "broadcasted"},
-    )
-    assert resp.status_code == 200
-
-    assert mock_broadcast.await_count == 1
-    call_args = mock_broadcast.await_args
-    # First positional: session_id.
-    assert call_args.args[0] == "ses_route"
-    # Second positional: JSON payload that decodes to the right envelope.
-    import json as _json
-    payload = _json.loads(call_args.args[1])
-    assert payload["type"] == "session.renamed"
-    assert payload["session_id"] == "ses_route"
-    assert payload["new_name"] == "broadcasted"
-
-
-def test_rename_owned_session_via_route(monkeypatch, tmp_path):
-    """Explicit assertion that owned sessions re-key the owned set on
-    rename through the route layer (mirrors the manager-level test but
-    exercises the full FastAPI -> SessionManager pipeline)."""
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-    assert "cloude_route" in mgr.owned_tmux_sessions
-
-    client = TestClient(app)
-    resp = client.patch(
-        "/api/v1/sessions/ses_route/name",
-        json={"new_name": "renamed_owned"},
-    )
-    assert resp.status_code == 200
-    assert "cloude_route" not in mgr.owned_tmux_sessions
-    assert "renamed_owned" in mgr.owned_tmux_sessions
-
-
-def test_rename_adopted_session_via_route(monkeypatch, tmp_path):
-    """Adopted sessions don't enter owned_tmux_sessions; the rename must
-    not promote them in either direction."""
-    app, mgr = _build_route_app(monkeypatch, tmp_path)
-    # Register an adopted session alongside the owned one.
-    ext_dir = tmp_path / "ext"
-    ext_dir.mkdir()
-    _register(mgr, "adopted:exta", ext_dir, "exta", owned=False)
-    assert "exta" not in mgr.owned_tmux_sessions
-
-    client = TestClient(app)
-    resp = client.patch(
-        "/api/v1/sessions/adopted:exta/name",
-        json={"new_name": "extb"},
-    )
-    assert resp.status_code == 200, resp.text
-    assert "exta" not in mgr.owned_tmux_sessions
-    assert "extb" not in mgr.owned_tmux_sessions
-    assert mgr.sessions["adopted:exta"].tmux_session == "extb"

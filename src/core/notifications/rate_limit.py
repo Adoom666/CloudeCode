@@ -1,11 +1,11 @@
-"""Notification rate limiting — global token bucket + per-kind dedup.
+"""Notification rate limiting - global token bucket + per-kind dedup.
 
 Plan v3.1 CUT 3: YAGNI minimalism. One global 10/min rolling window plus
 a per-kind cooldown. Suppressions logged to the standard app log.
 
 Design contract:
 - NOT thread-safe. Intended for use inside the single async notification
-  worker — no locking needed.
+  worker - no locking needed.
 - All timing via ``time.monotonic()``. Wall-clock (``time.time()``) is
   NTP-adjustable and breaks the rolling window.
 - ``check()`` mutates state on PASS only. On suppression, state is left
@@ -50,7 +50,7 @@ class RateLimiter:
         """
         now = time.monotonic()
 
-        # Per-kind cooldown — evaluated first so dedup wins over global.
+        # Per-kind cooldown - evaluated first so dedup wins over global.
         last = self._last_by_kind.get(event.kind)
         if last is not None and (now - last) < self.per_kind_cooldown_s:
             return False, "per_kind_cooldown"

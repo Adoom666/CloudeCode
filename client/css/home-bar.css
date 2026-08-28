@@ -1,0 +1,271 @@
+/* home-bar - the thin bottom bar on the home screen.
+ * ----------------------------------------------------------------------
+ * WHAT IT IS. One strip pinned to the bottom of #launchpad-screen holding
+ * app-scoped odds and ends: the server-controls menu, the version chip and
+ * the nyedis link. It replaces `.launchpad-footer`, which was a centred
+ * block at the end of the scrolled content and therefore only visible if
+ * you scrolled to the bottom.
+ *
+ * HOME SCREEN ONLY, BY CONSTRUCTION. The markup is rendered by
+ * launchpad.js into #launchpad-screen, so there is no rule to write and no
+ * class to toggle that could leak it onto the terminal screen. Every
+ * selector in this file is scoped under #launchpad-screen or is a
+ * `.home-bar` descendant, so nothing here can reach the terminal even if
+ * the markup were duplicated by accident. The terminal fought hard for its
+ * vertical pixels; this bar spends none of them.
+ *
+ * WHY THE SCREEN IS RESTRUCTURED RATHER THAN THE BAR BEING STICKY.
+ * `.screen` in styles.css is `overflow: auto`, so #launchpad-screen was
+ * itself the scroll container. `position: sticky; bottom: 0` inside it
+ * would pin the bar only while the content is taller than the viewport,
+ * and would leave the bar floating mid-screen with two projects
+ * configured. Splitting the screen into a scroller plus a non-shrinking
+ * bar makes the bar's position unconditional, and - the part that matters
+ * for the FAB - puts the bar OUTSIDE the scrolled content, so it can never
+ * overlap a row and never needs a z-index to win against one.
+ *
+ * THIN IS THE POINT. The bar's own box is one --home-bar-h and no more:
+ * no vertical padding, no margins, one hairline border. The tap targets
+ * are as tall as the bar rather than being boxes floating inside a taller
+ * strip, which is how the strip stays thin while every control still
+ * clears the 44px touch minimum on a coarse pointer.
+ *
+ * ADDING AN ITEM LATER. Append a child. Items before .home-bar__spacer sit
+ * at the left edge, items after it at the right. Give an interactive one
+ * .home-bar__btn (or .home-bar__link for an anchor) and it inherits the
+ * height, the hit area and the hover treatment with no new geometry.
+ */
+
+:root {
+    /* The bar's CONTENT height. Interactive children fill it, so this is
+     * also the tap-target height - which is why there is a coarse-pointer
+     * bump rather than one number for every device. */
+    --home-bar-h: 36px;
+
+    /* Bottom safe-area inset, as a token so the box arithmetic below has
+     * one home. It is 0 here on purpose: client/css/ios-chrome.css is the
+     * ONE place in this app that reads env(safe-area-inset-*), and it
+     * overrides this token to the real inset. Keeping the default here
+     * means this file's geometry is complete and testable on its own.
+     *
+     * The token is also what makes the inset verifiable in a browser,
+     * where env() always resolves to 0: set it to a non-zero value from
+     * devtools and the bar must grow by exactly that much while its
+     * contents stay put. */
+    --home-bar-inset: 0px;
+
+    /* Horizontal gap between bar items. */
+    --home-bar-gap: 6px;
+}
+
+/* 44px is the touch minimum (Apple HIG / WCAG 2.5.5). A coarse pointer
+ * cannot hover, so this is the one condition under which the bar has to
+ * grow - not a viewport width, which says nothing about the pointer. */
+@media (pointer: coarse) {
+    :root {
+        --home-bar-h: 44px;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * The screen split: a scroller that takes the leftover height, and the
+ * bar, which does not shrink.
+ * ------------------------------------------------------------------ */
+
+#launchpad-screen {
+    /* The padding moves to the scroller; the bar owns its own inset and
+     * must reach both side edges. `overflow: hidden` retires this
+     * element as a scroll container - .launchpad-scroll is it now. */
+    padding: 0;
+    overflow: hidden;
+}
+
+.launchpad-scroll {
+    flex: 1 1 auto;
+    /* A flex item's automatic minimum size is its CONTENT size. Without
+     * this the project list would push the bar off the bottom of the
+     * screen instead of scrolling inside its own box - the same trap
+     * `.screen { min-height: 0 }` exists for one level up. */
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 20px;
+}
+
+/* ------------------------------------------------------------------ *
+ * The bar
+ * ------------------------------------------------------------------ */
+
+.home-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--home-bar-gap);
+    flex-shrink: 0;
+    width: 100%;
+    /* box-sizing is border-box app-wide, so the inset has to be added to
+     * the height as well as applied as padding, or it would eat into the
+     * content height instead of extending the box below it. The bar's
+     * BACKGROUND then paints down over the home-indicator strip while
+     * its contents stay above it. */
+    height: calc(var(--home-bar-h) + var(--home-bar-inset));
+    padding: 0 12px var(--home-bar-inset);
+    background: var(--color-bg-elevated);
+    border-top: 1px solid var(--color-accent-border-soft);
+}
+
+/* The layout hinge. Everything before it hugs the left edge, everything
+ * after it the right. `min-width: 0` because a flex item defaults to
+ * min-width: auto and this one must be free to collapse to nothing on a
+ * narrow screen rather than pushing the right-hand items off the edge. */
+.home-bar__spacer {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Shared geometry for every interactive item in the bar.
+ *
+ * WIDTH AND HEIGHT ARE DECLARED, NOT INHERITED. The bare `button` reset
+ * in styles.css sets width/height to --control-size (36/44/40 across
+ * breakpoints), and a class only beats an element selector for the
+ * properties it actually declares. A .home-bar__btn that declared only
+ * `height` would silently keep the reset's width and drift out of step
+ * with the bar at every breakpoint. */
+.home-bar__btn,
+.home-bar__link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: var(--home-bar-h);
+    height: var(--home-bar-h);
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+/* Cancel the bare button reset's scale + outset glow, which were written
+ * for the round 36px header controls. Inside a bar whose height IS the
+ * button height, a 1.05 scale paints outside the strip and a 12px glow
+ * bleeds over the content above it. `:not(:disabled)` is load-bearing:
+ * it lifts this to (0,2,1) so it outranks `button:hover:not(:disabled)`,
+ * which a plain `.home-bar__btn:hover` at (0,2,0) would lose to. */
+.home-bar__btn:hover:not(:disabled),
+.home-bar__btn:focus-visible,
+.home-bar__link:hover,
+.home-bar__link:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    transform: none;
+    box-shadow: none;
+    outline: none;
+}
+
+/* Keyboard focus has to stay visible, and the ring has to be INSET: an
+ * outset ring on an item that is exactly as tall as the bar paints over
+ * the content above it. */
+.home-bar__btn:focus-visible,
+.home-bar__link:focus-visible {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.home-bar__btn[aria-expanded="true"] {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+}
+
+/* The connection light and its LABEL.
+ *
+ * The dot moved here from the header because on the home screen there is
+ * room to say what it means. `.status::after` in styles.css is a
+ * hover-only tooltip and hover does not exist on a phone, so in the bar
+ * the tooltip is suppressed outright and a real, always-visible label sits
+ * beside the dot instead. Nothing here changes the dot: `.status` keeps
+ * its own 12px box, colour and pulse, so one set of state classes still
+ * drives it in both homes.
+ *
+ * It shrinks and truncates rather than pushing the right-hand items off
+ * the edge - `server unreachable - Failed to fetch` is longer than a 390px
+ * bar can hold, and the version chip and the bird are fixed-width
+ * neighbours that must not move. */
+.home-bar__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    /* Shrinkable, and min-width:0 because a flex item's automatic minimum
+     * is its content size - without it the label's full string would set
+     * the floor and overflow the bar instead of ellipsing. */
+    flex: 0 1 auto;
+    min-width: 0;
+    /* The bar's height is the tap-target height; this item is not a tap
+     * target, so it takes the height without claiming the hit area. */
+    height: 100%;
+}
+
+.home-bar__status-text {
+    font-size: 0.7rem;
+    color: var(--color-fg-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+/* The dot is a fixed 12px marker (14px under the 480px media query in
+ * styles.css) and must never be squeezed into an oval to make room for
+ * the label - the label is the shrinkable half of this pair. */
+.home-bar__status .status {
+    flex-shrink: 0;
+}
+
+/* No hover tooltip in the bar - the label above already says it, and a
+ * tooltip anchored 30px BELOW a dot that sits in the bottom bar would
+ * render off the bottom of the viewport. */
+.home-bar__status .status::after {
+    content: none;
+}
+
+/* The version chip. Reuses .version from styles.css for type and colour
+ * (it is the same chip, moved, not a new one); this rule only places it. */
+.home-bar__version {
+    flex-shrink: 0;
+    /* Sits between the spacer and the nyedis link with a little more air
+     * than the default gap, so the two do not read as one control. */
+    margin-right: 4px;
+    white-space: nowrap;
+}
+
+/* The chip is empty when the server could not resolve a version. An empty
+ * inline box still consumes the flex gaps around it, so take it out of the
+ * layout entirely rather than leaving a mystery notch beside the bird. */
+.home-bar__version:empty {
+    display: none;
+}
+
+/* The nyedis bird. It was 30px in the old block footer; at bar scale it
+ * is 18px of glyph inside a full-height hit area. */
+.home-bar__link svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
+.home-bar__btn svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
+/* Reduced motion: the only animation here is a colour fade, but say so
+ * explicitly rather than leaving it to the global rule to cover. */
+@media (prefers-reduced-motion: reduce) {
+    .home-bar__btn,
+    .home-bar__link {
+        transition: none;
+    }
+}

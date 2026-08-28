@@ -1,0 +1,18 @@
+ ▐▛███▜▌   Claude Code v2.1.223
+▝▜█████▛▘  Sonnet 5 · Claude Pro
+  ▘▘ ▝▝    ~/Development/example-project
+
+
+❯ /clear
+
+❯ tell me something short
+
+⏺ Sure, here's something short.
+
+✻ Baked for 7s
+                                                                                                                                         Update available! Run: brew upgrade claude-code
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  user@host:~/Development/example-project git:(main) [Sonnet 5] [4%]
+  ⏸ manual mode on · ← for agents

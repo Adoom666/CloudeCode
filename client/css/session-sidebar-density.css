@@ -1,0 +1,443 @@
+/* =====================================================================
+ * Session sidebar - row DENSITY, the reorder controls, and the two
+ * three-outcome blocks the list can draw instead of rows.
+ * ---------------------------------------------------------------------
+ * Its own file so client/css/session-sidebar.css stays under the 500-line
+ * project convention. Loaded AFTER it, because the density rules override
+ * the base `.session-sidebar-row` padding declared there.
+ *
+ * EVERY COLOUR HERE IS AN EXISTING THEME TOKEN from styles.css's :root.
+ * This round is mechanics, not a visual language: nothing below invents a
+ * palette, and the cozy row is byte-for-byte the row that shipped before
+ * the density control existed.
+ *
+ * WHERE THE HEIGHT DIFFERENCE COMES FROM. Four levers, all declared and
+ * all measurable: row padding, line-height, whether a second line exists
+ * at all, and - added this round - an explicit per-mode `min-height` that
+ * makes the three numbers a stated contract rather than an accident of
+ * whichever controls currently ride the line. See THE DENSITY CONTRACT at
+ * the foot of this file. No inline styles and no JS-computed sizes, so
+ * scripts/verify_sidebar_sessions.py can measure the real boxes in a real
+ * Chromium and the numbers mean something.
+ * ===================================================================== */
+
+/* ---- Row shell -------------------------------------------------------
+ * The row is now a column: a main line, and (detailed only) a meta line.
+ * The base rule in session-sidebar.css still owns background, border and
+ * hover. */
+
+.session-sidebar-row {
+    display: block;
+    padding: 0;
+    /* Every mode below states its own height. See THE DENSITY CONTRACT
+     * at the foot of this file for why that is a min-height and not a
+     * fixed height. */
+    box-sizing: border-box;
+}
+
+.session-sidebar-row-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* THE PILL MUST NOT WRAP INSIDE A 320px BAR. "unknown family" is two
+ * words and the bar is narrow, so the pill wrapped to two lines and made
+ * the cozy row 59.34px tall - measured, in a real browser, against an
+ * expected ~44. The row is not a wrapping layout; the NAME is the element
+ * that gives way, and it already ellipsizes. Capping the pill's width
+ * keeps a long family name from eating the name column outright. */
+.session-sidebar-list .family-pill {
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-sidebar-row:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent-border);
+}
+
+/* THE PINNED RAIL IS GONE, AND `[data-pinned="1"]` NOW PAINTS NOTHING.
+ * Deliberately no rule here, so this comment is the record of why.
+ *
+ * It was `box-shadow: inset 2px 0 0 var(--color-accent)`, defended as
+ * the answer to "why is this one at the top". That question has three
+ * answers already, all of them in the markup and none of them
+ * colour-only: the `pinned` group HEADER the row sits under, with its
+ * own count (session-sidebar-groups.js renders it whenever anything is
+ * pinned, and nothing when nothing is); the row's POSITION in that band;
+ * and the row's own pin BUTTON, which is emitted in every density mode,
+ * carries `aria-pressed="true"`, and is drawn in --color-accent by
+ * `.session-sidebar-row-pin[aria-pressed="true"]` below. The rail was a
+ * fourth, colour-only restatement of a fact three other things say.
+ *
+ * It was also already unreliable, which is the part worth keeping in
+ * mind. session-theme-tint.css matches
+ * `.session-sidebar-row[data-session-theme]` at the SAME specificity as
+ * this selector and loads after it, so it replaced `box-shadow` outright:
+ * any pinned row that also carried a session theme had no pinned rail at
+ * all, and nobody could have told which rows those were by looking. A cue
+ * that silently vanishes for a subset of the rows it describes is not a
+ * cue.
+ *
+ * And it is the shape the request names: "get rid of the thick left bar
+ * like on the homepage and clean it like the homepage looks now". A 2px
+ * inline-start rail is a left-side colour bar whatever it encodes. Do not
+ * reintroduce one here without first deciding which of the four signals
+ * is authoritative. */
+
+/* ---- compact --------------------------------------------------------
+ * The "super thin bars so i can see more" end of the request. The badge
+ * is dropped by the row builder, being the most redundant glyph on the
+ * row.
+ *
+ * THIS COMMENT USED TO DEFEND KEEPING THE FAMILY PILL HERE, on the
+ * reasoning that its unknown state was the one the user most needed to
+ * see. That reasoning was about a density mode quietly deleting
+ * information nobody asked to lose. It does not survive the user asking
+ * for the pill to go ("i dont think we need the pills in the sidebare
+ * take out for now"), so the pill is gone from all three modes and the
+ * home screen keeps its own. */
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row {
+    margin-bottom: 1px;
+    min-height: 24px;
+}
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row-main {
+    padding: 2px 8px;
+    gap: 5px;
+    line-height: 1.15;
+    font-size: 0.85em;
+}
+
+.session-sidebar-panel[data-density="compact"] .family-pill {
+    font-size: 0.6em;
+    padding: 0 3px;
+}
+
+.session-sidebar-panel[data-density="compact"] .mark-unread-toggle {
+    width: 16px;
+    height: 16px;
+}
+
+/* ---- cozy (default) -------------------------------------------------
+ * The row exactly as it shipped: 10px padding on both axes. */
+
+.session-sidebar-panel[data-density="cozy"] .session-sidebar-row {
+    min-height: 46px;
+}
+
+.session-sidebar-panel[data-density="cozy"] .session-sidebar-row-main {
+    padding: 10px 10px;
+    line-height: 1.4;
+}
+
+/* ---- detailed -------------------------------------------------------
+ * "or more detail": the second line carries the tmux/external badge,
+ * moved down off the first line, plus the session's age. The agent
+ * family pill used to sit here and no longer exists on this surface. */
+
+.session-sidebar-panel[data-density="detailed"] .session-sidebar-row {
+    min-height: 66px;
+}
+
+.session-sidebar-panel[data-density="detailed"] .session-sidebar-row-main {
+    padding: 10px 10px 2px 10px;
+    line-height: 1.4;
+}
+
+.session-sidebar-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 9px 34px;
+    min-height: 18px;
+}
+
+.session-sidebar-row-age {
+    font-size: 0.7em;
+    color: var(--color-fg-faint);
+}
+
+/* ---- Drag grip -------------------------------------------------------
+ * Its own control, not the whole row: the row's click already means
+ * "switch to this conversation". touch-action:none is what stops a
+ * touch-drag on the grip from scrolling the list instead of reordering. */
+
+.session-sidebar-row-grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    color: var(--color-fg-subtle);
+    cursor: grab;
+    flex-shrink: 0;
+    touch-action: none;
+}
+
+.session-sidebar-row-grip:hover {
+    color: var(--color-fg-strong);
+}
+
+.session-sidebar-list--dragging .session-sidebar-row-grip {
+    cursor: grabbing;
+}
+
+/* ---- Per-row pin -----------------------------------------------------
+ * Sized and coloured to match .session-sidebar-row-delete and
+ * .mark-unread-toggle, so the row's controls read as one set. */
+
+.session-sidebar-row-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--color-fg-faint);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-row-pin:hover,
+.session-sidebar-row-pin:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-row-pin[aria-pressed="true"] {
+    color: var(--color-accent);
+}
+
+/* ---- Density control (sidebar header) -------------------------------- */
+
+.session-sidebar-density-wrap {
+    /* NOT position:relative. The menu below used to anchor here, which
+     * anchored it to a 28px box instead of the panel - correct only while
+     * this control sat pinned to the header's far right (its old
+     * `margin-left: auto`, now neutralised by session-sidebar-groups.css).
+     * The menu's containing block is .session-sidebar-header instead (see
+     * session-sidebar.css), so this wrap stays a plain flex item. */
+    margin-left: auto;
+    display: inline-flex;
+}
+
+.session-sidebar-density {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.session-sidebar-density:hover,
+.session-sidebar-density:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-density[aria-expanded="true"] {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent-border);
+}
+
+/* The icon's three lines tighten as the mode gets denser, so the control
+ * shows its own state without needing a label beside it. */
+.session-sidebar-density[data-density="compact"] svg {
+    transform: scaleY(0.7);
+}
+
+.session-sidebar-density[data-density="detailed"] svg {
+    transform: scaleY(1.2);
+}
+
+.session-sidebar-density-menu {
+    /* Positioned against .session-sidebar-header (session-sidebar.css),
+     * not against .session-sidebar-density-wrap - the wrap is only the
+     * 28px button, and anchoring there is what let the menu run off the
+     * panel the moment the button wasn't at the header's far edge any
+     * more (right:0 undershot left; a plain left:0 would have just moved
+     * the same bug to the right edge, since 210px does not fit between
+     * this button and either edge of a 320px panel).
+     *
+     * `left` and `right` are both set relative to the HEADER, i.e. to the
+     * panel itself, so the box is geometrically incapable of overflowing
+     * either edge no matter where the triggering button sits or how many
+     * siblings join it in .session-sidebar-tools - this no longer tracks
+     * the button's x position at all. `max-width` keeps it from
+     * stretching edge-to-edge on a normal-width panel; it only shrinks
+     * below that on a panel narrowed by the `85vw` clamp in
+     * --sidebar-dock-w, which is strictly better than overflowing.
+     *
+     * `top: 46px` = the header's own 14px top padding + the button's 28px
+     * height + a 4px gap, i.e. "just under the control row" - the same
+     * vertical spot the old wrap-relative `top: 32px` produced (wrap's
+     * top already equalled the header's 14px padding), just expressed
+     * against the new containing block. */
+    position: absolute;
+    top: 46px;
+    left: 16px;
+    right: 16px;
+    max-width: 210px;
+    z-index: 1120;
+    padding: 4px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 6px 20px var(--color-bg-overlay-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.session-sidebar-density-menu[hidden] {
+    display: none;
+}
+
+.session-sidebar-density-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg);
+    cursor: pointer;
+    text-align: left;
+}
+
+.session-sidebar-density-item:hover,
+.session-sidebar-density-item:focus-visible {
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-sidebar-density-item[aria-checked="true"] {
+    background: var(--color-accent-bg);
+    border-color: var(--color-accent-border);
+}
+
+.session-sidebar-density-item[aria-checked="true"] .session-sidebar-density-item__label {
+    color: var(--color-accent);
+    font-weight: bold;
+}
+
+.session-sidebar-density-item__hint {
+    font-size: 0.7em;
+    color: var(--color-fg-faint);
+}
+
+/* ---- Three-outcome blocks --------------------------------------------
+ * Neither of these is a row, and neither carries an action control. A
+ * control against a session whose existence could not be confirmed either
+ * does nothing or does something to the wrong session. */
+
+.session-sidebar-attention,
+.session-sidebar-notice {
+    margin: 6px 4px 10px 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-warning);
+    border-radius: var(--radius-md);
+    background: var(--color-accent-bg-soft);
+}
+
+.session-sidebar-attention__head {
+    font-size: 0.65em;
+    letter-spacing: 0.6px;
+    color: var(--color-warning);
+    font-weight: bold;
+}
+
+.session-sidebar-attention__title,
+.session-sidebar-notice__title {
+    font-size: 0.8em;
+    color: var(--color-fg-strong);
+    font-weight: bold;
+    margin-top: 2px;
+}
+
+.session-sidebar-attention__detail,
+.session-sidebar-notice__detail {
+    font-size: 0.72em;
+    color: var(--color-fg-muted);
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+}
+
+/* A remembered slot whose session is not listed is not an error and not a
+ * silent drop, so it gets the quietest treatment on offer while still
+ * being on screen. */
+.session-sidebar-note {
+    margin: 6px 4px 2px 4px;
+    padding: 4px 6px;
+    font-size: 0.68em;
+    color: var(--color-fg-subtle);
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+/* Visually hidden, still announced. The reorder feedback has to reach a
+ * screen reader without adding a line of chrome for sighted users. */
+.session-sidebar-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* =====================================================================
+ * THE DENSITY CONTRACT
+ *
+ * compact 24px, cozy 46px, detailed 66px, measured on the ROW, in a real
+ * browser, by scripts/verify_sidebar_sessions.py and by the geometry
+ * suite in tests/.
+ *
+ * WHY THE NUMBERS ARE STATED HERE RATHER THAN LEFT TO ADD UP. Before
+ * this block the three heights were whatever the padding, the
+ * line-height and the tallest control on the line happened to produce.
+ * That is not a contract, it is an outcome: removing the family pill
+ * this round would have silently shortened every mode, and adding any
+ * control taller than the current tallest would silently lengthen them.
+ * A number that moves when an unrelated control is added or removed
+ * cannot be asserted against.
+ *
+ * WHY min-height AND NOT height. A row must still be allowed to grow
+ * when its own content genuinely needs the space - a long name that
+ * wraps, or a browser at a larger base font. Pinning `height` would clip
+ * that instead of showing it, which trades a visible layout stretch for
+ * an invisible truncation. The floor is the contract; the ceiling is the
+ * content's business.
+ *
+ * DETAILED'S SECOND LINE is `.session-sidebar-row-meta`, which carries
+ * the tmux/external badge (moved down off the first line) and the
+ * session's age. It holds its own `min-height: 18px` for the same reason
+ * this block exists: the family pill used to sit there, and the line had
+ * to keep its height when the pill left it.
+ * ===================================================================== */

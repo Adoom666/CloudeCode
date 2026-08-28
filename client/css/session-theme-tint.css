@@ -1,0 +1,76 @@
+/* ===========================================================================
+ * Session-theme tint for session rows, in the sidebar and on the home
+ * screen. `--session-theme-accent` is written inline per row by
+ * client/js/session-theme-tint.js, which is where the reasoning lives.
+ *
+ * THE TINT IS NO LONGER ON THE ROW'S BOX AT ALL. It used to be an inset
+ * 1px ring plus (sidebar only) a low-alpha background wash. Both are
+ * gone, and the reason is that the row's box already belongs to a
+ * different fact.
+ *
+ * TWO FACTS, ONE VISUAL LANGUAGE. `.session-sidebar-row[data-active="1"]`
+ * says "this is the session you are in" with an accent BACKGROUND, an
+ * accent 1px BORDER, and a bold accent NAME. The tint said "this session
+ * carries its own theme" with an accent ring and an accent wash. When the
+ * two accents are the same colour - a session pinned to the host theme,
+ * which is the ordinary case - a themed row that was NOT selected drew an
+ * accent edge and read as the selected one. Measured live: the selection
+ * border is rgba(215, 119, 87, 0.3) and a themed row's ring was
+ * rgba(215, 119, 87, 0.45). That same declaration is what produced the
+ * green outline reported as "the wrong color", and a 3px variant of it
+ * was twice mistaken for the active state.
+ *
+ * So the row's border and background now mean exactly one thing between
+ * them - selection - and the theme moved onto a carrier selection does
+ * not use: its own swatch. scripts/verify_session_theme_carrier.py
+ * measures that in BOTH directions in real pixels.
+ *
+ * WHY A DEDICATED ELEMENT RATHER THAN AN EXISTING ONE. Everything else on
+ * the row is already spoken for. The status dot carries seven activity
+ * states. The pin button carries pinned. The name's colour and weight
+ * carry selection. The badge carries tmux/external and is dropped
+ * entirely at compact density. The drag grip is the one glyph with no
+ * colour meaning, but it is a functional affordance with its own hover
+ * state, and a session accent close to the row background would render an
+ * invisible drag handle - degrading a control to label something else.
+ *
+ * WHY IT IS NOT CLUTTER. It is emitted ONLY on rows that have a theme, so
+ * a list of unthemed sessions is byte-for-byte the list that shipped. It
+ * costs 9px on a row that already carries five controls. And it is the
+ * first version of this cue that is not colour-only: the element carries
+ * an accessible name ("session theme: dracula"), which no border ever
+ * could.
+ *
+ * ONE RULE, BOTH SURFACES. The sidebar and the home screen render the
+ * same element, so there is nothing to keep in step and no per-surface
+ * override. This file no longer competes with any row background, so its
+ * load order is no longer load-bearing - but it is still loaded last, and
+ * a `:focus-visible` box-shadow it used to override at equal specificity
+ * now survives, because nothing here declares box-shadow at all.
+ * =========================================================================== */
+
+.session-theme-swatch {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    background-color: var(--session-theme-accent);
+    /* THE HAIRLINE IS NOT TRIM, IT IS WHAT MAKES THE SWATCH LOCATABLE.
+     * The fill is an arbitrary theme's accent painted on an arbitrary
+     * other theme's row, so there is no pairing in which the fill alone
+     * is guaranteed to have contrast against the row behind it - a dark
+     * accent on a dark row is a swatch nobody can see. --color-fg-subtle
+     * is a FOREGROUND token, so every theme sets it to something legible
+     * against its own background, which is exactly the guarantee needed.
+     * tests/test_session_theme_tint.node.mjs sweeps all 529 (host theme,
+     * session theme) pairs and proves some of them fall below the 3:1
+     * non-text floor, so this is a constraint and not decoration. */
+    border: 1px solid var(--color-fg-subtle);
+    /* The theme's own radius token, deliberately. terminal, gameboy and
+     * legacy_apple zero it and the swatch becomes a square there, which
+     * is correct for those palettes and still unmistakably a swatch. A
+     * status dot cannot make that trade because a square dot stops being
+     * a dot; a colour chip is a chip either way. */
+    border-radius: var(--radius-sm);
+}

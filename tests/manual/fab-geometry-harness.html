@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fab geometry harness</title>
+<!--
+  MEASURE THE BOTTOM ROW, DO NOT EYEBALL IT.
+
+  Loads the real stylesheets in the real index.html order and mounts the
+  four floating controls with the classes they really carry, so the
+  cascade under measurement is the one the app ships - including the bare
+  `button { width: 36px; height: 36px; }` rule in styles.css that has
+  already caught one control out.
+
+  The d-pad and the slash-commands button are display:none until their
+  modules show them (dpad.js:270, slash-commands.js:186); the inline
+  display:flex below is exactly what those modules set.
+
+  Open over http://127.0.0.1 from the repo root and read #out, or read
+  window.__fabGeometry from the console.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/terminal-tools.css" />
+<link rel="stylesheet" href="../../client/css/ios-chrome.css" />
+<style>
+  #out { position: fixed; top: 8px; left: 8px; z-index: 99999;
+         font: 12px/1.5 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+</style>
+</head>
+<body>
+<div id="terminal-screen" class="screen active"></div>
+
+<button type="button" id="slash-commands-btn" class="slash-commands-btn"
+        style="display:flex">/</button>
+
+<button type="button" id="sessionEditorBtn" class="fab-menu-btn session-editor-fab"
+        aria-label="session editor"></button>
+
+<button type="button" class="dpad-float-button" style="display:flex"></button>
+
+<button type="button" id="terminalToolsBtn" class="fab-menu-btn terminal-tools-fab"
+        aria-label="terminal tools"></button>
+
+<!-- DESKTOP IN THE SAME RUN. An iframe establishes its own viewport for
+     media queries, so a 1024px-wide one evaluates the >=769px rules -
+     the d-pad hidden, the session editor reclaiming slot 1 - inside a
+     390pt phone. Same engine, same stylesheets, one measurement pass. -->
+<iframe id="desktop" src="?inner=1" width="1024" height="700"
+        style="position:absolute;left:-9999px;top:0;border:0"></iframe>
+
+<pre id="out"></pre>
+<script>
+/**
+ * This document's own geometry report.
+ *
+ * @param {Window} w - the window to measure in.
+ * @returns {{viewport: object, visible: string[], boxes: object[]}}
+ */
+function report(w) {
+    var d = w.document;
+    var vw = w.innerWidth, vh = w.innerHeight;
+    var out = { viewport: { w: vw, h: vh }, visible: [], boxes: [] };
+    [['slash commands', '.slash-commands-btn'],
+     ['session editor', '.session-editor-fab'],
+     ['d-pad', '.dpad-float-button'],
+     ['terminal tools', '.terminal-tools-fab']].forEach(function (t) {
+        var el = d.querySelector(t[1]);
+        var r = el.getBoundingClientRect();
+        var shown = w.getComputedStyle(el).display !== 'none';
+        if (shown) out.visible.push(t[0]);
+        out.boxes.push({
+            name: t[0], shown: shown,
+            left: r.left, right: r.right, w: r.width, h: r.height,
+            fromRight: vw - r.right, fromBottom: vh - r.bottom,
+            cx: r.left + r.width / 2, cy: r.top + r.height / 2
+        });
+    });
+    return out;
+}
+
+window.__fabReport = function () { return report(window); };
+
+window.__fabGeometry = function () {
+    var frame = document.getElementById('desktop');
+    return {
+        phone: report(window),
+        desktop: frame && frame.contentWindow.__fabReport
+            ? frame.contentWindow.__fabReport()
+            : 'iframe not ready'
+    };
+};
+
+if (location.search.indexOf('inner=1') === -1) {
+    var render = function () {
+        document.getElementById('out').textContent =
+            JSON.stringify(window.__fabGeometry(), null, 1);
+    };
+    document.getElementById('desktop').addEventListener('load', render);
+    render();
+} else {
+    // Inside the iframe: no nested frame, just this document's numbers.
+    document.getElementById('desktop').remove();
+    document.getElementById('out').textContent =
+        JSON.stringify(report(window), null, 1);
+}
+</script>
+</body>
+</html>

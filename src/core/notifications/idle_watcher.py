@@ -1,4 +1,4 @@
-"""IdleWatcher — FSM that turns raw PTY output into notification events.
+"""IdleWatcher - FSM that turns raw PTY output into notification events.
 
 Design contract (Plan v3.1 Item 7):
 
@@ -12,7 +12,7 @@ Design contract (Plan v3.1 Item 7):
   ends on a Claude Code prompt frame (BOTH ``╭─╮`` top and ``╰─╯`` bottom)
   AND the session has been silent for at least ``threshold_s`` seconds.
 - A background task is the only way to fire TASK_COMPLETE because nothing
-  arrives on ``handle_chunk`` when the session is genuinely idle — the
+  arrives on ``handle_chunk`` when the session is genuinely idle - the
   whole point of idle detection.
 - PERMISSION_PROMPT is fired synchronously from ``handle_chunk`` because
   it's a signal IN the stream: by definition the user sees it on output,
@@ -27,10 +27,10 @@ False-positive hygiene (killed in the adversarial corpus):
   the permission regex to line-start + require a ``[1-9]. Yes|No|...``
   menu item.
 - ``> `` is the bash PS1 prompt on many machines AND a markdown
-  blockquote marker. TASK_COMPLETE never fires on its own — needs the
+  blockquote marker. TASK_COMPLETE never fires on its own - needs the
   full box frame.
 - ``^C`` during a Ctrl-C echo shouldn't TRIP a quiet-threshold fire 30s
-  later because the tail still looks "prompt-like" — the INTERRUPTED
+  later because the tail still looks "prompt-like" - the INTERRUPTED
   state suspends idle detection until we see non-interrupt output.
 
 Concurrency:
@@ -43,7 +43,7 @@ Concurrency:
 
 Clock:
 
-- ``time.monotonic()`` EVERYWHERE. Never ``time.time()`` — we don't want
+- ``time.monotonic()`` EVERYWHERE. Never ``time.time()`` - we don't want
   an NTP step to fire a spurious TASK_COMPLETE.
 
 Replay safety:
@@ -84,10 +84,10 @@ logger = structlog.get_logger()
 PROMPT_TOP_RX = re.compile(r"^\s*╭─+╮\s*$", re.MULTILINE)
 
 #: Bottom border (``╰─────────╯``). Same anchoring. We require BOTH top and
-#: bottom to consider the tail "on a prompt" — kills ASCII-art false positives.
+#: bottom to consider the tail "on a prompt" - kills ASCII-art false positives.
 PROMPT_BOTTOM_RX = re.compile(r"^\s*╰─+╯\s*$", re.MULTILINE)
 
-#: Numbered permission menu item — ``❯ 1. Yes`` / ``2. No`` / ``Allow`` /
+#: Numbered permission menu item - ``❯ 1. Yes`` / ``2. No`` / ``Allow`` /
 #: ``Approve`` / ``Deny``. Anchored to line-start so grep output containing
 #: the word "Allow" inline does NOT match.
 PERMISSION_RX = re.compile(
@@ -129,10 +129,10 @@ _POLL_INTERVAL_S = 1.0
 class IdleState(str, Enum):
     """FSM states.
 
-    - ``THINKING``: default — output is streaming or just stopped, no
+    - ``THINKING``: default - output is streaming or just stopped, no
       actionable signal yet. Idle detection is live.
     - ``TOOL_RUNNING``: Claude Code is executing a tool (bash, etc.) and
-      its output will have gaps. Suspend idle detection here — silence
+      its output will have gaps. Suspend idle detection here - silence
       is NOT idleness.
     - ``WAITING_PERMISSION``: prompt menu visible. PERMISSION_PROMPT
       event already emitted on entry; we stay here until new output
@@ -141,7 +141,7 @@ class IdleState(str, Enum):
       here until new output moves us back to THINKING. This is the
       dedup guard: a single quiet window produces exactly one
       TASK_COMPLETE event, not a stream of them.
-    - ``INTERRUPTED``: Ctrl-C observed. Same dedup intent as IDLE —
+    - ``INTERRUPTED``: Ctrl-C observed. Same dedup intent as IDLE -
       don't fire TASK_COMPLETE for interrupt silence.
     """
 
@@ -252,7 +252,7 @@ class IdleWatcher:
             return
 
         async with self._lock:
-            # Always maintain the tail buffer, even during replay — when
+            # Always maintain the tail buffer, even during replay - when
             # replay ends and the live stream resumes, the tail must
             # already reflect the accurate scroll state.
             self.tail_buffer.extend(data)
@@ -284,7 +284,7 @@ class IdleWatcher:
             prev_state = self.state
 
             # Interrupt classification works on the INCOMING chunk only, not
-            # the cumulative tail. ^C is a momentary signal — it should fire
+            # the cumulative tail. ^C is a momentary signal - it should fire
             # INTERRUPTED only when a fresh Ctrl-C arrives, NOT every time
             # we process a later chunk while the stale ^C still lives in
             # the ring buffer. The spec is: "INTERRUPTED persists until
@@ -296,7 +296,7 @@ class IdleWatcher:
             chunk_has_interrupt = INTERRUPT_RX.search(chunk_text) is not None
 
             # Order matters. Interrupt beats permission beats tool-running
-            # beats default — most-specific signal wins.
+            # beats default - most-specific signal wins.
             if chunk_has_interrupt:
                 self.state = IdleState.INTERRUPTED
             elif PERMISSION_RX.search(text_view):
@@ -449,7 +449,7 @@ class IdleWatcher:
     def _last_nonempty_line(text: str) -> str:
         """Return the last non-empty line of ``text`` (rstripped).
 
-        Used for the event's ``snippet`` field — internal logging only,
+        Used for the event's ``snippet`` field - internal logging only,
         not sent over the wire to ntfy.
         """
         for line in reversed(text.splitlines()):

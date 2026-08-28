@@ -5,7 +5,7 @@
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#0a0808",
     "--color-bg-page": "#050303",
     "--color-bg-elevated": "#16110f",
@@ -17,12 +17,12 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.35)",
     "--color-fg": "#E8E2D6",
     "--color-fg-muted": "#9c948a",
-    "--color-fg-subtle": "#5e5650",
-    "--color-fg-faint": "#6a625c",
+    "--color-fg-subtle": "#877b72",
+    "--color-fg-faint": "#867c74",
     "--color-border": "#2a1a1a",
     "--color-border-subtle": "#1a0e0e",
     "--color-accent": "#C4202A",
-    "--color-accent-strong": "#A01818",
+    "--color-accent-strong": "#e34242",
     "--color-accent-bg-soft": "rgba(196, 32, 42, 0.08)",
     "--color-accent-bg-faint": "rgba(196, 32, 42, 0.10)",
     "--color-accent-bg": "rgba(196, 32, 42, 0.15)",
@@ -35,7 +35,7 @@
     "--color-accent-glow": "rgba(196, 32, 42, 0.40)",
     "--color-accent-glow-strong": "rgba(196, 32, 42, 0.50)",
     "--color-accent-shadow-soft": "rgba(196, 32, 42, 0.30)",
-    "--color-on-accent": "#0a0808",
+    "--color-on-accent": "#e7e2e2",
     "--color-success": "#7a9966",
     "--color-warning": "#C49830",
     "--color-danger": "#FF2A2A",
@@ -96,5 +96,12 @@
     "brightMagenta": "#9a4858",
     "brightCyan": "#80a0a6",
     "brightWhite": "#E8E2D6"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/post-apocalyptic-wastelands.m4a",
+    "srcFallback": "/static/assets/audio/post-apocalyptic-wastelands.ogg",
+    "volume": 0.5,
+    "fadeMs": 2000
   }
 }

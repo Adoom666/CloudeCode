@@ -5,7 +5,7 @@
   "author": "NYX-9",
   "version": "1.0.0",
   "cssVars": {
-    "--font-mono": "'SF Mono', monospace",
+    "--font-mono": "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', 'Roboto Mono', 'Courier New', monospace",
     "--color-bg": "#000000",
     "--color-bg-page": "#000000",
     "--color-bg-elevated": "#0a0a10",
@@ -17,7 +17,7 @@
     "--color-bg-overlay-faint": "rgba(0, 0, 0, 0.35)",
     "--color-fg": "#F2EFF7",
     "--color-fg-muted": "#a0a0b0",
-    "--color-fg-subtle": "#5a5a6a",
+    "--color-fg-subtle": "#78788c",
     "--color-fg-faint": "#787888",
     "--color-border": "#1a1a22",
     "--color-border-subtle": "#0e0e14",
@@ -35,7 +35,7 @@
     "--color-accent-glow": "rgba(157, 78, 221, 0.40)",
     "--color-accent-glow-strong": "rgba(181, 123, 255, 0.50)",
     "--color-accent-shadow-soft": "rgba(157, 78, 221, 0.30)",
-    "--color-on-accent": "#0a0a10",
+    "--color-on-accent": "#000001",
     "--color-success": "#7eb084",
     "--color-warning": "#c4a050",
     "--color-danger": "#d44848",
@@ -96,5 +96,12 @@
     "brightMagenta": "#B57BFF",
     "brightCyan": "#a8e0ea",
     "brightWhite": "#ffffff"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/cyber-city.m4a",
+    "srcFallback": "/static/assets/audio/cyber-city.ogg",
+    "volume": 0.45,
+    "fadeMs": 2000
   }
 }

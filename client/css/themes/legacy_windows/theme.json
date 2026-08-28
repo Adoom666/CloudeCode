@@ -1,25 +1,35 @@
 {
   "id": "legacy_windows",
   "name": "Legacy Windows",
-  "description": "Win 95/98 — the iconic gray, navy title bar, 3D bevels, IBM CGA console.",
+  "description": "Win 95/98 - the iconic gray, navy title bar, 3D bevels, IBM CGA console.",
   "author": "Cloude Code",
   "version": "1.0.0",
   "cssVars": {
     "--color-bg": "#C0C0C0",
     "--color-bg-elevated": "#D4D0C8",
+    "--color-bg-card": "#D4D0C8",
+    "--color-bg-hover": "#C8C4BC",
     "--color-bg-overlay": "rgba(0, 0, 128, 0.05)",
     "--color-header-bg": "#000080",
     "--color-fg": "#000000",
     "--color-fg-muted": "#404040",
-    "--color-fg-subtle": "#808080",
+    "--color-fg-subtle": "#4e4e4e",
+    "--color-fg-faint": "#595959",
     "--color-border": "#808080",
     "--color-border-subtle": "#a8a8a8",
     "--color-accent": "#000080",
-    "--color-accent-strong": "#1084D0",
-    "--color-success": "#008000",
-    "--color-warning": "#808000",
+    "--color-accent-strong": "#0b5d92",
+    "--color-on-accent": "#FFFFFF",
+    "--color-success": "#005c00",
+    "--color-warning": "#515100",
     "--color-danger": "#800000",
-    "--color-info": "#000080"
+    "--color-info": "#000080",
+    "--color-badge-owned-bg": "#C8D8C8",
+    "--color-badge-owned-fg": "#004000",
+    "--color-badge-tmux-bg": "#C8C8D8",
+    "--color-badge-tmux-fg": "#101060",
+    "--color-badge-external-bg": "#D8C8A8",
+    "--color-badge-external-fg": "#5C3E00"
   },
   "xterm": {
     "background": "#000000",
@@ -41,5 +51,12 @@
     "brightMagenta": "#FF00FF",
     "brightCyan": "#00FFFF",
     "brightWhite": "#FFFFFF"
+  },
+  "effects": "effects.js",
+  "audio": {
+    "src": "/static/assets/audio/out-there.m4a",
+    "srcFallback": "/static/assets/audio/out-there.ogg",
+    "volume": 0.5,
+    "fadeMs": 1500
   }
 }

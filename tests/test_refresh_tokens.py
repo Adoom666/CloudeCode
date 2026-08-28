@@ -55,7 +55,6 @@ def _make_fake_auth_config():
         access_token_ttl_seconds=900,
         refresh_token_ttl_seconds=604800,
         refresh_grace_seconds=10,
-        projects=[],
         auth_rate_limits=rate_limits,
     )
 

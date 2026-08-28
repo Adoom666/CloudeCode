@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 """Setup script for Cloude Code authentication.
 
-Generates TOTP secret and JWT secret, creates config file.
+Creates the config file and ensures TOTP + JWT secrets exist.
+
+This script is a CONVERGENCE operation, not a creation operation. Running
+it a second time keeps every secret that is already set and mints only what
+is genuinely missing. It used to overwrite both unconditionally, which
+silently orphaned the user's paired authenticator and locked him out of his
+own install with no recovery path.
 
 Subcommands:
-- (no args): full interactive setup.
+- (no args): full interactive setup. Existing secrets are preserved.
 - ``--rotate-topic``: regenerate the ntfy push topic, write it to
   config.json, print the new ntfy URL, and exit. Used after a
   suspected topic leak or as a periodic hygiene rotation.
+- ``--rotate-totp``: DESTRUCTIVE. Replace TOTP_SECRET, clear the
+  ``.totp_paired`` marker, and print a fresh QR to re-pair with.
+- ``--rotate-jwt``: DESTRUCTIVE. Replace JWT_SECRET, signing out every
+  logged-in session.
+Both rotation flags require a typed confirmation unless ``--yes`` is given.
 """
 import argparse
 import json
@@ -75,8 +86,186 @@ def generate_jwt_secret():
     return secrets.token_urlsafe(32)
 
 
-def update_env_file(env_path: Path, totp_secret: str, jwt_secret: str):
-    """Update .env file with generated secrets."""
+#: The two .env keys that hold irreplaceable credential material. Losing
+#: TOTP_SECRET orphans the user's authenticator; losing JWT_SECRET
+#: invalidates every issued session token at once.
+AUTH_SECRET_KEYS = ("TOTP_SECRET", "JWT_SECRET")
+
+#: Marker written by src/api/auth.py once an authenticator has successfully
+#: verified. Its presence makes GET /auth/qr return 403, so a sentinel left
+#: standing over a REPLACED secret is an unrecoverable lockout: the old
+#: authenticator no longer matches and the QR needed to pair a new one is
+#: refused. Kept as a constant so the two writers agree on the name.
+PAIRED_SENTINEL_NAME = ".totp_paired"
+
+
+def read_env_value(env_path: Path, key: str):
+    """Read one KEY=value out of a .env file without interpreting it.
+
+    Args:
+        env_path: Path to the .env file. May not exist.
+        key: The variable name to look for.
+
+    Returns:
+        str | None: The stripped value when the key is present and
+        non-blank, otherwise None. A present-but-empty line reads as None
+        because an unset secret is not a secret worth preserving.
+
+    Example:
+        >>> read_env_value(Path(".env"), "TOTP_SECRET") is None
+        True
+    """
+    if not env_path.exists():
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith(f"{key}="):
+            value = line.split("=", 1)[1].strip()
+            return value or None
+    return None
+
+
+def capture_auth_secrets(env_path: Path) -> dict:
+    """Snapshot the existing auth secrets BEFORE anything rewrites .env.
+
+    ``setup_env_file`` rebuilds .env wholesale from .env.example, which
+    blanks both secret lines. Any preservation guard that reads the file
+    after that point sees an empty value and mints a replacement, so the
+    snapshot has to be taken first.
+
+    Args:
+        env_path: Path to the .env file. May not exist.
+
+    Returns:
+        dict: Mapping of each key in ``AUTH_SECRET_KEYS`` to its existing
+        value or None. Values are never logged or printed.
+    """
+    return {key: read_env_value(env_path, key) for key in AUTH_SECRET_KEYS}
+
+
+def paired_sentinel_path(env_path: Path) -> Path:
+    """Resolve where src/api/auth.py writes its TOTP-pairing sentinel.
+
+    The server anchors the sentinel to the parent directory of
+    ``AUTH_CONFIG_FILE``, so this reads the same setting rather than
+    assuming the project root (hazard: an assumed value is the same defect
+    as an unread setting).
+
+    Args:
+        env_path: Path to the .env file whose AUTH_CONFIG_FILE is read.
+
+    Returns:
+        Path: The sentinel path. Falls back to ``config.json`` beside the
+        .env when AUTH_CONFIG_FILE is unset.
+    """
+    configured = read_env_value(env_path, "AUTH_CONFIG_FILE") or "./config.json"
+    config_path = Path(configured).expanduser()
+    if not config_path.is_absolute():
+        config_path = (env_path.parent / config_path).resolve()
+    return config_path.parent / PAIRED_SENTINEL_NAME
+
+
+def apply_auth_secrets(
+    env_path: Path,
+    captured: dict,
+    *,
+    rotate_totp: bool = False,
+    rotate_jwt: bool = False,
+) -> dict:
+    """Converge .env onto a correct set of auth secrets.
+
+    Create-if-absent is the default. An existing secret is kept unless the
+    caller explicitly asked to rotate it, because a setup script is a
+    convergence operation, not a creation operation.
+
+    When the TOTP secret is replaced (minted fresh or rotated) the
+    ``.totp_paired`` sentinel is removed, because it asserts that an
+    authenticator is paired to a secret that no longer exists. Leaving it
+    would make /auth/qr refuse to serve the QR needed to recover.
+
+    Args:
+        env_path: Path to the .env file to write.
+        captured: The snapshot from ``capture_auth_secrets``, taken before
+            any template rewrite.
+        rotate_totp: Replace an existing TOTP secret. Invalidates the
+            currently paired authenticator.
+        rotate_jwt: Replace an existing JWT secret. Signs out every session.
+
+    Returns:
+        dict: ``totp_action`` / ``jwt_action`` each one of "kept",
+        "created" or "rotated"; ``totp_secret`` the effective TOTP secret;
+        ``show_qr`` True whenever the TOTP secret changed; ``sentinel_cleared``
+        True when a stale pairing marker was removed.
+    """
+    existing_totp = captured.get("TOTP_SECRET")
+    existing_jwt = captured.get("JWT_SECRET")
+
+    if existing_totp and not rotate_totp:
+        totp_secret, totp_action = existing_totp, "kept"
+    else:
+        totp_secret = generate_totp_secret()
+        totp_action = "rotated" if existing_totp else "created"
+
+    if existing_jwt and not rotate_jwt:
+        jwt_secret, jwt_action = existing_jwt, "kept"
+    else:
+        jwt_secret = generate_jwt_secret()
+        jwt_action = "rotated" if existing_jwt else "created"
+
+    update_env_file(
+        env_path,
+        totp_secret,
+        jwt_secret,
+        overwrite_totp=True,
+        overwrite_jwt=True,
+    )
+
+    sentinel_cleared = False
+    if totp_action != "kept":
+        sentinel = paired_sentinel_path(env_path)
+        try:
+            if sentinel.exists():
+                sentinel.unlink()
+                sentinel_cleared = True
+        except OSError as e:
+            # Not fatal, but the user must know: a surviving sentinel over a
+            # new secret is exactly the lockout this function exists to end.
+            print(f"WARNING: could not clear {sentinel}: {e}")
+            print("         Delete it by hand or /auth/qr will refuse to re-pair.")
+
+    return {
+        "totp_action": totp_action,
+        "jwt_action": jwt_action,
+        "totp_secret": totp_secret,
+        "show_qr": totp_action != "kept",
+        "sentinel_cleared": sentinel_cleared,
+    }
+
+
+def update_env_file(
+    env_path: Path,
+    totp_secret: str,
+    jwt_secret: str,
+    *,
+    overwrite_totp: bool = False,
+    overwrite_jwt: bool = False,
+):
+    """Write auth secrets into .env, preserving existing ones by default.
+
+    Args:
+        env_path: Path to the .env file. Created from .env.example if absent.
+        totp_secret: The TOTP secret to write when none is already set.
+        jwt_secret: The JWT secret to write when none is already set.
+        overwrite_totp: Replace a non-empty existing TOTP_SECRET. Only the
+            deliberate rotation path passes True.
+        overwrite_jwt: Replace a non-empty existing JWT_SECRET.
+
+    Returns:
+        None. The file is written with mode 0600.
+    """
     # Read existing .env or create from .env.example
     if env_path.exists():
         with open(env_path) as f:
@@ -96,11 +285,18 @@ def update_env_file(env_path: Path, totp_secret: str, jwt_secret: str):
 
     for i, line in enumerate(lines):
         if line.startswith("TOTP_SECRET="):
-            lines[i] = f"TOTP_SECRET={totp_secret}\n"
             totp_found = True
+            # An existing secret is paired to a real authenticator. Replacing
+            # it without being asked is a silent, unrecoverable lockout.
+            existing = line.split("=", 1)[1].strip()
+            if not existing or overwrite_totp:
+                lines[i] = f"TOTP_SECRET={totp_secret}\n"
         elif line.startswith("JWT_SECRET="):
-            lines[i] = f"JWT_SECRET={jwt_secret}\n"
             jwt_found = True
+            # Replacing this invalidates every issued session token at once.
+            existing = line.split("=", 1)[1].strip()
+            if not existing or overwrite_jwt:
+                lines[i] = f"JWT_SECRET={jwt_secret}\n"
 
     # Add if not found
     if not totp_found:
@@ -239,8 +435,13 @@ def setup_env_file(env_path):
         with open(env_template_path) as f:
             content = f.read()
     else:
-        # Minimal template if .env.example doesn't exist.
+        # Minimal template if .env.example doesn't exist (rare - .env.example
+        # is a tracked file, so this branch only fires if it was deleted).
         # Plan v3.2: no Cloudflare/tunnel keys — the tunnel system is gone.
+        # HOST/PORT literals below must match src/config.py's Settings
+        # field defaults (Settings.host = "0.0.0.0", Settings.port = 8000) -
+        # that class is the single configuration root; this is a fallback
+        # copy of its documented defaults, not an independent decision.
         content = (
             "# Server Configuration\n"
             "HOST=0.0.0.0\n"
@@ -524,149 +725,81 @@ def rotate_topic_command() -> int:
     return 0
 
 
-def main():
-    """Main setup function."""
-    # Handle --rotate-topic before requiring full venv / cloudflared.
-    parser = argparse.ArgumentParser(
-        description="Cloude Code authentication / notifications setup",
-        add_help=True,
-    )
-    parser.add_argument(
-        "--rotate-topic",
-        action="store_true",
-        help="Regenerate ntfy push topic, write to config.json, exit.",
-    )
-    args = parser.parse_args()
+def confirm_rotation(
+    *, rotate_totp: bool, rotate_jwt: bool, assume_yes: bool = False
+) -> bool:
+    """Show the blast radius of a rotation and demand a typed confirmation.
 
-    if args.rotate_topic:
-        sys.exit(rotate_topic_command())
+    Args:
+        rotate_totp: Whether TOTP_SECRET is about to be replaced.
+        rotate_jwt: Whether JWT_SECRET is about to be replaced.
+        assume_yes: Skip the prompt (for scripted use).
 
-    # Ensure venv has required dependencies
-    check_and_setup_venv()
-
-    print("=" * 70)
-    print("Cloude Code Authentication Setup")
-    print("=" * 70)
-    print()
-
-    # Show Python version
-    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    print(f"🐍 Python {python_version}")
-    print()
-
-    # Project root
-    project_root = Path(__file__).parent
-    env_path = project_root / ".env"
-
-    # Interactive .env setup (LAN-only — no Cloudflare prompts)
-    claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
-
-    # Create directories
-    import os
-    print("Creating directories...")
-    log_dir_expanded = os.path.expanduser(os.path.expandvars(log_dir))
-    working_dir_expanded = os.path.expanduser(os.path.expandvars(working_dir))
-
-    try:
-        Path(log_dir_expanded).mkdir(parents=True, exist_ok=True)
-        print(f"✅ Created log directory: {log_dir_expanded}")
-    except Exception as e:
-        print(f"⚠️  Could not create log directory: {e}")
-
-    try:
-        Path(working_dir_expanded).mkdir(parents=True, exist_ok=True)
-        print(f"✅ Created projects directory: {working_dir_expanded}")
-    except Exception as e:
-        print(f"⚠️  Could not create projects directory: {e}")
-
-    print()
-
-    # Generate new secrets
-    totp_secret = generate_totp_secret()
-    jwt_secret = generate_jwt_secret()
-    print("🔑 Generated new authentication secrets\n")
-
-    # Update .env file with secrets
-    print(f"Adding authentication secrets to .env...")
-    update_env_file(env_path, totp_secret, jwt_secret)
-    print(f"✅ Secrets added to .env\n")
-
-    # Config file in project directory
-    config_path = project_root / "config.json"
-
-    # Check if config already exists
-    if config_path.exists():
-        print(f"📄 Config file exists at: {config_path}")
-
-        # Remove secrets from existing config if they're there
-        try:
-            with open(config_path) as f:
-                data = json.load(f)
-
-            if "totp_secret" in data or "jwt_secret" in data:
-                data.pop("totp_secret", None)
-                data.pop("jwt_secret", None)
-
-                with open(config_path, 'w') as f:
-                    json.dump(data, f, indent=2)
-
-                print("✅ Removed secrets from config.json (now in .env)\n")
-            else:
-                print("✅ Config file already clean (no secrets)\n")
-
-        except Exception as e:
-            print(f"⚠️  Error cleaning config: {e}\n")
-
-    else:
-        # Create new config from example
-        example_path = project_root / "config.example.json"
-        with open(example_path) as f:
-            config = json.load(f)
-
-        # Remove secrets from config (they're in .env now)
-        config.pop("totp_secret", None)
-        config.pop("jwt_secret", None)
-
-        # Write config WITHOUT secrets
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
-
-        print(f"✅ Configuration file created at: {config_path}\n")
-
-    # Item 6: optional ntfy push notification setup. Runs AFTER the
-    # config file exists (we mutate it in place).
-    setup_notifications_block(config_path)
-
-    print("=" * 70)
-    print("TOTP Setup")
-    print("=" * 70)
-    print()
-
-    # Generate and display QR code
-    uri, qr_path = generate_qr_code(totp_secret)
-
-    # Open QR code with Preview
-    print()
-    print(f"📱 Opening QR code...")
-    try:
-        subprocess.run(['open', str(qr_path)], check=False)
-        print(f"✅ QR code opened in Preview: {qr_path}")
-    except Exception as e:
-        print(f"⚠️  Could not open QR code automatically: {e}")
-        print(f"   Please open manually: {qr_path}")
-
+    Returns:
+        bool: True when the rotation may proceed.
+    """
     print()
     print("=" * 70)
-    print(f"📱 SCAN THE QR CODE that just opened in Preview!")
+    print("DESTRUCTIVE ROTATION REQUESTED")
     print("=" * 70)
     print()
-    print("Use Google Authenticator, Authy, or any TOTP app")
+    if rotate_totp:
+        print("  --rotate-totp replaces your TOTP secret.")
+        print("    Your authenticator app STOPS WORKING the moment this runs.")
+        print("    You must scan the new QR code printed below to log in again.")
+        print()
+    if rotate_jwt:
+        print("  --rotate-jwt replaces your JWT signing secret.")
+        print("    EVERY logged-in session and device is signed out immediately.")
+        print()
+    if assume_yes:
+        print("Proceeding (--yes given).")
+        print()
+        return True
+    answer = input("Type 'rotate' to confirm, anything else to cancel: ").strip()
     print()
-    print(f"Or manually enter this secret: {totp_secret}")
+    return answer == "rotate"
+
+
+def report_secret_outcome(outcome: dict) -> None:
+    """Print what happened to each secret, without printing any value.
+
+    Args:
+        outcome: The dict returned by ``apply_auth_secrets``.
+
+    Returns:
+        None.
+    """
+    words = {
+        "kept": "kept the existing value (unchanged)",
+        "created": "generated (none was set)",
+        "rotated": "REPLACED with a new value",
+    }
+    print(f"  TOTP_SECRET: {words[outcome['totp_action']]}")
+    print(f"  JWT_SECRET:  {words[outcome['jwt_action']]}")
+    if outcome["jwt_action"] == "rotated":
+        print("  -> every logged-in session has been signed out.")
+    if outcome["sentinel_cleared"]:
+        print(f"  -> cleared the stale {PAIRED_SENTINEL_NAME} pairing marker,")
+        print("     so the app will serve a fresh QR for re-pairing.")
     print()
 
-    input("Press Enter after scanning the QR code...")
 
+def finish_setup(project_root: Path, env_path: Path, config_path: Path) -> None:
+    """Print the closing summary, start the server, and restart the app.
+
+    Shared by both exits from main(): the run that paired a new secret
+    and the run that kept an existing one. Keeping them on one path is
+    what stops a preserving run from skipping the server start.
+
+    Args:
+        project_root: Directory holding venv/ and src/.
+        env_path: Path to the written .env, for the summary line.
+        config_path: Path to config.json, for the summary line.
+
+    Returns:
+        None.
+    """
     print()
     print("=" * 70)
     print("Setup Complete!")
@@ -723,6 +856,206 @@ def main():
     # Close terminal window
     subprocess.run(['osascript', '-e', 'tell application "Terminal" to close first window'],
                   check=False)
+
+
+
+def main():
+    """Main setup function."""
+    # Handle --rotate-topic before requiring full venv / cloudflared.
+    parser = argparse.ArgumentParser(
+        description="Cloude Code authentication / notifications setup",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--rotate-topic",
+        action="store_true",
+        help="Regenerate ntfy push topic, write to config.json, exit.",
+    )
+    parser.add_argument(
+        "--rotate-totp",
+        action="store_true",
+        help=(
+            "DESTRUCTIVE: replace TOTP_SECRET. This UNPAIRS your "
+            "authenticator app; you must scan the new QR to get back in."
+        ),
+    )
+    parser.add_argument(
+        "--rotate-jwt",
+        action="store_true",
+        help=(
+            "DESTRUCTIVE: replace JWT_SECRET. This SIGNS OUT every "
+            "logged-in session and device immediately."
+        ),
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the typed confirmation for --rotate-totp / --rotate-jwt.",
+    )
+    args = parser.parse_args()
+
+    if args.rotate_topic:
+        sys.exit(rotate_topic_command())
+
+    if (args.rotate_totp or args.rotate_jwt) and not confirm_rotation(
+        rotate_totp=args.rotate_totp,
+        rotate_jwt=args.rotate_jwt,
+        assume_yes=args.yes,
+    ):
+        print("Rotation cancelled. Nothing was changed.")
+        sys.exit(1)
+
+    # Ensure venv has required dependencies
+    check_and_setup_venv()
+
+    print("=" * 70)
+    print("Cloude Code Authentication Setup")
+    print("=" * 70)
+    print()
+
+    # Show Python version
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    print(f"🐍 Python {python_version}")
+    print()
+
+    # Project root
+    project_root = Path(__file__).parent
+    env_path = project_root / ".env"
+
+    # Snapshot the auth secrets BEFORE setup_env_file rebuilds .env from
+    # .env.example, which blanks both secret lines. Reading them back after
+    # that rewrite would see empty values and mint replacements - which is
+    # exactly how a second setup run used to orphan a paired authenticator.
+    captured_secrets = capture_auth_secrets(env_path)
+
+    # Interactive .env setup (LAN-only — no Cloudflare prompts)
+    claude_cli_path, working_dir, log_dir = setup_env_file(env_path)
+
+    # Create directories
+    import os
+    print("Creating directories...")
+    log_dir_expanded = os.path.expanduser(os.path.expandvars(log_dir))
+    working_dir_expanded = os.path.expanduser(os.path.expandvars(working_dir))
+
+    try:
+        Path(log_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created log directory: {log_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create log directory: {e}")
+
+    try:
+        Path(working_dir_expanded).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created projects directory: {working_dir_expanded}")
+    except Exception as e:
+        print(f"⚠️  Could not create projects directory: {e}")
+
+    print()
+
+    # Converge the auth secrets: keep what exists, mint only what is missing,
+    # replace only what was explicitly asked for.
+    print("Authentication secrets...")
+    secret_outcome = apply_auth_secrets(
+        env_path,
+        captured_secrets,
+        rotate_totp=args.rotate_totp,
+        rotate_jwt=args.rotate_jwt,
+    )
+    totp_secret = secret_outcome["totp_secret"]
+    report_secret_outcome(secret_outcome)
+
+    # Config file in project directory
+    config_path = project_root / "config.json"
+
+    # Check if config already exists
+    if config_path.exists():
+        print(f"📄 Config file exists at: {config_path}")
+
+        # Remove secrets from existing config if they're there
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+
+            if "totp_secret" in data or "jwt_secret" in data:
+                data.pop("totp_secret", None)
+                data.pop("jwt_secret", None)
+
+                with open(config_path, 'w') as f:
+                    json.dump(data, f, indent=2)
+
+                print("✅ Removed secrets from config.json (now in .env)\n")
+            else:
+                print("✅ Config file already clean (no secrets)\n")
+
+        except Exception as e:
+            print(f"⚠️  Error cleaning config: {e}\n")
+
+    else:
+        # Create new config from example
+        example_path = project_root / "config.example.json"
+        with open(example_path) as f:
+            config = json.load(f)
+
+        # Remove secrets from config (they're in .env now)
+        config.pop("totp_secret", None)
+        config.pop("jwt_secret", None)
+
+        # Write config WITHOUT secrets
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        print(f"✅ Configuration file created at: {config_path}\n")
+
+    # Item 6: optional ntfy push notification setup. Runs AFTER the
+    # config file exists (we mutate it in place).
+    setup_notifications_block(config_path)
+
+    print("=" * 70)
+    print("TOTP Setup")
+    print("=" * 70)
+    print()
+
+    # Only ever show a QR when the secret actually changed. Printing one for
+    # an unchanged secret is what taught the user that a second setup run
+    # had re-paired him when it had not - and printing NO qr after a
+    # rotation would leave him unable to pair at all. Both are the same
+    # lockout wearing different clothes.
+    if not secret_outcome["show_qr"]:
+        print("Your existing TOTP secret was kept, so your authenticator app")
+        print("still works. There is nothing to scan and no new QR code.")
+        print()
+        print("If you have LOST your authenticator, re-run with:")
+        print("   python3 setup_auth.py --rotate-totp")
+        print()
+        finish_setup(project_root, env_path, config_path)
+        return
+
+    # Generate and display QR code
+    uri, qr_path = generate_qr_code(totp_secret)
+
+    # Open QR code with Preview
+    print()
+    print(f"📱 Opening QR code...")
+    try:
+        subprocess.run(['open', str(qr_path)], check=False)
+        print(f"✅ QR code opened in Preview: {qr_path}")
+    except Exception as e:
+        print(f"⚠️  Could not open QR code automatically: {e}")
+        print(f"   Please open manually: {qr_path}")
+
+    print()
+    print("=" * 70)
+    print(f"📱 SCAN THE QR CODE that just opened in Preview!")
+    print("=" * 70)
+    print()
+    print("Use Google Authenticator, Authy, or any TOTP app")
+    print()
+    print(f"Or manually enter this secret: {totp_secret}")
+    print()
+
+    input("Press Enter after scanning the QR code...")
+
+    finish_setup(project_root, env_path, config_path)
+
 
 if __name__ == "__main__":
     main()

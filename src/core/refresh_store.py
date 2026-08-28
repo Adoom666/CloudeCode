@@ -7,7 +7,7 @@ Design (Item 5 of Weekend MVP v3.1):
     lineage via ``superseded_by``. On every refresh we mint a NEW pair and
     mark the old refresh row as superseded. A token presented after
     supersession (past the grace window) is treated as evidence of theft
-    — we revoke the entire chain (walk ``superseded_by`` pointers forward)
+    - we revoke the entire chain (walk ``superseded_by`` pointers forward)
     so the attacker AND the legitimate user are both logged out and must
     re-authenticate.
 
@@ -20,8 +20,8 @@ Concurrency:
 
     aiosqlite wraps the synchronous ``sqlite3`` module in a background
     thread. A single long-lived Connection is maintained and guarded by an
-    ``asyncio.Lock`` so that rotate() — which is a multi-statement
-    read-modify-write — is atomic with respect to any concurrent call into
+    ``asyncio.Lock`` so that rotate() - which is a multi-statement
+    read-modify-write - is atomic with respect to any concurrent call into
     the store. sqlite3 has its own internal lock but that only protects
     individual statements, not logical transactions.
 
@@ -79,7 +79,7 @@ class RefreshStore:
     async def init(self) -> None:
         """Open the connection and create the schema if missing."""
         self._conn = await aiosqlite.connect(self._db_path)
-        # foreign_keys off by default in SQLite — we don't need them here,
+        # foreign_keys off by default in SQLite - we don't need them here,
         # just noting the defaults so they're not surprising.
         await self._conn.execute(
             """
@@ -98,7 +98,7 @@ class RefreshStore:
             "ON refresh_tokens(exp)"
         )
         await self._conn.commit()
-        # Tighten perms on the SQLite DB — it stores refresh-token jtis.
+        # Tighten perms on the SQLite DB - it stores refresh-token jtis.
         # The file is guaranteed to exist here because CREATE TABLE + commit
         # just ran. Idempotent: safe to chmod every startup even if already
         # 0600. Wrapped in try/except OSError for defensive safety (e.g.
@@ -139,8 +139,8 @@ class RefreshStore:
         """Atomically rotate an old refresh token to a new one.
 
         Returns:
-            True  — rotation succeeded; old token is now superseded.
-            False — old token is unknown, revoked, or already superseded
+            True  - rotation succeeded; old token is now superseded.
+            False - old token is unknown, revoked, or already superseded
                     past the grace window (caller treats as reuse-attack).
 
         Caller is responsible for chain revocation on the False path.
@@ -172,7 +172,7 @@ class RefreshStore:
                 # Already rotated once. Real client either (a) fired two
                 # refreshes in parallel (covered by the grace window on
                 # is_valid) or (b) something is replaying an old token.
-                # rotate() itself does NOT grant grace — grace is for
+                # rotate() itself does NOT grant grace - grace is for
                 # is_valid checks only, because rotating the SAME old
                 # token twice would create a malformed chain.
                 logger.warning(
@@ -182,7 +182,7 @@ class RefreshStore:
                 )
                 return False
             if old_exp <= now:
-                # Expired tokens are not eligible for rotation — client
+                # Expired tokens are not eligible for rotation - client
                 # must start a new session via TOTP.
                 logger.warning("refresh_rotate_expired", jti=old_jti)
                 return False
@@ -328,7 +328,7 @@ class RefreshStore:
             logger.info("refresh_purge", deleted=deleted, cutoff=cutoff)
         return deleted
 
-    # Internal — exposed for tests only.
+    # Internal - exposed for tests only.
     async def _all_jtis(self) -> List[str]:  # pragma: no cover - test helper
         assert self._conn is not None
         async with self._lock:

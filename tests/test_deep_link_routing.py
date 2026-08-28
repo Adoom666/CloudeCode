@@ -25,6 +25,7 @@ import pytest
 # ---- env bootstrap so pydantic Settings doesn't sys.exit(1) -----------
 os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_dl_wd_"))
 os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_dl_logs_"))
+os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_dl_state_"))
 os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
 os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
@@ -198,11 +199,24 @@ def _assert_csp_present(resp):
     assert "script-src 'self'" in csp
     assert "connect-src 'self' ws: wss:" in csp
     assert "frame-ancestors 'none'" in csp
-    # xterm.js + addons load from jsdelivr; CSP must allowlist that host
-    # in script-src, style-src, and font-src.
-    assert "script-src 'self' https://cdn.jsdelivr.net" in csp
-    assert "https://cdn.jsdelivr.net" in csp.split("style-src")[1].split(";")[0]
-    assert "https://cdn.jsdelivr.net" in csp.split("font-src")[1].split(";")[0]
+    # No third-party origin may appear in ANY directive. This used to assert
+    # the opposite: xterm.js, its CSS and its addons loaded from
+    # cdn.jsdelivr.net, so the host was allowlisted in script-src, style-src
+    # and font-src. Those assets are vendored under client/vendor/xterm/ now.
+    # That was a correctness fix as much as a hardening one - a content
+    # blocker dropping the CDN left xterm.css unapplied, which made the
+    # character cell measure wrong and shipped a bogus grid to tmux.
+    assert "cdn.jsdelivr.net" not in csp, (
+        "a third-party origin reappeared in the CSP; vendor the asset instead"
+    )
+    assert "://" not in csp.replace("ws:", "").replace("wss:", ""), (
+        f"CSP names a remote origin: {csp}"
+    )
+    # style-src must KEEP 'unsafe-inline': xterm addons set inline style
+    # attributes on nodes they manage and the terminal renders blank without
+    # it. Inline script and eval remain disallowed.
+    assert "'unsafe-inline'" in csp.split("style-src")[1].split(";")[0]
+    assert "script-src 'self';" in csp
     assert resp.headers.get("x-content-type-options") == "nosniff"
     assert resp.headers.get("referrer-policy") == "no-referrer"
 

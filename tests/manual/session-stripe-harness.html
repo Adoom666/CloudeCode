@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>session row edge harness</title>
+<!--
+  "the left side of every session has the color of the session type ...
+  just the border and background based upon the theme."
+
+  MEASURE THE EDGE, DO NOT ASSERT THE RULE. This repo has shipped three
+  visibly broken features through fully green suites because the tests
+  read markup instead of pixels, so the verifier that drives this page
+  (scripts/verify_session_stripe.py) screenshots one real pixel of each
+  row's left edge and compares it against BOTH the theme's border token
+  and the session-type badge token. A rule-text assertion cannot tell
+  those apart once a later stylesheet overrides it.
+
+  Stylesheet ORDER here is the shipped order and it is load bearing:
+  session-theme-tint.css declares the themed row's edges at the same
+  specificity as styles.css, so a harness that loaded them differently
+  would measure a cascade the browser never resolves.
+
+  Four rows on purpose. `owned` and `external` used DIFFERENT tokens
+  (--color-badge-tmux-fg / --color-badge-external-fg), so one row can
+  only ever prove half the claim; and a row carrying data-session-theme
+  resolves a different left-edge cascade than one without, so both shapes
+  are measured rather than assumed to behave alike.
+
+  #control-stripe is a POSITIVE CONTROL. It paints the exact colour the
+  rows must NOT have. A sampler that reported "not the badge colour"
+  everywhere because it was broken would fail there and be caught,
+  instead of manufacturing a green inside the verification step.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/session-stripe-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__stripeReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+<style>
+  /* The harness page itself carries no colour opinion: the backdrop is
+     painted from the active theme's own --color-bg by __applyTheme, so a
+     sampled pixel composites against the same backdrop the real home
+     screen has rather than against a white default. */
+  body { margin: 0; padding: 24px; }
+  #rows { max-width: 520px; }
+  #control-stripe {
+      margin-top: 24px;
+      height: 40px;
+      border-left: 3px solid var(--color-badge-tmux-fg);
+  }
+</style>
+</head>
+<body>
+<div class="launchpad-container" id="rows">
+  <div class="running-session-row owned" id="row-owned">
+    <div class="running-session-top">
+      <span class="running-session-name">owned, unthemed</span>
+      <span class="badge badge-tmux">TMUX</span>
+    </div>
+  </div>
+
+  <div class="running-session-row external" id="row-external">
+    <div class="running-session-top">
+      <span class="running-session-name">external, unthemed</span>
+      <span class="badge badge-external">EXTERNAL</span>
+    </div>
+  </div>
+
+  <!-- The inline custom properties are what client/js/session-theme-tint.js
+       writes per row at runtime; hardcoding the pair here keeps the tint
+       layer's geometry under measurement without booting the whole app. -->
+  <div class="running-session-row owned" id="row-owned-themed"
+       data-session-theme="dracula"
+       style="--session-theme-accent: #bd93f9; --session-theme-ring: rgba(189, 147, 249, 0.45);">
+    <div class="running-session-top">
+      <span class="running-session-name">owned, themed</span>
+      <span class="badge badge-tmux">TMUX</span>
+    </div>
+  </div>
+
+  <div class="running-session-row external" id="row-external-themed"
+       data-session-theme="dracula"
+       style="--session-theme-accent: #bd93f9; --session-theme-ring: rgba(189, 147, 249, 0.45);">
+    <div class="running-session-top">
+      <span class="running-session-name">external, themed</span>
+      <span class="badge badge-external">EXTERNAL</span>
+    </div>
+  </div>
+</div>
+
+<div id="control-stripe"></div>
+
+<script>
+window.__stripeReady = false;
+
+/**
+ * Apply one shipped theme's cssVars to :root, exactly as the real theme
+ * loader does, by reading the theme's OWN manifest off disk.
+ *
+ * Hardcoding a palette here would test a palette this app does not ship.
+ * The manifest is fetched so a theme whose tokens change cannot leave a
+ * stale copy passing in this file.
+ *
+ * @param {string} id - theme directory name, e.g. "terminal".
+ * @returns {Promise<object>} the cssVars map that was applied.
+ */
+window.__applyTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    // The page backdrop is the theme's own page colour. Several rows are
+    // translucent by design (an 80 percent fill over --color-bg), so the
+    // colour behind them decides what a sampled pixel composites to.
+    document.body.style.background = vars['--color-bg'] || '#000000';
+    return vars;
+};
+
+/**
+ * Resolve a custom property off :root to its computed value.
+ * @param {string} name - e.g. "--color-border".
+ * @returns {string} the trimmed value, "" when the property is unset.
+ */
+window.__token = function (name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+};
+
+/**
+ * Every paint fact one row's edges are judged on, plus its box.
+ *
+ * Widths and colours are reported for all FOUR sides because the defect
+ * under test is an edge that differs from its three neighbours; a single
+ * borderLeftColor read cannot express "the four sides disagree".
+ *
+ * @param {string} id - element id.
+ * @returns {?object} null when the element is absent.
+ */
+window.__edge = function (id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return {
+        id: id,
+        rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+        widths: {
+            top: cs.borderTopWidth,
+            right: cs.borderRightWidth,
+            bottom: cs.borderBottomWidth,
+            left: cs.borderLeftWidth,
+        },
+        colors: {
+            top: cs.borderTopColor,
+            right: cs.borderRightColor,
+            bottom: cs.borderBottomColor,
+            left: cs.borderLeftColor,
+        },
+        backgroundColor: cs.backgroundColor,
+        backgroundImage: cs.backgroundImage,
+        boxShadow: cs.boxShadow,
+    };
+};
+
+/** @returns {object} the whole measurement bundle for the current theme. */
+window.__stripe = function () {
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        theme: document.documentElement.getAttribute('data-theme'),
+        tokens: {
+            border: window.__token('--color-border'),
+            bg: window.__token('--color-bg'),
+            tmuxFg: window.__token('--color-badge-tmux-fg'),
+            externalFg: window.__token('--color-badge-external-fg'),
+        },
+        rows: ['row-owned', 'row-external',
+               'row-owned-themed', 'row-external-themed'].map(window.__edge),
+        control: window.__edge('control-stripe'),
+    };
+};
+
+(async () => {
+    await window.__applyTheme('terminal');
+    window.__stripeReady = true;
+})();
+</script>
+</body>
+</html>

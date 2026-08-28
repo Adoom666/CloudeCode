@@ -1,0 +1,345 @@
+/* =====================================================================
+ * Copy-output sheet - the surface behind the "copy output" tool.
+ *
+ * Split out of terminal-tools.css when that file crossed 500 lines. It
+ * pairs with client/js/copy-output.js, which is the only thing that
+ * builds this markup; the tool that OPENS it lives next door in
+ * terminal-tools.css.
+ *
+ * Theme-aware through the same semantic tokens as the rest of the
+ * chrome, so a per-session theme restyles it with the terminal. Every
+ * hit area is a thumb-sized 44px, and below 768px the whole thing
+ * becomes a bottom sheet.
+ * ===================================================================== */
+
+.cloude-copy-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-overlay);
+    padding: 16px;
+}
+
+.cloude-copy-sheet__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 640px;
+    max-height: 80vh;
+    max-height: 80dvh;
+    padding: 16px;
+    border-radius: 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 10px 40px var(--color-bg-overlay-soft);
+}
+
+.cloude-copy-sheet__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.cloude-copy-sheet__title {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--color-accent);
+}
+
+.cloude-copy-sheet__close {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.cloude-copy-sheet__close:hover {
+    color: var(--color-accent);
+}
+
+.cloude-copy-sheet__chips {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* The sheet scrolls vertically only. A sideways scrollbar here means a
+     * row overflowed, which is a bug to fix, not a scroll to offer. */
+    overflow-x: hidden;
+    max-height: 30vh;
+    max-height: 30dvh;
+    overflow-y: auto;
+}
+
+/* The sheet's own status line. Terminal status pills render at z-index
+ * 70 and the sheet at 10000, so a pill raised while the sheet is open is
+ * painted underneath it and the user sees nothing. Feedback has to live
+ * inside the overlay that covers it. */
+.cloude-copy-status {
+    margin: 0;
+    min-height: 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.cloude-copy-status[data-kind="success"] {
+    color: var(--color-accent);
+}
+
+.cloude-copy-status[data-kind="error"] {
+    color: var(--color-danger);
+}
+
+/* One result: the copy chip, and for an http(s) url an "open" link
+ * beside it. The chip takes the slack so the open links form a straight
+ * right-hand column no matter how long the values are. */
+.cloude-copy-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    width: 100%;
+}
+
+/* `min-width: 0` is load-bearing. A flex item's default `min-width: auto`
+ * refuses to shrink below its MIN-CONTENT width, and this chip contains a
+ * nowrap "N chars" badge next to a long url, so without it the row pushed
+ * the open link off the panel and gave the whole sheet a horizontal
+ * scrollbar - measured in Chrome at 375px, 2026-08-16. */
+.cloude-copy-row .cloude-copy-chip {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+}
+
+/* Same box as the copy-all action so the two read as one control family,
+ * and the same 44px minimum so it is a real thumb target. */
+.cloude-copy-open {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    height: auto;
+    min-width: 56px;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-decoration: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.cloude-copy-open:hover,
+.cloude-copy-open:focus-visible {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, var(--color-bg));
+    outline: none;
+}
+
+.cloude-copy-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 10px;
+    text-align: left;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    /* A tap must land instantly and must not be read as the start of a
+     * text selection or a double-tap zoom. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.cloude-copy-chip:hover,
+.cloude-copy-chip:focus-visible {
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+/* Confirmation where the finger already is, not only in the status line. */
+.cloude-copy-chip.is-copied {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, transparent);
+}
+
+.cloude-copy-chip__kind {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--color-bg-elevated);
+    color: var(--color-accent);
+    font-size: 10px;
+    text-transform: lowercase;
+}
+
+.cloude-copy-chip.is-copied .cloude-copy-chip__kind {
+    color: var(--color-accent);
+}
+
+.cloude-copy-chip.is-copied .cloude-copy-chip__kind::after {
+    content: " copied";
+}
+
+/* The value is the long part (a sign-in url can be 200 chars). It is NOT
+ * ellipsised: on a phone that hides the END of the url, the part that
+ * distinguishes one sign-in link from another. copy-output.js already
+ * shortens the label from the MIDDLE and caps its length, so both ends
+ * render and this is at most two short lines. The full value is in the
+ * title attribute and in the textarea below. */
+.cloude-copy-chip__value {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-all;
+}
+
+/* Shown only when the label was shortened, so a middle-ellipsis label is
+ * never mistaken for a genuinely short token. The whole value is what
+ * gets copied regardless of what the label shows. */
+.cloude-copy-chip__size {
+    flex: 0 0 auto;
+    color: var(--color-fg-muted);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.cloude-copy-sheet__empty {
+    margin: 0;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+/* The always-there fallback: real selectable text, so even when both
+ * programmatic clipboard tiers are refused the user can long-press and
+ * use the OS copy menu. user-select must be explicit because the
+ * terminal chrome around it disables selection. */
+.cloude-copy-sheet__text {
+    flex: 1 1 auto;
+    min-height: 120px;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    /* 16px keeps iOS Safari from auto-zooming when the field is focused. */
+    font-size: 16px;
+    line-height: 1.4;
+    resize: none;
+    white-space: pre;
+    overflow: auto;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.cloude-copy-sheet__foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* "copy all". What was wrong with it, specifically:
+ *   - SHAPE. `border-radius: var(--radius-full)` made it the only pill in
+ *     a sheet whose chips, textarea and open links are all 6px rounded
+ *     rectangles. `--radius-full` is `50%` in styles.css, not 999px, so on
+ *     a 44px-tall shrink-wrapped box it rendered as a lopsided ellipse
+ *     rather than the stadium the fallback implies.
+ *   - FILL. accent text on an accent-tinted fill inside an accent border
+ *     is three accent layers with no contrast step between them.
+ *   - WIDTH. it was `flex: 0 1 auto` next to a hint at `flex: 1 1 160px`,
+ *     so it shrink-wrapped to its two words and its right edge landed at
+ *     an arbitrary offset that lined up with nothing above it.
+ *   - SIZE. 13px against the 12px of every chip in the same column.
+ *   - NO COPIED STATE. copyAndReport() adds `.is-copied` to whatever was
+ *     tapped, and there was a rule for the chips but none for this, so
+ *     the one control that copies the WHOLE buffer was the one that gave
+ *     no confirmation where the finger was.
+ * It now matches the chips it sits under: same 6px box, same 12px mono,
+ * same surface, same accent-on-hover and the same copied treatment. */
+.cloude-copy-sheet__action {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    height: auto;
+    min-width: 120px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 6px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.cloude-copy-sheet__action:hover,
+.cloude-copy-sheet__action:focus-visible {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, var(--color-bg));
+    outline: none;
+}
+
+.cloude-copy-sheet__action.is-copied {
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg, transparent);
+}
+
+.cloude-copy-sheet__action.is-copied::after {
+    content: ' copied';
+    color: var(--color-fg-muted);
+}
+
+.cloude-copy-sheet__hint {
+    flex: 1 1 160px;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+/* Bottom sheet on phones: anchored to the bottom edge, within thumb
+ * reach, and tall enough to show a wrapped url without scrolling. */
+@media (max-width: 768px) {
+    .cloude-copy-sheet {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .cloude-copy-sheet__panel {
+        max-width: none;
+        max-height: 88vh;
+        max-height: 88dvh;
+        border-radius: 12px 12px 0 0;
+        border-bottom: none;
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+}
+
