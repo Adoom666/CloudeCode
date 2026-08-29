@@ -112,13 +112,41 @@
     }
 
     /**
-     * Strip the app's tmux prefix for display.
+     * Strip the app's tmux prefix and derive a readable display form.
      *
+     * Description: THE ONE PLACE THIS APP TURNS A TMUX NAME INTO
+     *   SOMETHING A HUMAN READS, mirroring ``label_from_tmux_name`` in
+     *   ``src/core/session_label.py`` byte for byte on the transform
+     *   itself - strip the ``cloude_`` prefix (only when something
+     *   survives it), then replace every underscore with a space. The
+     *   two used to disagree: this function stripped the prefix and
+     *   stopped, so a session named ``Media_Compression`` rendered here
+     *   with its underscore intact while the SAME name, run through the
+     *   server's v9 label backfill, rendered as ``Media Compression`` -
+     *   one conversation, two spellings, on two surfaces. Pinned equal
+     *   by tests/test_label_derivation_parity.node.mjs (JS side) and
+     *   tests/test_label_derivation_parity.py (Python side), both
+     *   walking the SAME table of cases in tests/label_derivation_cases.json
+     *   so the two can never drift apart again without a failing test.
+     *
+     *   ONE DELIBERATE NON-MIRROR. Python falls back to the ORIGINAL
+     *   tmux name when the derived form is empty (``or tmux_name``), so
+     *   ``label_from_tmux_name('cloude_')`` returns ``'cloude'`` rather
+     *   than nothing - because that function feeds a stored ``title``
+     *   column that is never allowed to go blank. This function instead
+     *   returns null for that case, because null here means outcome 3
+     *   of the module header's three-outcome rule - "this session
+     *   cannot be named" - and a caller renders that as its own
+     *   sentence (``UNKNOWN`` or similar) rather than a fabricated
+     *   handle. Different callers, different empty-case contracts;
+     *   the TRANSFORM applied to a non-degenerate name is identical.
      * Inputs: tmuxName (string|null).
      * Output: string|null - the display form, or null when nothing is
      *   left (a name that is ONLY the prefix strips to the empty string,
      *   which must not be rendered as a nameless row).
      * Example: SessionLabel.stripAppPrefix('cloude_Media')  -> 'Media'
+     * Example: SessionLabel.stripAppPrefix('Media_Compression')
+     *   -> 'Media Compression'
      */
     function stripAppPrefix(tmuxName) {
         var name = cleanString(tmuxName);
@@ -126,7 +154,9 @@
         if (name.indexOf(APP_TMUX_PREFIX) === 0) {
             name = name.slice(APP_TMUX_PREFIX.length);
         }
-        return name.length ? name : null;
+        if (!name.length) return null;
+        var derived = name.split('_').join(' ').trim();
+        return derived.length ? derived : null;
     }
 
     /**

@@ -1789,9 +1789,17 @@ class TmuxBackend(SessionBackend):
             TmuxListing: ``ok=True`` with one row per LIVE tmux session on
                 the socket, each ``{"name": str, "pane_dead": str,
                 "pane_current_command": str, "pid": Optional[int],
-                "status": str}``. ``status`` is pre-resolved via
-                ``resolve_pane_status()`` so callers never touch the raw
-                fields unless they want to. ``ok=True, sessions=[],
+                "status": str, "created_at_epoch": Optional[int]}``.
+                ``status`` is pre-resolved via ``resolve_pane_status()`` so
+                callers never touch the raw fields unless they want to.
+                ``created_at_epoch`` is ``#{session_created}`` - the same
+                instance-identity field ``session_store``/``write_state``
+                key on - added so a caller that already paid for this one
+                probe can scope a durable write to the exact tmux instance
+                instead of guessing by name; it is ``None`` only when a
+                row could not supply a fifth field (a stale test double,
+                never real tmux) and callers must treat that as "instance
+                unknown", not as epoch 0. ``ok=True, sessions=[],
                 reason='no_server'`` when no server is running (a real
                 answer of zero). ``ok=False`` when the probe could not
                 run at all, in which case callers must fall back to
@@ -1801,7 +1809,7 @@ class TmuxBackend(SessionBackend):
             >>> backend.list_pane_status_all().sessions
             [{'name': 'cloude_myproj', 'pane_dead': '0',
               'pane_current_command': 'claude', 'pid': 4821,
-              'status': 'running'}]
+              'status': 'running', 'created_at_epoch': 1755000000}]
         """
         # Local import avoids a module-level cycle: session_status has no
         # dependency back on tmux_backend, but keeping the import at the
@@ -1813,7 +1821,8 @@ class TmuxBackend(SessionBackend):
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}",
+            "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}"
+            "|#{session_created}",
         )
         if failure is not None:
             return failure
@@ -1830,6 +1839,11 @@ class TmuxBackend(SessionBackend):
             if not line:
                 continue
             parts = line.split("|")
+            # MINIMUM 4, NOT 5. ``#{session_created}`` was added after
+            # this format shipped, and a test double built against the
+            # old 4-field shape must not start failing every row - it
+            # just gets ``created_at_epoch=None``, the honest "instance
+            # unknown" answer, rather than a parse failure.
             if len(parts) < 4:
                 logger.debug("list_pane_status_all_unparseable_row", raw=line)
                 continue
@@ -1844,12 +1858,19 @@ class TmuxBackend(SessionBackend):
                 pid_val: Optional[int] = int(pid_raw)
             except ValueError:
                 pid_val = None
+            created_at_epoch: Optional[int] = None
+            if len(parts) >= 5:
+                try:
+                    created_at_epoch = int(parts[4])
+                except ValueError:
+                    created_at_epoch = None
             results.append({
                 "name": name,
                 "pane_dead": pane_dead,
                 "pane_current_command": current_command,
                 "pid": pid_val,
                 "status": resolve_pane_status(pane_dead, current_command),
+                "created_at_epoch": created_at_epoch,
             })
         return TmuxListing.answered(results)
 

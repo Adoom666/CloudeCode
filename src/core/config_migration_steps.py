@@ -118,7 +118,27 @@ def build_seed_wrappers(has_cld: bool, has_cldor: bool) -> List[Dict]:
             # right HERE (this row means "the plain CLI, no wrapper") and
             # exactly wrong for a wrapper whose whole point is to call a
             # function the rc defines. Do not add it to those.
-            "script": "command claude --dangerously-skip-permissions",
+            # "$@" IS NOT OPTIONAL, and its absence was silent and total.
+            #
+            # render_wrapper_invocation runs this as
+            # `source <file> "$@"` with the caller's extra args as the
+            # sourced script's positional parameters. A script that never
+            # REFERENCES them drops every one, with no error: the args
+            # are set and simply unread.
+            #
+            # This row is the DEFAULT wrapper, so that dropped:
+            #   --resume <uuid>                 restart an ended session
+            #   --resume <uuid> --fork-session  the GUI fork button
+            #   --name <label>                  the launch-time name
+            # Each produced a NEW empty session that looked like it had
+            # worked - a restart opened a blank conversation, and a fork
+            # was stamped as a fork in the database while actually being
+            # a fresh session. Measured 2026-08-29 after a restart click
+            # lost a live session's context.
+            #
+            # The module's own EXAMPLE_WRAPPER_CLD has always carried
+            # "$@"; only this seeded row was missing it.
+            "script": 'command claude --dangerously-skip-permissions "$@"',
             "entry": None,
             "description": "plain Claude Code CLI, no wrapper",
             "default": not has_cld,
@@ -359,4 +379,79 @@ def _step_v3_to_v4(data: Dict) -> Dict:
     new_data[COMMON_SLASH_COMMANDS_KEY] = append_missing_commands(
         raw, MIGRATION_APPENDED_COMMANDS
     )
+    return new_data
+
+def _step_v4_to_v5(data: Dict) -> Dict:
+    """Version step 4 -> 5: make a non-forwarding wrapper forward ``"$@"``.
+
+    Description: REPAIRS A CONFIG THAT IS ALREADY WRONG. The v0->v1 seed
+      wrote the default wrapper's script as
+      ``command claude --dangerously-skip-permissions`` with no ``"$@"``.
+      ``render_wrapper_invocation`` runs a wrapper as
+      ``source <file> "$@"`` and passes the caller's extra arguments as
+      the sourced script's positional parameters - so a script that never
+      REFERENCES them drops every one, silently. The args are set and
+      simply unread.
+
+      What that cost, measured 2026-08-29: ``--resume <uuid>`` (the
+      restart button), ``--resume <uuid> --fork-session`` (the fork
+      button) and ``--name <label>`` all vanished for anyone on the
+      default wrapper. Restart opened an EMPTY conversation instead of
+      the one being restarted, and a fork was recorded as a fork in the
+      database while actually being a fresh session - both look like
+      success, which is why it survived so long.
+
+      NARROW ON PURPOSE. Only a wrapper with NO ``entry`` and a script
+      whose last non-comment line invokes ``claude`` without referencing
+      ``$@``/``$1``/``$*`` is touched, and the fix is to append ``"$@"``
+      to that line. A wrapper with an ``entry`` already forwards through
+      its function call; one that mentions the parameters is already
+      correct; anything else is a script this migration does not
+      understand and must not rewrite - a user's shell is theirs.
+    Inputs: data (dict) - config dict at version 4 (never mutated).
+    Output: dict - new config dict; unchanged when nothing qualified.
+    Example: _step_v4_to_v5({"agents": {"wrappers": [
+      {"id": "x", "script": "command claude", "entry": None}]}})
+      -> script becomes 'command claude "$@"'
+    """
+    new_data = dict(data)
+    agents = new_data.get("agents")
+    if not isinstance(agents, dict):
+        return new_data
+    wrappers = agents.get("wrappers")
+    if not isinstance(wrappers, list):
+        return new_data
+
+    repaired = []
+    changed = False
+    for w in wrappers:
+        if not isinstance(w, dict):
+            repaired.append(w)
+            continue
+        script = w.get("script")
+        if w.get("entry") or not isinstance(script, str) or not script.strip():
+            repaired.append(w)
+            continue
+        # Already forwards, in any of the forms a shell accepts.
+        if any(tok in script for tok in ('"$@"', "$@", "$1", "$*")):
+            repaired.append(w)
+            continue
+        lines = script.rstrip().split("\n")
+        last = lines[-1].rstrip()
+        # Only a line that actually launches claude. Anything else is a
+        # script whose shape this step has not established.
+        if "claude" not in last or last.lstrip().startswith("#"):
+            repaired.append(w)
+            continue
+        lines[-1] = last + ' "$@"'
+        fixed = dict(w)
+        fixed["script"] = "\n".join(lines)
+        repaired.append(fixed)
+        changed = True
+
+    if not changed:
+        return new_data
+    new_agents = dict(agents)
+    new_agents["wrappers"] = repaired
+    new_data["agents"] = new_agents
     return new_data

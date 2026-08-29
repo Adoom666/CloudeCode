@@ -59,7 +59,40 @@ class Launchpad {
         // _buildProjectSessionGroups() to decide which project (or "no
         // project", or NEEDS ATTENTION) each running session belongs
         // under in the home-screen tree.
+        //
+        // NAME-ONLY FALLBACK MAP. Two stored rows can share a tmux_name
+        // (a session recreated after its pane died reuses the name with
+        // a new tmux_created_epoch), so this is keyed on tmux_name but
+        // built to exclude archived rows and to prefer the newest
+        // tmux_created_epoch among the rest - see
+        // _resolveSessionAttribution(). Consulted only when
+        // sessionAttributionByInstance misses. Never populated with an
+        // archived row: an archived row must never shadow a live
+        // session under a name-only join.
         this.sessionAttribution = new Map();
+        // INSTANCE-EXACT MAP, keyed on `${tmux_name}\u0000${tmux_created_
+        // epoch}` (a NUL separator, so no tmux name can ever collide with
+        // one that only differs by where the epoch digits start). Both SessionInfo and AttachableSession DO carry the
+        // tmux creation epoch on the wire - as `created_at_epoch`, the
+        // same underlying tmux `#{session_created}` value
+        // `tmux_created_epoch` names on the stored row (see
+        // AttachableSession.created_at_epoch / SessionInfo.session_row_id
+        // merge in loadRunningSessions()) - so a caller holding a live
+        // session's own name+epoch can resolve its EXACT stored row,
+        // including one the user archived: that row still comes back
+        // (this map, unlike the name-only one, does not exclude
+        // archived rows), and the caller drops it on `archived_at`,
+        // which is what makes "delete this session's record" keep
+        // working for the exact instance the user deleted without
+        // letting an unrelated archived row from an older instance of
+        // the same name shadow a live one.
+        this.sessionAttributionByInstance = new Map();
+        // Names where two or more non-archived stored rows could not be
+        // ranked against each other (equal or unmeasurable
+        // tmux_created_epoch). Deliberately absent from
+        // sessionAttribution - a caller must treat this as
+        // could-not-evaluate, never silently pick one.
+        this.sessionAttributionAmbiguous = new Set();
         // Three-outcome latch for the WHOLE attribution fetch, mirrored
         // on `runningSessionsListing` above: true only when the last
         // GET /sessions/records call actually returned rows to read. A
@@ -926,19 +959,22 @@ class Launchpad {
 
     /**
      * Fetch per-session project attribution (S8) from the datastore and
-     * index it by tmux name for _buildProjectSessionGroups() to consult.
+     * index it for _buildProjectSessionGroups() to consult.
      *
      * Description: THREE-OUTCOME, latched on
      *   ``this.sessionAttributionListingOk``. A successful fetch
-     *   populates the map and every row's ``project_attribution`` is
-     *   trusted as read (including the literal strings ``'none'`` and
-     *   ``'unknown'``, which mean different things - see
-     *   ``_buildProjectSessionGroups``). A failed fetch clears the map
-     *   AND sets the flag false, which is what forces every running
-     *   session into NEEDS ATTENTION rather than rendering "no project"
-     *   for a question that was never asked.
+     *   populates ``sessionAttribution`` / ``sessionAttributionByInstance``
+     *   / ``sessionAttributionAmbiguous`` via ``_resolveSessionAttribution``
+     *   and every resolved row's ``project_attribution`` is trusted as
+     *   read (including the literal strings ``'none'`` and ``'unknown'``,
+     *   which mean different things - see ``_buildProjectSessionGroups``).
+     *   A failed fetch clears all three AND sets the flag false, which
+     *   is what forces every running session into NEEDS ATTENTION rather
+     *   than rendering "no project" for a question that was never asked.
      * Inputs: none.
      * Output: Promise<void>. Mutates ``this.sessionAttribution``,
+     *   ``this.sessionAttributionByInstance``,
+     *   ``this.sessionAttributionAmbiguous``,
      *   ``this.sessionAttributionListingOk``,
      *   ``this.sessionAttributionListingDetail``.
      */
@@ -947,30 +983,147 @@ class Launchpad {
             const rows = await window.API.listSessionRecords();
             if (!Array.isArray(rows)) {
                 this.sessionAttribution = new Map();
+                this.sessionAttributionByInstance = new Map();
+                this.sessionAttributionAmbiguous = new Set();
                 this.sessionRecords = [];
                 this.sessionAttributionListingOk = false;
                 this.sessionAttributionListingDetail =
                     'the server did not return a session record array';
                 return;
             }
-            const map = new Map();
-            for (const row of rows) {
-                if (row && row.tmux_name) {
-                    map.set(row.tmux_name, row);
-                }
-            }
-            this.sessionAttribution = map;
+            const resolved = this._resolveSessionAttribution(rows);
+            this.sessionAttribution = resolved.byName;
+            this.sessionAttributionByInstance = resolved.byInstance;
+            this.sessionAttributionAmbiguous = resolved.ambiguous;
             this.sessionRecords = rows;
             this.sessionAttributionListingOk = true;
             this.sessionAttributionListingDetail = null;
         } catch (error) {
             console.warn('Launchpad: failed to load session attribution:', error);
             this.sessionAttribution = new Map();
+            this.sessionAttributionByInstance = new Map();
+            this.sessionAttributionAmbiguous = new Set();
             this.sessionRecords = [];
             this.sessionAttributionListingOk = false;
             this.sessionAttributionListingDetail =
                 (error && error.message) || 'the server could not be reached';
         }
+    }
+
+    /**
+     * Resolve the tmux-identity -> stored-row join used for project
+     * attribution, from a raw GET /sessions/records payload.
+     *
+     * Description: A tmux_name is NOT a stable identity - two rows can
+     *   legitimately share one, because a session recreated after its
+     *   pane died reuses the name with a new ``tmux_created_epoch``. The
+     *   old code built a single ``Map<tmux_name, row>`` over a
+     *   newest-first, archived-rows-included list with plain
+     *   ``map.set()``, so the OLDEST row in the list won (last write
+     *   wins) and an archived row was never excluded - which is how a
+     *   stopped-then-archived row shadowed a running session of the same
+     *   name and made it vanish from its project entirely (measured live:
+     *   row id 3, archived, epoch 1787686975 beat row id 4, running,
+     *   epoch 1788016091).
+     *
+     *   Builds three structures instead of one map:
+     *     - ``byInstance``: keyed on the composite instance identity
+     *       ``${tmux_name}\u0000${tmux_created_epoch}`` (NUL-separated,
+     *       so no tmux name can collide with the key of another). INCLUDES
+     *       archived rows on purpose - a caller holding a live session's
+     *       own creation epoch (both ``SessionInfo`` and
+     *       ``AttachableSession`` carry it, as ``created_at_epoch``; see
+     *       the merge in ``loadRunningSessions()``) can resolve its EXACT
+     *       row this way, including the case where the user archived
+     *       that exact instance's record - the row still comes back and
+     *       the caller drops it on ``archived_at``, which is what keeps
+     *       "delete this session's record" working without letting an
+     *       unrelated archived row from an OLDER instance of the same
+     *       name shadow a live one.
+     *     - ``byName``: the weaker name-only fallback, for a caller that
+     *       cannot supply an epoch (or when the exact instance key is not
+     *       found - e.g. legacy rows with no recorded epoch). NEVER
+     *       contains an archived row. Among the remaining non-archived
+     *       candidates for a name, the row with the newest
+     *       ``tmux_created_epoch`` wins - resolved by scanning every
+     *       candidate for the true maximum, so the winner does not depend
+     *       on the order rows arrived in.
+     *     - ``ambiguous``: names where two or more non-archived
+     *       candidates could not be ranked (a real tie on the newest
+     *       epoch, or a candidate with no epoch recorded at all). Such a
+     *       name is deliberately ABSENT from ``byName`` - this is a
+     *       COULD-NOT-EVALUATE, and the caller must report it as one
+     *       rather than silently picking a row.
+     *
+     *   A genuine collision inside ``byInstance`` itself (two distinct
+     *   rows claiming the identical ``tmux_name`` + ``tmux_created_epoch``
+     *   pair, which should not happen but is not assumed impossible) is
+     *   treated the same way: the key is dropped from ``byInstance`` so a
+     *   lookup reports "not found" rather than an arbitrary pick, and the
+     *   caller falls through to ``byName`` / ``ambiguous``.
+     * Inputs: rows (SessionRecord[]) - as returned by
+     *   GET /sessions/records: newest first, archived rows included.
+     * Output: {byName: Map<string, object>, byInstance: Map<string, object>,
+     *   ambiguous: Set<string>}
+     * Example:
+     *   const { byName } = lp._resolveSessionAttribution(rows);
+     *   byName.get('cloude_a')  // the SessionRecord for the live instance
+     */
+    _resolveSessionAttribution(rows) {
+        const byInstance = new Map();
+        const instanceCollisions = new Set();
+        const candidatesByName = new Map();
+
+        for (const row of rows) {
+            if (!row || !row.tmux_name) continue;
+            const name = row.tmux_name;
+            const epoch = (row.tmux_created_epoch === null || row.tmux_created_epoch === undefined)
+                ? null
+                : row.tmux_created_epoch;
+
+            if (epoch !== null) {
+                const instanceKey = name + '\u0000' + epoch;
+                if (byInstance.has(instanceKey)) {
+                    instanceCollisions.add(instanceKey);
+                } else {
+                    byInstance.set(instanceKey, row);
+                }
+            }
+
+            // Archived rows are never a candidate for the name-only
+            // fallback - see the docstring above.
+            if (row.archived_at) continue;
+
+            if (!candidatesByName.has(name)) candidatesByName.set(name, []);
+            candidatesByName.get(name).push({ row, epoch });
+        }
+
+        for (const key of instanceCollisions) byInstance.delete(key);
+
+        const byName = new Map();
+        const ambiguous = new Set();
+        for (const [name, candidates] of candidatesByName) {
+            if (candidates.length === 1) {
+                byName.set(name, candidates[0].row);
+                continue;
+            }
+            // Two or more non-archived rows share this name. A row with
+            // no recorded epoch can never be ranked against another, so
+            // its mere presence makes the whole name ambiguous.
+            if (candidates.some((c) => c.epoch === null)) {
+                ambiguous.add(name);
+                continue;
+            }
+            const maxEpoch = Math.max(...candidates.map((c) => c.epoch));
+            const winners = candidates.filter((c) => c.epoch === maxEpoch);
+            if (winners.length > 1) {
+                ambiguous.add(name);
+                continue;
+            }
+            byName.set(name, winners[0].row);
+        }
+
+        return { byName, byInstance, ambiguous };
     }
 
     /**
@@ -2930,7 +3083,35 @@ class Launchpad {
                 });
                 continue;
             }
-            const rec = this.sessionAttribution.get(s.name);
+            // INSTANCE-EXACT FIRST. When this running session carries its
+            // own tmux creation epoch (every row on ``runningSessions``
+            // does - see ``created_at_epoch`` in loadRunningSessions()),
+            // resolve its EXACT stored row via the instance key rather
+            // than a name-only guess - this is what stops an archived
+            // OLDER instance of the same tmux_name from ever being
+            // considered for a currently-live session.
+            let rec = null;
+            if (s.created_at_epoch) {
+                const instanceKey = s.name + '\u0000' + s.created_at_epoch;
+                if (this.sessionAttributionByInstance.has(instanceKey)) {
+                    rec = this.sessionAttributionByInstance.get(instanceKey);
+                }
+            }
+            // FALLBACK: name-only join, only reached when the exact
+            // instance was not found (epoch missing on either side, or a
+            // legacy row with no recorded epoch). Never resolves to an
+            // archived row - see _resolveSessionAttribution().
+            if (!rec) {
+                if (this.sessionAttributionAmbiguous.has(s.name)) {
+                    needsAttention.push({
+                        session: s,
+                        reason: 'two stored session records for this name '
+                            + 'could not be told apart',
+                    });
+                    continue;
+                }
+                rec = this.sessionAttribution.get(s.name) || null;
+            }
             if (!rec) {
                 needsAttention.push({
                     session: s,
@@ -2946,6 +3127,10 @@ class Launchpad {
             // the kind of exception nobody can predict from the button's
             // label. The session keeps running and is still reachable
             // from the live sidebar; only this listing forgets it.
+            // Reached only via the instance-exact path now (the name-only
+            // fallback above never yields an archived row), so this is
+            // specifically "the live session's OWN record was deleted",
+            // not "some unrelated older instance of this name was".
             if (rec.archived_at) continue;
             const attribution = rec.project_attribution;
             if (attribution === 'unknown') {

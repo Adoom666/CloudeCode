@@ -116,7 +116,13 @@ class AdoptPersistResult:
       external identity. working_dir (str | None) - the directory probed
       during this adoption, None when it could not be read.
       project_id (int | None) and project_attribution (str | None) - the
-      attribution applied. detail (str | None) - human-readable reason.
+      attribution applied. epoch (int | None) - the instance's
+      ``#{session_created}``, present whenever the listing actually
+      located the live instance (i.e. whenever ``PERSIST_SESSION_GONE``
+      and ``PERSIST_LISTING_UNAVAILABLE`` do NOT apply), so a caller can
+      key a durable, instance-scoped write (e.g. ``activity_persist.
+      write_state``) off this adoption without a second tmux probe.
+      detail (str | None) - human-readable reason.
     Output: an AdoptPersistResult instance.
     """
 
@@ -125,6 +131,7 @@ class AdoptPersistResult:
     working_dir: Optional[str] = None
     project_id: Optional[int] = None
     project_attribution: Optional[str] = None
+    epoch: Optional[int] = None
     detail: Optional[str] = None
 
     @property
@@ -293,6 +300,7 @@ def persist_adoption(
         )
         return AdoptPersistResult(
             outcome=PERSIST_REFUSED,
+            epoch=epoch,
             detail=sighting.detail or "that tmux name refers to a different session",
         )
 
@@ -315,6 +323,7 @@ def persist_adoption(
         return AdoptPersistResult(
             outcome=claim.outcome,
             session_uuid=claim.session_uuid,
+            epoch=epoch,
             detail=claim.detail,
         )
 
@@ -333,4 +342,5 @@ def persist_adoption(
         working_dir=working_dir,
         project_id=project_id,
         project_attribution=attribution,
+        epoch=epoch,
     )

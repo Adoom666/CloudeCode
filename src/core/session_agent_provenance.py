@@ -43,6 +43,7 @@ from typing import Optional
 import structlog
 
 from src.core.db_models import (
+    SESSION_FAMILY_SOURCE_FINGERPRINT,
     SESSION_FAMILY_SOURCE_LAUNCHED,
     SESSION_FAMILY_SOURCE_NOT_LAUNCHED,
 )
@@ -136,3 +137,82 @@ def stored_launch_for(
         agent_type=dict(row).get("agent_type"),
         from_fingerprint=False,
     )
+
+
+def persist_fingerprint_family(
+    conn: sqlite3.Connection,
+    *,
+    session_uuid: str,
+    agent_family: str,
+) -> bool:
+    """Write a scrollback-fingerprinted family onto one row, once.
+
+    Description: the write half of this module's contract. A
+      fingerprint scan is a GUESS, so it is only ever allowed to fill a
+      row that carries no fact yet - never to overwrite one.
+      ``agent_type IS NULL/'' AND agent_family IS NULL/''`` catches an
+      unresolved row; ``agent_family_source NOT IN
+      DEFINITE_LAUNCH_SOURCES`` catches the one case those two columns
+      cannot: a deliberately bare shell (``not_launched``), where
+      ``agent_type`` is also NULL but the NULL is itself a recorded
+      fact, not an absence of one. All three conditions live in the
+      single UPDATE's WHERE clause rather than a SELECT-then-UPDATE, so
+      there is no window for a launch to land between the read and the
+      write.
+
+      IDEMPOTENT FOR FREE. The first successful write sets
+      ``agent_family`` to a non-blank value, which the same WHERE clause
+      then excludes - so calling this again with the same (or a
+      different) fingerprint result on an already-written row is a
+      guaranteed no-op, not a re-derivation of one.
+
+      A fingerprint scan that found nothing must never reach this
+      function at all - the caller only calls it with a resolved family
+      name, never with ``None``, and this rejects a blank one as a
+      defensive backstop rather than silently inventing "unknown" as a
+      value.
+    Inputs: conn (sqlite3.Connection) - caller owns the transaction.
+      session_uuid (str) - the row's external identity, the one piece of
+      it an adoption always has in hand.
+      agent_family (str) - a resolved family name (e.g. ``"claude"``),
+      never a raw fingerprint token and never blank.
+    Output: bool - True iff a row was actually written. False for a
+      missing session_uuid/agent_family, a row that does not exist, a
+      row that already carries a fact or a prior fingerprint, or a
+      sqlite3.Error - every one of those is a no-op, not a raised
+      exception, so a datastore hiccup here can never break the adopt
+      or listing path that called it.
+    Example:
+        persist_fingerprint_family(conn, session_uuid="abc-123",
+                                    agent_family="claude")
+    """
+    if not session_uuid or not agent_family:
+        return False
+    placeholders = ", ".join("?" for _ in DEFINITE_LAUNCH_SOURCES)
+    try:
+        cursor = conn.execute(
+            "UPDATE sessions SET agent_family = ?, agent_family_source = ? "
+            "WHERE session_uuid = ? "
+            "AND (agent_type IS NULL OR agent_type = '') "
+            "AND (agent_family IS NULL OR agent_family = '') "
+            f"AND agent_family_source NOT IN ({placeholders})",
+            (
+                agent_family,
+                SESSION_FAMILY_SOURCE_FINGERPRINT,
+                session_uuid,
+                *DEFINITE_LAUNCH_SOURCES,
+            ),
+        )
+    except sqlite3.Error as exc:
+        # A datastore problem here is not a statement about the session
+        # and must never break the adopt/listing call that triggered
+        # this write - see the module docstring's three-outcome table.
+        logger.warning(
+            "fingerprint_family_persist_failed",
+            session_uuid=session_uuid,
+            agent_family=agent_family,
+            error=str(exc),
+            note="best-effort write; the caller's own operation is unaffected",
+        )
+        return False
+    return cursor.rowcount > 0

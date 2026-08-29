@@ -236,11 +236,15 @@ await test('the row RENDERS the label, while data-name stays the tmux handle', (
     assert.equal(m[1], HANDLE);
 });
 
-await test('a row with NO label still renders exactly what it always did', () => {
+await test('a row with NO label still renders the derived display name', () => {
     const { lp, container } = harness();
     const html = render(lp, container, [session(null)]);
-    // Outcome 2 of the resolver: the cloude_-stripped handle.
-    assert.equal(renderedName(html), 'client_acme_v2_1_prod_rate');
+    // Outcome 2 of the resolver: the cloude_-stripped handle, with
+    // underscores turned back into spaces - mirroring the server's
+    // label_from_tmux_name, so this reads the same as a row whose title
+    // was backfilled from the same tmux name. See
+    // tests/test_label_derivation_parity.node.mjs.
+    assert.equal(renderedName(html), 'client acme v2 1 prod rate');
 });
 
 // =====================================================================

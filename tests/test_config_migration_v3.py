@@ -96,8 +96,12 @@ def test_v2_to_v3_never_changes_a_wrapper_id():
 
 
 def test_v2_to_v3_preserves_every_other_wrapper_field_verbatim():
+    # The STEP, not the whole chain. A later step is allowed to change a
+    # field this one must leave alone: v4 -> v5 repairs a wrapper script
+    # that never forwards "$@". Running the chain here would make this
+    # test fail for a change it is not about.
     before = _live_v2_config()
-    after, _ = migrate_config_dict(before, True, True)
+    after = _step_v2_to_v3(before)
     for old, new in zip(before["agents"]["wrappers"], after["agents"]["wrappers"]):
         for key, value in old.items():
             assert new[key] == value, key

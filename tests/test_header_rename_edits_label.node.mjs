@@ -244,7 +244,9 @@ await test('a session with NO label cannot have a handle promoted into one', asy
     // stored label the user never typed.
     h.terminal._enterHeaderRename();
     const input = h.document.getElementById('header-rename-input');
-    assert.equal(input.value, 'client_acme_v2_1_prod_rate');
+    // Underscores render as spaces here too, mirroring the server's
+    // label_from_tmux_name - see tests/test_label_derivation_parity.node.mjs.
+    assert.equal(input.value, 'client acme v2 1 prod rate');
     input.dispatchEvent('keydown', { key: 'Enter' });
     await Promise.resolve();
     await Promise.resolve();

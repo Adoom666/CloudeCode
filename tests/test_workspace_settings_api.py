@@ -313,9 +313,12 @@ def test_no_config_version_bump_accompanies_this_feature(client, config_path):
 
     A bump with no step is a lie about what a config has been through.
     """
-    from src.core.config_migration import CURRENT_CONFIG_VERSION
-
-    assert CURRENT_CONFIG_VERSION == 4
+    # Deliberately NOT pinned to a literal version. The invariant this
+    # test owns is that PATCHing settings writes no ``config_version`` at
+    # all; the global's current value belongs to the migration chain and
+    # moves whenever an unrelated step is added (v5 repairs a wrapper
+    # that never forwarded "$@"). Asserting the literal here made an
+    # unrelated migration fail this file.
     client.patch(
         "/api/v1/config/settings", json={"workspace": {"env": {"A": "1"}}}
     )

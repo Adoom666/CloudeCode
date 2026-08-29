@@ -118,8 +118,10 @@ mutate "a failed attribution fetch is silently ignored - sessions render as if a
 
 mutate "a session missing from the attribution map is silently skipped instead of flagged" \
   "client/js/launchpad.js" \
-  "            const rec = this.sessionAttribution.get(s.name);
-            if (!rec) {||=>||            const rec = this.sessionAttribution.get(s.name) || {project_attribution: 'none', project_id: null};
+  "                rec = this.sessionAttribution.get(s.name) || null;
+            }
+            if (!rec) {||=>||                rec = this.sessionAttribution.get(s.name) || {project_attribution: 'none', project_id: null};
+            }
             if (false) {"
 
 echo "--- BLOCK 5: an attribution row with no id must never be guessed onto a project ---"

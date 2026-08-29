@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 
 import structlog
 
+from src.core.db_models import DEFAULT_TMUX_SOCKET
 from src.core.session_activity import WORKING_HEARTBEAT_TIMEOUT_SECONDS
 from src.core.session_status import (
     STATUS_DEAD,
@@ -118,24 +119,73 @@ def restore_state(
     return (state, RESTORE_OK)
 
 
-def write_state(conn, tmux_name: str, state: str, *, now: Optional[str] = None) -> bool:
-    """Stamp a session's activity state onto its real-instance row.
+def write_state(
+    conn,
+    tmux_name: str,
+    state: str,
+    tmux_created_epoch: Optional[int],
+    *,
+    tmux_socket: str = DEFAULT_TMUX_SOCKET,
+    now: Optional[str] = None,
+) -> bool:
+    """Stamp a session's activity state onto its exact tmux INSTANCE row.
 
-    Description: keyed by tmux name and restricted to rows with an epoch,
-      so a ``/clear`` conversation row (epoch NULL) can never receive a
-      status that belongs to the session. Best-effort by design: a status
-      write must never be able to fail an operation the user asked for.
+    Description: keyed on the FULL identity triple - ``(tmux_socket,
+      tmux_name, tmux_created_epoch)``, the same triple
+      ``ux_sessions_tmux_instance`` enforces uniqueness on - never on
+      ``tmux_name`` alone. A tmux name is reused the moment its owner
+      dies and a new session takes the same name, so two rows can
+      legitimately share one name at once (a stopped conversation and
+      its live successor). An UPDATE scoped to the name alone would
+      stamp BOTH rows with the live session's status on every write,
+      which is precisely how a stopped row ended up wearing a running
+      session's activity state.
+
+      ``tmux_created_epoch`` IS THEREFORE REQUIRED, not merely
+      preferred. A caller with no epoch to hand has no reliable way to
+      say which of possibly-several same-named rows is the live one,
+      and guessing - e.g. "the newest" - is exactly the name-only
+      behaviour this function exists to replace, just with a smaller
+      blast radius. So ``tmux_created_epoch=None`` is refused outright:
+      a named CANNOT-DETERMINE, logged and returned as ``False``, never
+      a silent fall-through to a name-scoped UPDATE. Best-effort by
+      design otherwise: a status write must never be able to fail an
+      operation the user asked for.
     Inputs: conn (sqlite3.Connection). tmux_name (str). state (str).
+      tmux_created_epoch (int | None) - ``#{session_created}`` for the
+      exact instance being written; ``None`` refuses the write.
+      tmux_socket (str) - defaults to this app's tmux socket.
       now (str | None) - ISO override for tests.
-    Output: bool - whether a row was updated.
+    Output: bool - whether a row was updated. ``False`` covers both "no
+      row carries that instance" and "no epoch was supplied" - both are
+      "nothing was written", which is what the caller needs to know.
     """
     if not tmux_name or not state:
+        return False
+    if tmux_created_epoch is None:
+        logger.debug(
+            "activity_state_write_no_epoch",
+            tmux_name=tmux_name,
+            note=(
+                "no tmux_created_epoch was supplied, so the exact "
+                "instance cannot be identified. Refusing the write "
+                "rather than falling back to a name-scoped UPDATE that "
+                "could stamp a dead session's row with a live one's "
+                "status"
+            ),
+        )
         return False
     try:
         cur = conn.execute(
             "UPDATE sessions SET activity_state = ?, activity_state_at = ? "
-            "WHERE tmux_name = ? AND tmux_created_epoch IS NOT NULL",
-            (state, now or utc_now_iso(), tmux_name),
+            "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch = ?",
+            (
+                state,
+                now or utc_now_iso(),
+                tmux_socket,
+                tmux_name,
+                int(tmux_created_epoch),
+            ),
         )
         return bool(cur.rowcount)
     except Exception as exc:  # noqa: BLE001 - see docstring

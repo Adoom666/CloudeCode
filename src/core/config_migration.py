@@ -62,6 +62,7 @@ from src.core.config_migration_steps import (
     _step_v1_to_v2,
     _step_v2_to_v3,
     _step_v3_to_v4,
+    _step_v4_to_v5,
     build_seed_wrappers,
     probe_shell_function,
 )
@@ -94,7 +95,7 @@ logger = structlog.get_logger()
 #           list of its own, so without this step an existing install
 #           would never gain the command. Touches no wrapper and no
 #           ``id``.
-CURRENT_CONFIG_VERSION = 4
+CURRENT_CONFIG_VERSION = 5
 
 # Thin, migration-seeded wrapper scripts. Deliberately NOT the real
 # multi-line cld/cldor function bodies (those live only in the user's own
@@ -156,6 +157,8 @@ def migrate_config_dict(
             working = _step_v2_to_v3(working)
         if existing_version < 4:
             working = _step_v3_to_v4(working)
+        if existing_version < 5:
+            working = _step_v4_to_v5(working)
 
         new_data = dict(working)
         new_data["config_version"] = CURRENT_CONFIG_VERSION

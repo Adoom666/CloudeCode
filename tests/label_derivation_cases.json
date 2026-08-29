@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Shared pinning table for the tmux-name -> display-name derivation.",
+    "Consumed by BOTH tests/test_label_derivation_parity.py (asserts",
+    "src.core.session_label.label_from_tmux_name) and",
+    "tests/test_label_derivation_parity.node.mjs (asserts",
+    "SessionLabel.stripAppPrefix in client/js/session-label.js), so the",
+    "two implementations of 'strip the cloude_ prefix, then replace",
+    "underscores with spaces' cannot silently drift apart again - see",
+    "hazard: one conversation rendered as 'Media_Compression' on one",
+    "surface and 'Media Compression' on another.",
+    "Scoped to NON-DEGENERATE names only (something survives the prefix",
+    "strip and the underscore replacement). The one deliberate,",
+    "documented non-mirror - a name that is ONLY the prefix - is tested",
+    "separately in each language's own suite, because the two functions",
+    "disagree there on purpose: label_from_tmux_name falls back to the",
+    "raw tmux name (a stored title column may never be blank);",
+    "stripAppPrefix returns null (outcome 3 of the three-outcome",
+    "display rule - 'this session cannot be named')."
+  ],
+  "cases": [
+    {"tmux_name": "cloude_Media", "expected": "Media"},
+    {"tmux_name": "Media_Compression", "expected": "Media Compression"},
+    {"tmux_name": "cloude_Media_Compression", "expected": "Media Compression"},
+    {"tmux_name": "cloude_my_long_thing", "expected": "my long thing"},
+    {"tmux_name": "plain", "expected": "plain"},
+    {"tmux_name": "cloude_Archive_Sweep", "expected": "Archive Sweep"},
+    {"tmux_name": "a_b_c_d", "expected": "a b c d"},
+    {"tmux_name": "cloude_api", "expected": "api"},
+    {"tmux_name": "someones-shell", "expected": "someones-shell"}
+  ]
+}

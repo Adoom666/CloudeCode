@@ -182,13 +182,17 @@ await test('the row RENDERS the label, while data-name stays the tmux handle', (
     assert.equal(rowAttr(html, 'data-name'), HANDLE);
 });
 
-await test('a row with NO label still renders exactly what it always did', () => {
+await test('a row with NO label still renders the derived display name', () => {
     const { window } = harness();
     const html = window.SessionSidebarRows.rowHtml(row(null), 'cozy');
-    // Outcome 2 of the resolver: the cloude_-stripped handle. A session
-    // with no label is not an edge case, it is every session that
-    // existed before labels did.
-    assert.equal(renderedName(html), 'Media_Compression_v1_2_final_5');
+    // Outcome 2 of the resolver: the cloude_-stripped handle, with
+    // underscores turned back into spaces - mirroring the server's
+    // label_from_tmux_name. A session with no label is not an edge
+    // case, it is every session that existed before labels did, and it
+    // must read the same here as it does on a surface whose title was
+    // backfilled from the same tmux name. See
+    // tests/test_label_derivation_parity.node.mjs.
+    assert.equal(renderedName(html), 'Media Compression v1 2 final 5');
     assert.equal(rowAttr(html, 'data-name'), HANDLE);
 });
 

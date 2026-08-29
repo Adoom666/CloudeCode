@@ -317,9 +317,32 @@ class SessionManager:
         # returns 200, and resolves to nothing - measured, and from the
         # agent's side indistinguishable from success.
         self._hook_tmux_names: dict[str, str] = {}
+        # session_id -> tmux_created_epoch, cached the moment a create or
+        # adopt persist step resolves it (see ``create_session`` and
+        # ``adopt_external_session``). This is what lets the HOOK path
+        # scope its durable activity write to the exact tmux INSTANCE
+        # (tmux_socket, tmux_name, tmux_created_epoch) without a tmux
+        # probe on every single hook event - a live probe per hook is
+        # what ``_persist_activity_state`` already refuses to pay for. A
+        # miss here (pre-restart, or the create/adopt step never resolved
+        # an epoch) means the hook-time write is refused, a named
+        # CANNOT-DETERMINE, and the state is left to the listing-time
+        # settled write instead, which always has a fresh epoch off the
+        # tmux probe it already ran. NOT persisted across restarts -
+        # unlike ``_hook_tmux_names`` this needs no durability, because
+        # the very next listing poll re-derives it from live tmux. A
+        # stale entry is harmless: ``write_state`` scopes its UPDATE to
+        # the full triple, so a wrong cached epoch matches zero rows
+        # (rowcount 0, a clean no-op) rather than the wrong row.
+        self._instance_epochs: dict[str, int] = {}
         # tmux name -> last activity state written, so the listing path
         # writes only on CHANGE. See _persist_settled_activity_state.
-        self._last_persisted_activity: dict[str, str] = {}
+        # Keyed by (tmux_name, tmux_created_epoch), not name alone: two
+        # instances can share a name, and a "no change" read on the OLD
+        # instance's last-written state must never suppress a genuinely
+        # new write for a DIFFERENT (new) instance that happens to start
+        # in the same state.
+        self._last_persisted_activity: dict[tuple, str] = {}
         # cloudecode session id -> the claude uuid whose SessionEnd we
         # most recently saw. This is the ONLY thing that distinguishes
         # Claude's /branch from its /fork: both arrive as source="fork",
@@ -664,6 +687,7 @@ class SessionManager:
         for sid in dead:
             self._hook_tokens.pop(sid, None)
             self._hook_tmux_names.pop(sid, None)
+            self._instance_epochs.pop(sid, None)
         logger.info("hook_tokens_gc", dropped=len(dead))
         self._persist_hook_tokens()
 
@@ -2133,7 +2157,10 @@ class SessionManager:
         self._persist_activity_state(session_id, tmux_name)
 
     def _persist_settled_activity_state(
-        self, tmux_name: Optional[str], state: Optional[str]
+        self,
+        tmux_name: Optional[str],
+        state: Optional[str],
+        tmux_created_epoch: Optional[int],
     ) -> None:
         """Stamp a display-computed activity state, only when it changed.
 
@@ -2146,15 +2173,30 @@ class SessionManager:
           and it would also keep refreshing `activity_state_at` on a row
           nothing had happened to - which would defeat the staleness
           check, since a stale value would look perpetually fresh. The
-          guard is therefore correctness as much as cost.
+          guard is therefore correctness as much as cost. It is keyed on
+          ``(tmux_name, tmux_created_epoch)``, not the name alone, so a
+          dead instance's last-written state can never suppress a
+          genuinely new write for a different, same-named live instance.
+
+          ``tmux_created_epoch`` comes from the SAME tmux probe the
+          caller already ran to get ``state`` (the bulk status map -
+          see ``_build_tmux_status_map`` / ``list_pane_status_all``), so
+          scoping the write to the exact instance costs nothing extra
+          here. A ``None`` epoch (an unreadable field, never real tmux)
+          is a CANNOT-DETERMINE: ``write_state`` refuses the write and
+          this function logs nothing further - the refusal is already
+          logged there.
         Inputs: tmux_name (str | None). state (str | None).
+          tmux_created_epoch (int | None) - the instance's
+          ``#{session_created}``; ``None`` refuses the write.
         Output: None.
         """
         from src.core.session_status import STATUS_UNKNOWN
 
         if not tmux_name or not state or state == STATUS_UNKNOWN:
             return
-        if self._last_persisted_activity.get(tmux_name) == state:
+        cache_key = (tmux_name, tmux_created_epoch)
+        if self._last_persisted_activity.get(cache_key) == state:
             return
         conn = None
         try:
@@ -2165,8 +2207,14 @@ class SessionManager:
             if conn is None:
                 return
             with transaction(conn):
-                if write_state(conn, tmux_name, state):
-                    self._last_persisted_activity[tmux_name] = state
+                if write_state(
+                    conn,
+                    tmux_name,
+                    state,
+                    tmux_created_epoch,
+                    tmux_socket=self._tmux_socket_name(),
+                ):
+                    self._last_persisted_activity[cache_key] = state
         except Exception as exc:  # noqa: BLE001 - never break a listing
             logger.debug("settled_activity_persist_failed", error=str(exc))
         finally:
@@ -2232,6 +2280,19 @@ class SessionManager:
           never be able to fail hook delivery. It writes the state the
           tracker just computed, so the durable value and the live value
           cannot disagree.
+
+          SCOPED TO THE EXACT TMUX INSTANCE via ``self._instance_epochs``
+          (populated by the create/adopt persist steps - see that dict's
+          docstring), never to ``tmux_name`` alone: a name is reusable,
+          so an unscoped write would land on every row sharing this
+          session's name, including a dead one. A cache miss (pre-restart,
+          or the epoch was never resolved) is a genuine CANNOT-DETERMINE,
+          not a licence to guess - ``write_state`` refuses the write and
+          logs it, and the listing-time settled write (which always has a
+          fresh, probe-sourced epoch) is what re-establishes durability
+          instead. Paying for a tmux probe on every hook event, just to
+          avoid that gap, is exactly the cost this function already
+          refuses (see the STATUS_UNKNOWN note below).
         Inputs: session_id (str). tmux_name (str | None).
         Output: None.
         """
@@ -2270,7 +2331,13 @@ class SessionManager:
             from src.core.db import transaction
 
             with transaction(conn):
-                write_state(conn, tmux_name, state)
+                write_state(
+                    conn,
+                    tmux_name,
+                    state,
+                    self._instance_epochs.get(session_id),
+                    tmux_socket=self._tmux_socket_name(),
+                )
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.debug("activity_state_persist_failed", error=str(exc))
         finally:
@@ -2790,6 +2857,12 @@ class SessionManager:
                     agent_launched=bool(auto_start_claude),
                 )
                 create_persist_outcome = persisted.outcome
+                if persisted.epoch is not None:
+                    # Cache the resolved instance epoch against THIS
+                    # app-level session_id so the hook path can scope its
+                    # durable activity write to the exact instance - see
+                    # ``_instance_epochs`` and ``_persist_activity_state``.
+                    self._instance_epochs[session_id] = persisted.epoch
                 if not persisted.recorded:
                     logger.warning(
                         "session_created_not_attributed",
@@ -3738,7 +3811,9 @@ class SessionManager:
             # to guess, so without this line a session's row keeps the
             # `working` written mid-turn and never settles to idle.
             self._persist_settled_activity_state(
-                tmux_session_name, activity_status
+                tmux_session_name,
+                activity_status,
+                row.get("created_at_epoch") if row else None,
             )
 
         # fix/adopted-session-pid - pid is resolved LIVE off the same bulk
@@ -4253,6 +4328,58 @@ class SessionManager:
                 conn.close()
             except Exception:  # noqa: BLE001 - close failure is not a verdict
                 pass
+
+    def _persist_fingerprint_family(
+        self, *, session_uuid: str, agent_family: str
+    ) -> None:
+        """Best-effort wrapper around ``session_agent_provenance.persist_fingerprint_family``.
+
+        Description: opens its own connection and transaction rather
+          than reusing ``persist_adoption``'s, because by the time this
+          runs (after the scrollback capture) that connection is long
+          closed. Exists purely so the call site in
+          ``adopt_external_session`` reads as one line: every failure
+          mode - no datastore, a write that matched zero rows, a raised
+          sqlite3.Error - is swallowed here, logged at debug, and never
+          reaches the caller. An adoption must succeed for the user
+          whether or not this decoration lands.
+        Inputs: session_uuid (str) - the just-claimed row's identity.
+          agent_family (str) - a resolved family name, never a raw
+          fingerprint token.
+        Output: None.
+        Example:
+          self._persist_fingerprint_family(
+              session_uuid="abc-123", agent_family="claude")
+        """
+        conn = None
+        try:
+            from src.core.db import transaction
+            from src.core.session_agent_provenance import (
+                persist_fingerprint_family,
+            )
+
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return
+            with transaction(conn):
+                persist_fingerprint_family(
+                    conn,
+                    session_uuid=session_uuid,
+                    agent_family=agent_family,
+                )
+        except Exception as exc:  # noqa: BLE001 - decoration must not break adopt
+            logger.debug(
+                "adopt_fingerprint_family_persist_threw",
+                session_uuid=session_uuid,
+                agent_family=agent_family,
+                error=str(exc),
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 - close failure is not a verdict
+                    pass
 
     def persist_creation(
         self,
@@ -5191,6 +5318,12 @@ class SessionManager:
             raise AdoptTargetGoneError(
                 adopt_persist.detail or "that session is no longer there"
             )
+        if adopt_persist.epoch is not None:
+            # Same cache as the create path - see ``_instance_epochs`` -
+            # keyed on ``adopted_id`` because that is the session_id the
+            # hook token (and every hook POST) is minted and looked up
+            # under for an adopted session.
+            self._instance_epochs[adopted_id] = adopt_persist.epoch
         if not adopt_persist.persisted:
             logger.warning(
                 "adopt_not_persisted",
@@ -5294,6 +5427,37 @@ class SessionManager:
             session=name,
             agent_type=detected_agent_type,
         )
+
+        # Persist the fingerprint onto the row this adoption just claimed
+        # (``adopt_persist.session_uuid``, when the claim above actually
+        # landed one). Without this, the answer computed right above is
+        # thrown away: it decorates THIS response and nothing else ever
+        # sees it, so every OTHER surface that reads straight off the
+        # ``sessions`` table - Projects, ``/sessions/records`` - renders
+        # "unknown family" forever for a session the app can plainly
+        # identify. ``resolve_family_for_display`` is the same resolver
+        # every display path already uses, so the persisted value cannot
+        # disagree with what a live view of this same session shows.
+        # ``from_fingerprint=True`` keeps the write honest: a fingerprint
+        # match is stored with ``agent_family_source='fingerprint'``, the
+        # tilde-guess convention the client already renders (see
+        # SESSION_FAMILY_SOURCE_FINGERPRINT's docstring), never as
+        # ``'wrapper'``/``'launched'``. A scan that found nothing
+        # (``detected_agent_type`` or the resolved family is None) writes
+        # nothing at all - see ``persist_fingerprint_family``'s docstring
+        # for the exact no-overwrite conditions. Best-effort: any failure
+        # here is logged and swallowed, never raised into the adopt path.
+        if detected_agent_type and adopt_persist.session_uuid:
+            display_family, _display_source = resolve_family_for_display(
+                detected_agent_type,
+                _configured_wrappers(),
+                from_fingerprint=True,
+            )
+            if display_family is not None:
+                self._persist_fingerprint_family(
+                    session_uuid=adopt_persist.session_uuid,
+                    agent_family=display_family.name,
+                )
 
         # Step 5 - register.
         # v0.7.0 - project-scoped theme lookup: ``<working_dir>/.cc.theme``
