@@ -1,0 +1,420 @@
+/* =====================================================================
+ * ARCHIVE NAVIGATION RAIL - hosts, corpora, projects, unattributed.
+ *
+ * Load AFTER archive-outcomes.css: a failed branch renders an outcome
+ * block INSIDE this tree, and the outcome vocabulary must already be in
+ * effect when it does.
+ *
+ * TWO THINGS THIS FILE MAKES VISIBLE ON PURPOSE.
+ *
+ *   1. THE UNATTRIBUTED NODE. Five transcripts in corpus 2 belong to no
+ *      project and are invisible from the project tree by construction.
+ *      They get their own row, and that row is styled to be NOTICED -
+ *      dashed leading edge and a permanently-visible note - because the
+ *      entire failure mode is that nobody sees it.
+ *
+ *   2. THE FILTER'S HONESTY LINE. The filter searches rows already
+ *      fetched, never the corpus. Its explanatory line is not a
+ *      dismissible hint and not a tooltip; it sits in the layout and
+ *      takes space, because a filter that reads like a search of the
+ *      archive is a false green with a text box on it.
+ *
+ * Every colour is an existing theme token. No border-radius carries
+ * meaning anywhere in the archive UI - see archive-outcomes.css.
+ * ===================================================================== */
+
+.archive-nav {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100%;
+    overflow-y: auto;
+    padding: 0.5rem;
+    background: var(--color-bg-page);
+    border-right: 1px solid var(--color-border);
+}
+
+.archive-nav__filter {
+    font: inherit;
+    font-size: 0.85rem;
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    /* radius-md is the app's default (39 uses in styles.css). The archive
+     * used to give a handful of controls radius-sm and everything else
+     * none, so in the 20 themes with a non-zero radius only those few
+     * looked rounded - the screen was inconsistent with itself. */
+    border-radius: var(--radius-md);
+}
+
+.archive-nav__filter:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.archive-nav__filter-note {
+    margin: 6px 0 8px 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.archive-nav__filter-note:empty {
+    /* Collapses when the filter is inactive so it costs no space, but it
+     * is a real block the moment there is something to disclose. */
+    display: none;
+}
+
+.archive-nav__level,
+.archive-nav__children {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.archive-nav__children {
+    padding-left: 0.85rem;
+    border-left: 1px solid var(--color-border-subtle);
+}
+
+/* .recent-session-row's shape - 8px 12px, gap 8px, radius-md - not a
+ * fourth set of numbers invented for this rail. */
+.archive-nav__row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    font: inherit;
+    text-align: left;
+    padding: 8px 12px;
+    background: transparent;
+    color: var(--color-fg);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-nav__row:hover,
+.archive-nav__row:focus-visible {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+/* Written by the archive JS on the keyboard-selected node. Selection is
+ * not hover and both can be true at once, so the difference is GEOMETRY
+ * - a 3px accent rail the hover state does not have - and survives the
+ * three themes that zero every radius token. */
+.archive-nav__row[data-selected="true"] {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+/* TRUNCATE, NEVER WRAP. `word-break: break-all` let a slug like
+ * -Users-jsugamele-Development-Assistants-Infrastructure wrap to four
+ * lines, which pushed every sibling down the rail and made the tree
+ * unscannable at a glance. The label now clips to one line with an
+ * ellipsis and the full text lives in the row's `title` attribute, so
+ * hovering reveals it and nothing is destroyed. The panes are resizable,
+ * so a person who wants more of the name can have it. */
+.archive-nav__label {
+    font-size: 0.9rem;
+    display: block;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The row is a column flex container, so its children must be told they
+ * may shrink below their content width or the ellipsis never engages. */
+.archive-nav__row > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* The characters the fuzzy filter matched. Underline as well as colour,
+ * so the highlight survives a theme that flattens the accent and is not
+ * carried by colour alone. */
+.archive-nav__hit {
+    background: transparent;
+    color: var(--color-accent);
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+/* PROJECT ROW DENSITY. The base row is a column flex (label above
+ * count), and adding host badges made every project row THREE lines
+ * tall - 77 of those is a scroll nobody finishes. Project rows use a
+ * two-row grid instead: the label owns the first line and the badges
+ * share the second with the count. Applied only to project nodes, so
+ * host/corpus/unattributed rows keep the layout they already had. */
+.archive-nav__node--project > .archive-nav__row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "label label"
+        "hosts count";
+    align-items: center;
+    column-gap: 6px;
+    padding: 5px 12px;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__label {
+    grid-area: label;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__hosts {
+    grid-area: hosts;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__count {
+    grid-area: count;
+    justify-self: end;
+}
+
+/* HOST BADGES. The machine used to be a level you clicked through; it is
+ * now a badge on the node. A project on two machines gets two badges and
+ * an accent border, because "this exists in both places" is the fact the
+ * merge would otherwise have hidden. */
+.archive-nav__hosts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.archive-nav__host-badge {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    padding: 0 5px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    background: var(--color-bg-subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 11ch;
+}
+
+.archive-nav__hosts[data-multi-host="true"] .archive-nav__host-badge {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+/* THE VIEW BAR IS GONE. The "All projects" / "By machine" buttons and
+ * the machine dropdown were removed from the rail at the owner's
+ * instruction ("i dont think we need the button and dropdown on the left
+ * column"), so their rules are removed with them rather than left behind
+ * as styling for markup nobody builds. The by-machine tree itself still
+ * exists and is still reachable programmatically; see archive-nav.js. */
+.archive-nav__count {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+}
+
+/* ---- The unattributed node ----------------------------------------
+ * Deliberately louder than a project row. Its failure mode is being
+ * overlooked, so it is given a leading rail, a dashed edge nothing else
+ * in this rail uses, and prose that is always on screen rather than in a
+ * title attribute. */
+/* ITEM 37 (styles.css): a `border-left` of a different width and colour
+ * from the ring beside it is joined by a diagonal miter drawn along the
+ * corner arc under `border-radius` - the two-tone corner smear. A solid
+ * rail becomes `box-shadow: inset`; a DASHED one cannot, so it becomes a
+ * clipped background layer instead. The dash is kept because it is what
+ * separates "unattributed" from the solid rails elsewhere without
+ * relying on colour. */
+.archive-nav__node--unattributed > .archive-nav__row {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        var(--color-warning) 0 4px,
+        transparent 4px 8px);
+    background-repeat: no-repeat;
+    background-size: 3px 100%;
+    background-position: left top;
+    padding-left: 12px;
+}
+
+.archive-nav__node--unattributed .archive-nav__label {
+    font-weight: 700;
+}
+
+.archive-nav__note {
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-warning);
+}
+
+/* An ANSWERED note is not a warning. The unattributed node is shown even
+ * when its bucket is fully understood, because these transcripts are
+ * invisible from the project tree by construction and the rail is the
+ * only place they appear at all. Painting that explanation in the warning
+ * colour would keep flagging a question that has an answer, and would
+ * dilute the colour on the notes that are genuinely open. */
+.archive-nav__note--answered {
+    color: var(--color-text-secondary, var(--color-text-muted, inherit));
+    font-style: italic;
+}
+
+/* ---- Host and corpus rows -----------------------------------------
+ * Weight and case, not colour, separate the three depths, so the tree's
+ * structure survives a monochrome theme. */
+.archive-nav__node--host > .archive-nav__row .archive-nav__label {
+    font-weight: 700;
+    text-transform: none;
+    letter-spacing: 0.02em;
+}
+
+.archive-nav__node--corpus > .archive-nav__row .archive-nav__label {
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.archive-nav__node--project > .archive-nav__row .archive-nav__label {
+    font-weight: 400;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.archive-nav__loading {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--color-fg-muted);
+}
+
+/* A filter that matched nothing is NOT an outcome block: nothing was
+ * measured, the person's own filter excluded everything. It is styled as
+ * a note rather than as a finding so it cannot be mistaken for a server
+ * verdict. */
+.archive-nav__filter-empty {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+    box-shadow: inset 2px 0 0 var(--color-border-subtle);
+}
+
+/* A failed branch renders its reason where the person clicked, and the
+ * rest of the tree stays usable. It is never allowed to collapse into a
+ * leaf: an empty child slot would claim the node has no children. */
+.archive-nav__outcome {
+    display: block;
+    padding: 0.2rem 0;
+}
+
+.archive-nav__transport-reason {
+    margin: 6px 0 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--color-danger-strong);
+}
+
+/* ---- Narrow viewport ----------------------------------------------
+ * Below the one-pane breakpoint the rail is the whole screen rather
+ * than a column, so it loses its dividing border and takes the full
+ * width. Nothing is hidden: every row and every note that renders at
+ * 1400px also renders at 375px. */
+@media (max-width: 900px) {
+    .archive-nav {
+        width: 100%;
+        border-right: none;
+    }
+
+    .archive-nav__children {
+        padding-left: 0.6rem;
+    }
+
+    .archive-nav__row {
+        /* A larger hit target, because this is now a touch surface. */
+        padding: 12px 12px;
+    }
+}
+
+/* ---- The order control ---------------------------------------------
+ * A real <select>, styled to match .archive-nav__filter above rather
+ * than restyled from scratch: same elevated background, same border,
+ * same radius token, so it reads as one control family in all 23
+ * themes. Three of those themes zero every radius token, which is why
+ * nothing here is distinguished by its corners. */
+.archive-nav__order {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 0 0;
+}
+
+.archive-nav__order-label {
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    /* Never wraps and never shrinks: it is two syllables, and a label
+     * that reflows moves the control under it on every repaint. */
+    flex: 0 0 auto;
+}
+
+.archive-nav__order-select {
+    font: inherit;
+    font-size: 0.85rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.archive-nav__order-select:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+/* ---- The date on a project row -------------------------------------
+ * The value the default order is built on, shown so the ordering can be
+ * read rather than taken on trust. */
+.archive-nav__when {
+    font-size: 0.75rem;
+    color: var(--color-fg-muted);
+    /* A date is fixed-width in this format; letting it shrink would
+     * truncate the year, which is the part that distinguishes 2025 work
+     * from 2026 work. */
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* NOT A WARNING COLOUR, and not colour-only. "undated" and "no date" are
+ * findings, not faults, so they are marked by WORDS - the cell says
+ * which one it is - and merely de-emphasised here. Colour alone would
+ * carry nothing in a monochrome theme. */
+.archive-nav__when--unknown {
+    font-style: italic;
+    opacity: 0.85;
+}
+
+/* ---- Rows the active order cannot place ----------------------------
+ * These sit at the END of the list, and the end of a most-recent-first
+ * list IMPLIES a date. This marker is the only thing that stops a row we
+ * could not place from reading as the oldest project in the archive, so
+ * it is words on the row and not a shade of grey. */
+.archive-nav__unsorted {
+    display: block;
+    font-size: 0.72rem;
+    line-height: 1.3;
+    font-style: italic;
+    color: var(--color-fg-muted);
+    /* Truncates rather than wraps: a wrapped note in a 272px rail pushes
+     * every sibling down. The full sentence is in the title attribute. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}

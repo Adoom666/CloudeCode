@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Request, Depends, UploadFile, File
 from typing import List, Optional
 import structlog
 
@@ -14,6 +14,7 @@ from datetime import datetime
 
 from src.models import (
     ForkSessionResponse,
+    RestartSessionResponse,
     LocalModelsResponse,
     Session,
     SessionInfo,
@@ -66,11 +67,16 @@ from src.core.tmux_listing import coerce_listing
 # Imported for its side-effect-free pin: see freeze_startup_version() below.
 from src.core.version import freeze_startup_version, startup_version
 from src.core.agent_family_display import resolve_family_for_display
+from src.core.hook_token_recovery import (
+    RECOVERY_ACCEPTED as HOOK_RECOVERY_ACCEPTED,
+    RECOVERY_UNAVAILABLE as HOOK_RECOVERY_UNAVAILABLE,
+)
 from src.api.auth import require_auth
 from src.api.websocket import connection_manager
 from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
+from src.core import claude_title_sync_apply
 from src.core import debug_trace
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
@@ -394,6 +400,225 @@ async def fork_session(request: Request, session_name: str):
     )
 
 
+@router.post(
+    "/sessions/{session_uuid}/restart",
+    response_model=RestartSessionResponse,
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def restart_session(request: Request, session_uuid: str):
+    """Bring a STOPPED session back on a new tmux instance, same record.
+
+    Description: the launchpad's RESTART control. It spawns a NEW tmux
+      session - it cannot do anything else, because the old pane is gone
+      and the new one necessarily gets a new ``#{session_created}`` - but
+      it does NOT create a new session record. The existing row is moved
+      onto the new tmux instance in place, so the session keeps its
+      ``sessions.id`` and ``session_uuid`` and, with them, its TITLE, its
+      working directory, its agent and model, its Claude CONVERSATION
+      (continued with a bare ``--resume <uuid>``), its group membership
+      and everything that references it. See
+      src/core/session_restart.py: rebind_instance for why that is safe,
+      and resume_arguments for why the fork flag is gone.
+
+      ONE SESSION, ONE ROW, ONE LIST ENTRY. Inserting a second row was
+      what left an abandoned twin holding the user's title and
+      conversation while the live session wore a copy of the name, which
+      is what doubled the session list on every restart.
+
+      KEYED ON ``session_uuid``, NOT ON THE TMUX NAME. A tmux name is
+      reusable and this app re-mints them; resolving a stopped session by
+      name could match a LIVE session that took the name afterwards.
+
+      FOUR OUTCOMES, and the two middle ones are why this is not a bare
+      create:
+        404  no row with this ``session_uuid`` - could not evaluate.
+        409  the row NAMES a conversation and that conversation is not in
+             the transcript corpus. Nothing is spawned. Resuming it would
+             produce a pane that exits immediately while the row read
+             ``running``, which is how the owner lost a session on
+             2026-09-07.
+        201, ``conversation='resumed'`` - the old conversation continues.
+        201, ``conversation='none_recorded'`` - the row never learned a
+             Claude session uuid. The session still comes back, carrying
+             the name/dir/agent, and the response SAYS it is a new
+             conversation. Never presented as a resume.
+
+      ``row_reused`` is reported separately and is read back from the row
+      itself rather than taken from the create path's own report.
+    Inputs: session_uuid (str) - the stopped row's durable identity.
+    Output: RestartSessionResponse.
+    """
+    from contextlib import closing
+
+    from src.core import session_restart
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    session_manager = request.app.state.session_manager
+    db_path = db_path_for(settings.get_state_dir())
+
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="no datastore yet, so there is no session to restart",
+        )
+
+    def _resolve():
+        """Read the replaced row on one pooled thread."""
+        with closing(connect(db_path, create=False)) as conn:
+            return session_restart.resolve_restart_source(
+                conn, session_uuid=session_uuid
+            )
+
+    try:
+        source = await run_in_threadpool(_resolve)
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if source.outcome == session_restart.RESTART_UNRESOLVED:
+        raise HTTPException(
+            status_code=404, detail=source.detail or "session not found"
+        )
+
+    if source.outcome == session_restart.RESTART_CONVERSATION_MISSING:
+        # REFUSE, LOUDLY, AND SPAWN NOTHING. The row names a conversation
+        # whose transcript is gone, so `claude --resume` would exit on its
+        # first tick and hand tmux a corpse - which this route used to
+        # answer 201 conversation='resumed' over, and rebind_instance had
+        # already stamped `lifecycle='running'` on the row. The owner then
+        # had a session that read running, showed nothing, and could not
+        # be found anywhere (2026-09-07).
+        #
+        # 409, not 500: nothing failed. The server looked, and the thing
+        # being asked for is not there. Starting a BLANK session under the
+        # name of the conversation the user believes is being continued is
+        # the one outcome that must never happen here - it is silent data
+        # loss wearing a familiar title.
+        logger.warning(
+            "restart_refused_conversation_missing",
+            replaced_session_uuid=session_uuid,
+            replaced_session_id=source.parent_id,
+            conversation_row_id=source.conversation_row_id,
+            claude_session_uuid=source.claude_session_uuid,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                source.detail
+                or "the conversation this session names is not on disk"
+            ),
+        )
+
+    resumable = source.outcome == session_restart.RESTART_RESUMABLE
+    label = (source.title or "").strip() or None
+    # THE LABEL AND THE TMUX NAME ARE NOT THE SAME STRING - see the same
+    # comment on the fork route. The label is what a human reads; the tmux
+    # name is also the URL segment and the client router rejects anything
+    # outside /^[A-Za-z0-9_\- ]+$/. A title with a bracket in it would
+    # create fine and then be unreachable.
+    tmux_safe_name = (sanitize_tmux_name(label) or None) if label else None
+
+    logger.info(
+        "api_restart_session_request",
+        replaced_session_uuid=session_uuid,
+        replaced_session_id=source.parent_id,
+        conversation="resumed" if resumable else "none_recorded",
+        conversation_row_id=source.conversation_row_id,
+        label=label,
+    )
+
+    import uuid as _uuid
+
+    try:
+        child = await session_manager.create_session(
+            session_id=f"ses_{_uuid.uuid4().hex[:8]}",
+            working_dir=source.working_dir,
+            project_name=tmux_safe_name,
+            agent_type=source.agent_type,
+            model=source.model,
+            # RESUME ONLY WHEN THERE IS SOMETHING TO RESUME. An empty list
+            # here is the whole difference between the two success
+            # outcomes, and it is derived from a measured column rather
+            # than from a client's claim.
+            agent_extra_args=(
+                session_restart.resume_arguments(source.claude_session_uuid)
+                if resumable else None
+            ),
+            label=label,
+            # ONE SESSION, ONE ROW. The restarted session keeps the row it
+            # already had - see session_restart.rebind_instance. This is
+            # what stops a restart from leaving an abandoned twin behind
+            # and doubling the session list.
+            reuse_session_id=source.parent_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "restart_create_failed",
+            replaced_session_uuid=session_uuid,
+            label=label,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not create the replacement session: {exc}",
+        )
+
+    child_tmux = getattr(child, "tmux_session", None)
+
+    def _verify_reuse():
+        """Did the row actually come back on the new tmux instance?
+
+        Read back INDEPENDENTLY rather than trusting the create path's
+        own report: this asks the row whether it now carries the new
+        tmux name and is running, which is the thing the user cares
+        about, not whether a function said it wrote it.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            row = conn.execute(
+                "SELECT tmux_name, lifecycle FROM sessions WHERE id = ? "
+                "LIMIT 1",
+                (source.parent_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return (
+                row["tmux_name"] == child_tmux
+                and row["lifecycle"] == "running"
+            )
+
+    reused = False
+    detail = source.detail if not resumable else None
+    try:
+        reused = bool(await run_in_threadpool(_verify_reuse))
+    except DatastoreUnreadableError as exc:
+        # THE SESSION EXISTS AND WORKS. Say so, and say we could not
+        # confirm the row was reused - never report this as a failed
+        # restart, and never as a clean success either.
+        note = (
+            f"the session was restarted, but whether it kept its "
+            f"original record could not be confirmed: {exc}"
+        )
+        detail = f"{detail} {note}" if detail else note
+    else:
+        if not reused:
+            note = (
+                "the session was restarted, but it could not keep its "
+                "original record and now has a separate one; it works, "
+                "and it may appear as a second entry"
+            )
+            detail = f"{detail} {note}" if detail else note
+
+    return RestartSessionResponse(
+        success=True,
+        session=child.model_dump() if hasattr(child, "model_dump") else {},
+        conversation="resumed" if resumable else "none_recorded",
+        replaced_session_id=source.parent_id,
+        row_reused=reused,
+        title_carried=label,
+        detail=detail,
+    )
+
 @router.post("/sessions", response_model=Session, status_code=201, dependencies=[Depends(require_auth)])
 async def create_session(request: Request, body: CreateSessionRequest):
     """
@@ -421,6 +646,38 @@ async def create_session(request: Request, body: CreateSessionRequest):
         if body.working_dir:
             body.working_dir = os.path.expanduser(body.working_dir)
 
+        # A NEW project with a chosen parent folder. This is the only path
+        # that composes a directory from a name, and it exists because the
+        # "start empty" flow had no folder step: it posted a name and
+        # nothing else, so session_manager fell through to
+        # ``settings.get_working_dir() / session_id`` and the project
+        # landed at ``.../ses_5a756046`` - a random session id, recorded
+        # in the SHORT symlink spelling. resolve_project_directory returns
+        # the realpath'd (long) parent joined to the name, or refuses with
+        # a sentence the modal shows inline; a refusal is a 400 and
+        # creates nothing.
+        if body.project_parent_dir:
+            from src.core.project_directory import (
+                ensure_project_directory,
+                resolve_project_directory,
+            )
+
+            verdict = ensure_project_directory(
+                resolve_project_directory(
+                    body.project_parent_dir,
+                    body.project_name or "",
+                    settings=settings,
+                )
+            )
+            if not verdict.ok:
+                logger.warning(
+                    "project_directory_refused",
+                    parent_dir=body.project_parent_dir,
+                    code=verdict.code,
+                )
+                raise HTTPException(status_code=400, detail=verdict.message)
+            body.working_dir = verdict.path
+
         logger.info(
             "api_create_session_request",
             session_id=session_id,
@@ -443,6 +700,11 @@ async def create_session(request: Request, body: CreateSessionRequest):
             agent_type=body.agent_type,
             model=body.model,
             terminal_command_id=body.terminal_command_id,
+            # ONE NAME, SET AT BIRTH. This endpoint was the only creator
+            # that passed no label, so a launchpad session's row title and
+            # the name claude called itself were unrelated strings. An
+            # absent or blank label changes nothing about the launch.
+            label=(body.label or "").strip() or None,
         )
 
         # Mark this project most-recently-used so it sorts to the top of
@@ -463,6 +725,13 @@ async def create_session(request: Request, body: CreateSessionRequest):
 
         return session
 
+    except HTTPException:
+        # An HTTPException we raised ourselves (the project-directory
+        # refusal above) is already the answer. Without this clause the
+        # blanket handler below would catch it - HTTPException IS an
+        # Exception - and re-wrap a deliberate 400 with a clear message as
+        # a generic 500, hiding the reason from the user entirely.
+        raise
     except ValueError as e:
         logger.error("session_creation_failed_validation", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
@@ -601,6 +870,60 @@ async def list_sessions(request: Request):
     return [one] if one else []
 
 
+async def _mark_closed_in_datastore(
+    socket: Optional[str], name: Optional[str]
+) -> int:
+    """Write the just-closed tmux instance's row to ``stopped``.
+
+    Description: the datastore half of ``DELETE /sessions``. Runs on one
+      pooled thread (connections are thread-affine) and swallows only the
+      two datastore conditions that are not this request's business - an
+      install with no database yet, and one whose database cannot be read
+      - because the session is already destroyed by the time this runs
+      and a bookkeeping failure must not be reported as a failed
+      teardown. Both are logged; neither is silent.
+    Inputs: socket (str | None) - the tmux socket that was torn down.
+      name (str | None) - the tmux session name that was killed. Either
+      being None means the backend could not name what it closed, and
+      nothing is written.
+    Output: int - rows moved to ``stopped``; 0 when nothing was written.
+    Example: await _mark_closed_in_datastore('cloude', 'cloude_api')
+    """
+    from contextlib import closing
+
+    from src.core import session_close_lifecycle
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    if not socket or not name:
+        return 0
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        return 0
+
+    def _write() -> int:
+        with closing(connect(db_path, create=False)) as conn:
+            moved = session_close_lifecycle.mark_closed(
+                conn, socket=socket, name=name
+            )
+            conn.commit()
+            return moved
+
+    try:
+        return await run_in_threadpool(_write)
+    except DatastoreUnreadableError as exc:
+        logger.warning(
+            "close_lifecycle_not_recorded",
+            tmux_socket=socket,
+            tmux_name=name,
+            error=str(exc),
+            note=(
+                "the session WAS destroyed; only the row's lifecycle "
+                "write did not land, and the reconciler still covers it"
+            ),
+        )
+        return 0
+
+
 @router.delete("/sessions", response_model=SuccessResponse, dependencies=[Depends(require_auth)])
 async def destroy_session(request: Request, session_id: Optional[str] = None):
     """
@@ -629,11 +952,29 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
         active_name = (
             getattr(backend, "tmux_session", None) if backend else None
         )
+        active_socket = (
+            getattr(backend, "socket_name", None) if backend else None
+        )
         if active_name:
             await local_servers.clear_session(active_name)
 
         # Destroy session
         await session_manager.destroy_session(session_id=session_id)
+
+        # RECORD THE CLOSE ON THE ROW, NOW. destroy_session writes nothing
+        # to sessions.lifecycle - only the background reconciler ever moved
+        # a row to 'stopped' - so a closed session read 'running' for up to
+        # a whole poll interval and appeared in NO group the user could
+        # see: gone from running (its tmux is dead) and not yet in RECENT
+        # (which is lifecycle='stopped' AND archived_at IS NULL). That gap
+        # is "I closed it and it did not go to Recents", measured on the
+        # owner's box 2026-09-07.
+        #
+        # Best-effort and non-fatal: the session IS destroyed by this
+        # point, and failing the request over a bookkeeping write would
+        # tell the user a teardown failed that did not. The reconciler
+        # still covers the row on its own schedule.
+        await _mark_closed_in_datastore(active_socket, active_name)
 
         return SuccessResponse(message="Session destroyed successfully")
 
@@ -834,11 +1175,39 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
     ``#{session_created}`` is unchanged, so there is no new instance for a
     row to key on - and it never writes either column.
 
-    NO COMMAND CROSSES THIS BOUNDARY. The body carries only a session
-    name. What gets run is decided server-side by the ladder in
-    ``src.core.session_respawn``, gated on tmux's own
+    NO COMMAND CROSSES THIS BOUNDARY. The body carries a session name and
+    optionally an ``agent_type``. What gets run is decided server-side by
+    the ladder in ``src.core.session_respawn``, gated on tmux's own
     ``#{pane_start_command}``. Accepting a command from the client would
     make this a create wearing a restart's clothes.
+
+    AN ``agent_type`` IS NOT A COMMAND, which is why it is safe here. It
+    is an id that must match a launch wrapper the user has already
+    configured on this machine; the server resolves it to a command
+    itself, and an id that is not in that list is a 400 rather than a
+    silent fall back to the default wrapper - see
+    ``src/core/session_agent_choice.py``. It exists because moving a
+    session onto another wrapper used to require hand-editing
+    ``sessions.agent_type`` in cloude.db.
+
+    REPLACING WHAT IS RUNNING IS A SEPARATE, EXPLICIT REQUEST.
+    ``confirm_restart_live`` is what turns this into ``respawn-pane -k``:
+    the pane's process is killed and a new one started in the same pane,
+    keeping the tmux name, the ``sessions`` row and therefore the project
+    attribution, pinned theme, unread state, group filing and sidebar
+    position - nothing is re-carried because nothing moves.
+
+    IT IS A PERMISSION AND ONLY THE CLIENT CAN GRANT IT. The preview's
+    ``projected`` rung says what a live session would come back AS, and
+    that is a PREDICTION: it cannot be echoed back as this flag, and the
+    server derives the flag from nothing. Without it a live pane still
+    answers ``kind='not_dead'`` and tmux itself refuses the respawn.
+
+    ASK BEFORE YOU ACT. ``GET /sessions/restart/preview``
+    (``src/api/restart_routes.py``) reports which rung this session would
+    land on, for every configured wrapper, without spawning anything.
+    That is what lets a client warn that an empty ``pane_start_command``
+    means a plain restart returns a LOGIN SHELL.
 
     WHY A REFUSAL IS STILL A 200. ``ok=false`` with
     ``kind='cannot_determine'`` means the SERVER worked perfectly and the
@@ -853,10 +1222,19 @@ async def respawn_session(request: Request, body: RespawnSessionRequest):
     """
     session_manager = request.app.state.session_manager
 
-    logger.info("api_respawn_session_request", name=body.session_name)
+    logger.info(
+        "api_respawn_session_request",
+        name=body.session_name,
+        agent_type=body.agent_type,
+        confirm_restart_live=bool(body.confirm_restart_live),
+    )
 
     try:
-        result = await session_manager.respawn_session(body.session_name)
+        result = await session_manager.respawn_session(
+            body.session_name,
+            agent_type=body.agent_type,
+            live_restart_confirmed=bool(body.confirm_restart_live),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -1678,7 +2056,11 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
                 body = f"stop_reason: {stop_reason.strip()[:180]}"
 
     elif kind == "PermissionRequest":
-        title = "Permission needed"
+        # Lowercase plain copy, and it names WHICH kind of waiting this
+        # is - the split that gave PermissionRequest and Notification
+        # their own status states (``question`` vs ``notice``) is only
+        # useful if the toast the user actually reads says it too.
+        title = "needs your permission"
         # Prefer the tool-shape (tool_name + tool_input) since that's the
         # most useful single line for the user. Fall back to a `prompt`
         # field if Claude Code's payload uses that shape instead.
@@ -1702,7 +2084,9 @@ def _hook_event_presentation(kind: str, payload: dict) -> tuple[str, Optional[st
         if not body:
             body = "Claude is asking for permission to act."
     elif kind == "Notification":
-        title = "Claude is waiting"
+        # Deliberately NOT "is waiting": a Notification does not stop the
+        # agent. See the PermissionRequest branch above.
+        title = "wants your attention"
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             body = message.strip()[:200]
@@ -1764,14 +2148,38 @@ async def claude_event_hook(request: Request):
 
     # Layer 2 - HMAC token validation, constant time.
     if not session_manager.validate_hook_token(session_id, token):
-        # NEVER log the token value. We log session_id + event_kind so
-        # operators can spot brute-force attempts without leaking the secret.
-        logger.warning(
-            "hook_post_rejected_invalid_token",
-            session_id=session_id,
-            event_kind=event_kind,
+        # SECOND CHANCE FOR OUR OWN MISTAKE, AND ONLY FOR THAT. A mint
+        # that lands on an id whose agent is already running revokes a
+        # credential the agent cannot be handed a replacement for, so it
+        # 403s forever with no retry available from its side - measured
+        # 2026-09-08, 4,325 rejections over 4h24m from a single such
+        # mint. ``recover_hook_token`` accepts ONLY a token this process
+        # itself minted for this id, on this pane, and then superseded;
+        # it re-binds the store to what the running process holds, once,
+        # and NEVER mints. Anything else still rejects.
+        # ``getattr`` because a caller may inject a session-manager
+        # double predating this method, and a missing recovery must
+        # refuse exactly as it always did.
+        recover = getattr(session_manager, "recover_hook_token", None)
+        recovery = (
+            recover(session_id, token)
+            if callable(recover)
+            else HOOK_RECOVERY_UNAVAILABLE
         )
-        raise HTTPException(status_code=403, detail="invalid token")
+        if recovery != HOOK_RECOVERY_ACCEPTED:
+            # NEVER log the token value. We log session_id + event_kind so
+            # operators can spot brute-force attempts without leaking the
+            # secret. ``recovery`` says whether a superseded token was
+            # searched for and not found, or whether there was nothing to
+            # search - a check that could not run must not read as one
+            # that ran and cleared.
+            logger.warning(
+                "hook_post_rejected_invalid_token",
+                session_id=session_id,
+                event_kind=event_kind,
+                recovery=recovery,
+            )
+            raise HTTPException(status_code=403, detail="invalid token")
 
     # Tolerate empty / malformed body - the title/body resolver is
     # defensive and falls through to generic copy when fields are absent.
@@ -1793,6 +2201,41 @@ async def claude_event_hook(request: Request):
     except Exception as exc:  # pragma: no cover - defensive, see docstring
         logger.warning(
             "hook_activity_record_failed",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+
+    # THE ONLY WAY THE APP CAN LEARN ABOUT `/rename` TYPED INTO A PANE.
+    # No hook event carries it - Claude intercepts slash commands before
+    # they become prompts, and there is no SessionRename event - so the
+    # name is only ever readable out of the transcript. Every event kind
+    # passes through here, which makes this the one seam where a pull can
+    # be hung without inventing a poller.
+    #
+    # BEST-EFFORT AND CHEAP. One SELECT plus a bounded 64 KB tail read
+    # (measured at 0.274 ms median against a 244 MB transcript) and NO
+    # write unless a name actually changed. It is wrapped for the same
+    # reason the lineage write below is: this runs on the critical path of
+    # a live working session and a title is telemetry, so nothing here may
+    # change the status code the hook sees.
+    try:
+        title_sync = claude_title_sync_apply.sync_claude_title(
+            session_manager, session_id
+        )
+        if title_sync.broadcast_title:
+            # Same message the browser rename broadcasts, so a name typed
+            # in the terminal and one typed in the browser update every
+            # attached tab through one code path rather than two.
+            await connection_manager.broadcast_to_session(
+                session_id,
+                SessionRenamedMessage(
+                    session_id=session_id, new_name=title_sync.broadcast_title
+                ).model_dump_json(),
+            )
+    except Exception as exc:  # noqa: BLE001 - see comment above
+        logger.warning(
+            "claude_title_sync_failed",
             session_id=session_id,
             event_kind=event_kind,
             error=str(exc),
@@ -2756,6 +3199,20 @@ def _session_record_payload(row: dict) -> SessionRecord:
         model=row.get("model"),
         archived_at=row.get("archived_at"),
         title=row.get("title"),
+        # See SessionRecord's lineage block in src/models.py for why all
+        # five travel together: no one of them classifies a row on its
+        # own, and shipping a subset would leave the client guessing at
+        # exactly the distinction they exist to make.
+        id=row.get("id"),
+        parent_session_id=row.get("parent_session_id"),
+        fork_kind=row.get("fork_kind"),
+        created_at=row.get("created_at"),
+        last_seen_running_at=row.get("last_seen_running_at"),
+        # The client orders its session lists by this. ``.get`` because a
+        # database that has not reached v23 has no such column, and that
+        # absence must arrive as None - "no work recorded" - rather than
+        # as a KeyError out of a listing route.
+        last_work_at=row.get("last_work_at"),
     )
 
 
@@ -2764,7 +3221,23 @@ def _session_record_payload(row: dict) -> SessionRecord:
     response_model=List[SessionRecord],
     dependencies=[Depends(require_auth)],
 )
-async def list_session_records(request: Request):
+async def list_session_records(
+    request: Request,
+    include_automated: bool = Query(
+        False,
+        description=(
+            "Include rows classified kind='automated' - a scheduler run "
+            "or a headless `claude -p` probe. DEFAULTS FALSE, because "
+            "the owner's rule is 'lists should always just be mine. the "
+            "rest can be found in the archive explorer.' There is no UI "
+            "for this flag; it exists so a caller that wants the "
+            "complete set can ask for it. Rows with kind NULL or "
+            "'unknown' are returned EITHER WAY - not having looked is "
+            "not evidence of automation. Nothing here affects /archive, "
+            "which reads the transcript archive and never this table."
+        ),
+    ),
+):
     """Every stored session row, newest first, archived rows included.
 
     Description: archived rows are INCLUDED and the caller filters,
@@ -2794,10 +3267,13 @@ async def list_session_records(request: Request):
         thread-affine).
 
         Inputs: none (closes over db_path).
-        Output: list[dict] - raw session rows.
+        Output: list[dict] - raw session rows, minus the automated ones
+          unless the caller asked for them.
         """
         with closing(connect(db_path, create=False)) as conn:
-            return session_store.list_sessions(conn)
+            return session_store.list_sessions(
+                conn, include_automated=include_automated
+            )
 
     try:
         rows = await run_in_threadpool(_read)
@@ -2850,7 +3326,7 @@ async def delete_session_record(request: Request, session_uuid: str):
     if not db_path.exists():
         raise HTTPException(
             status_code=503,
-            detail="no datastore: sessions cannot be deleted on this install",
+            detail="no datastore: sessions cannot be archived on this install",
         )
 
     def _write() -> bool:
@@ -2881,16 +3357,113 @@ async def delete_session_record(request: Request, session_uuid: str):
     )
 
 
+@router.post(
+    "/sessions/records/{session_uuid}/unarchive",
+    response_model=SuccessResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def unarchive_session_record(request: Request, session_uuid: str):
+    """Bring an archived session record back onto the user's screens.
+
+    Description: the reverse of ``DELETE /sessions/records/{uuid}``, and
+      it exists for the same reason ``POST /projects/{name}/unarchive``
+      does - an archive with no way back is a delete wearing a friendlier
+      label. Restarting an archived row already clears ``archived_at`` as
+      a side effect (``session_restart.rebind_instance``), which is why
+      the launchpad UI has relied on restart rather than a dedicated
+      control; this route gives the same restore WITHOUT requiring a live
+      tmux to restart into.
+
+      IDEMPOTENT. Unarchiving a row that is not archived is a 200, not a
+      404 or a 409 - the caller asked for a state (visible again) and
+      that state already holds. The message says which of the two
+      happened rather than flattening both into "ok".
+    Inputs: request (Request) - unused beyond auth. session_uuid (str,
+      path) - the row to restore.
+    Output: SuccessResponse - ``message`` says whether this call
+      performed the restore or found the row already live.
+    Raises: HTTPException 404 - no row carries that uuid, so nothing was
+      restored. HTTPException 503 - the datastore is absent or unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="no datastore: sessions cannot be restored on this install",
+        )
+
+    def _write() -> bool:
+        """Open, unarchive and close on ONE pooled thread.
+
+        Inputs: none (closes over db_path and session_uuid).
+        Output: bool - True when this call performed the restore.
+        Raises: session_store.SessionNotFoundError, DatastoreUnreadableError.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.unarchive_session(conn, session_uuid)
+
+    try:
+        performed = await run_in_threadpool(_write)
+    except session_store.SessionNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"no session record {session_uuid}"
+        )
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return SuccessResponse(
+        message=(
+            "Session restored to your lists"
+            if performed
+            else "Session was already visible"
+        )
+    )
+
+
 @router.get(
     "/sessions/recent",
     response_model=RecentSessionsResponse,
     dependencies=[Depends(require_auth)],
 )
-async def list_recent_sessions(request: Request):
+async def list_recent_sessions(
+    request: Request,
+    include_archived: bool = Query(
+        False,
+        description=(
+            "Include DELETED (archived) session records alongside the "
+            "live ones. Defaults false, which is the pre-existing "
+            "behaviour exactly. Archived rows arrive mixed in, each "
+            "carrying its own archived_at, so the client distinguishes "
+            "them per row. NOTE the vocabulary difference from projects: "
+            "a session's archive is a soft DELETE ('take this off my "
+            "screen'), a project's archive is a SHELF ('done with this "
+            "for now'). Same column shape, different meaning."
+        ),
+    ),
+    include_automated: bool = Query(
+        False,
+        description=(
+            "Include rows classified kind='automated' - a scheduler run "
+            "or a headless `claude -p` probe. DEFAULTS FALSE, and it is "
+            "ORTHOGONAL to include_archived: both filters apply, so "
+            "include_archived=true still hides automated rows unless "
+            "this is set too. Rows with kind NULL or 'unknown' are "
+            "returned EITHER WAY. No UI sets this."
+        ),
+    ),
+):
     """RECENT (S9): stored ``stopped`` sessions, datastore-backed.
 
     Description: the query is exactly ``lifecycle='stopped' AND
-      archived_at IS NULL`` via ``session_store.list_sessions`` - no
+      archived_at IS NULL`` (unless ``include_archived`` drops the
+      second clause) via ``session_store.list_sessions`` - no
       timer, no retention window, the first launcher surface backed by
       the datastore rather than a live probe.
 
@@ -2922,7 +3495,10 @@ async def list_recent_sessions(request: Request):
 
     from src.core import session_store
     from src.core.db import DatastoreUnreadableError, connect, db_path_for
-    from src.core.db_models import SESSION_LIFECYCLE_STOPPED
+    from src.core.db_models import (
+        SESSION_LIFECYCLE_RUNNING,
+        SESSION_LIFECYCLE_STOPPED,
+    )
 
     session_manager = request.app.state.session_manager
     health = session_manager.last_probe_health()
@@ -2948,14 +3524,73 @@ async def list_recent_sessions(request: Request):
 
         Inputs: none (closes over db_path).
         Output: list[dict] - raw session rows already filtered to
-          ``lifecycle='stopped', archived_at IS NULL``.
+          ``lifecycle='stopped'``, and to ``archived_at IS NULL`` unless
+          the caller asked for archived rows too.
         """
         with closing(connect(db_path, create=False)) as conn:
-            return session_store.list_sessions(
+            rows = session_store.list_sessions(
                 conn,
                 lifecycle=SESSION_LIFECYCLE_STOPPED,
-                include_archived=False,
+                include_archived=include_archived,
+                include_automated=include_automated,
             )
+            # A SESSION APPEARS IN EXACTLY ONE LIST, and this is the half
+            # the client cannot do for itself.
+            #
+            # Restarts made BEFORE row reuse landed left an abandoned row
+            # behind and started a new one pointing back at it. The
+            # abandoned row is stopped, so it lands in RECENT, while its
+            # successor is running and lands in RUNNING - the same
+            # session, twice, which is exactly the duplication the owner
+            # sees. The client cannot filter these by name: the two rows
+            # legitimately carry DIFFERENT tmux names
+            # ("Media_Compression" and "cloude_Media_Compression"), so a
+            # name comparison misses them entirely.
+            #
+            # ``parent_session_id`` is not a heuristic and needs no
+            # classifier - it is a stored fact saying this row was
+            # replaced by that one. When the successor is running, this
+            # row is ALREADY on screen as that successor, so listing it
+            # again is a duplicate rather than history.
+            #
+            # This is legacy cleanup, not a mechanism. A restart no
+            # longer creates a parent link at all (see
+            # session_restart.rebind_instance), so nothing new can ever
+            # enter this set.
+            # FAIL OPEN. If this read cannot be made, we do not know
+            # whether anything is represented elsewhere - and the two
+            # errors are not symmetrical. Showing a duplicate is untidy;
+            # HIDING a session the user can no longer reach from this
+            # screen is the failure a list filter must never produce. So
+            # an unevaluable read excludes nothing.
+            try:
+                replaced = {
+                    int(r["parent_session_id"])
+                    for r in conn.execute(
+                        "SELECT parent_session_id FROM sessions"
+                        " WHERE lifecycle = ?"
+                        " AND parent_session_id IS NOT NULL",
+                        (SESSION_LIFECYCLE_RUNNING,),
+                    ).fetchall()
+                }
+            except Exception as exc:  # noqa: BLE001 - see FAIL OPEN above
+                logger.warning(
+                    "recent_replaced_scan_unavailable",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    note=(
+                        "could not read which rows a running session "
+                        "replaced; nothing excluded, so a duplicate may "
+                        "show rather than a session going missing"
+                    ),
+                )
+                return rows
+            if not replaced:
+                return rows
+            return [
+                row for row in rows
+                if row.get("id") not in replaced
+            ]
 
     try:
         rows = await run_in_threadpool(_read)

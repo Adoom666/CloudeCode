@@ -1,0 +1,425 @@
+{
+  "golden_format_version": 1,
+  "schema_version": 25,
+  "note": "Pinned to schema v25. If CURRENT_SCHEMA_VERSION moves, the test fails ON PURPOSE so a human re-confirms these bytes are still right for the new schema before re-blessing.",
+  "serializer_styles": [
+    {
+      "name": "compact",
+      "separators": [
+        ",",
+        ":"
+      ],
+      "ensure_ascii": false
+    },
+    {
+      "name": "compact_ascii",
+      "separators": [
+        ",",
+        ":"
+      ],
+      "ensure_ascii": true
+    },
+    {
+      "name": "spaced",
+      "separators": [
+        ", ",
+        ": "
+      ],
+      "ensure_ascii": false
+    },
+    {
+      "name": "spaced_ascii",
+      "separators": [
+        ", ",
+        ": "
+      ],
+      "ensure_ascii": true
+    }
+  ],
+  "appearance_keys": [
+    "isSidechain",
+    "agentId"
+  ],
+  "entries": [
+    {
+      "name": "class_compact_env_agentid_only",
+      "covers": "corpus class 5 of 6: agentId WITHOUT isSidechain, the envelope state easiest to assume impossible (2 signatures)",
+      "style": "compact",
+      "key_order": [
+        "agentId",
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"agentId\":\"a0fedcba98765432\",\"type\":\"assistant\",\"uuid\":\"uuid-0005\",\"message\":{\"role\":\"assistant\",\"model\":\"synthetic-model\",\"content\":[{\"type\":\"text\",\"text\":\"synthetic\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}",
+      "line_sha256": "38b41d8d540f5d7c4b519b68d5db2493e7883ee229b9c7d41400dd915905c216",
+      "line_byte_length": 242
+    },
+    {
+      "name": "class_compact_env_both",
+      "covers": "corpus class 2 of 6: compact, envelope {agentId, isSidechain}, both in the middle (578 signatures)",
+      "style": "compact",
+      "key_order": [
+        "parentUuid",
+        "isSidechain",
+        "agentId",
+        "type",
+        "uuid",
+        "timestamp"
+      ],
+      "line": "{\"parentUuid\":\"uuid-0000\",\"isSidechain\":true,\"agentId\":\"a0123456789abcdef\",\"type\":\"progress\",\"uuid\":\"uuid-0002\",\"timestamp\":\"2026-01-01T00:00:01.000Z\"}",
+      "line_sha256": "5ad2a7793b523b53ac6314352b8d2740711f9c00c2079ad4d04047a684661b90",
+      "line_byte_length": 151
+    },
+    {
+      "name": "class_compact_env_empty",
+      "covers": "corpus class 3 of 6: compact, NO envelope keys at all (65 signatures)",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "summary",
+        "leafUuid"
+      ],
+      "line": "{\"type\":\"summary\",\"summary\":\"synthetic summary text\",\"leafUuid\":\"uuid-0003\"}",
+      "line_sha256": "398a7c7c435508f69b098c5775947f8c23fd70500e45db24ab78ebe7f753f1fd",
+      "line_byte_length": 76
+    },
+    {
+      "name": "class_compact_env_issidechain",
+      "covers": "corpus class 1 of 6: compact, envelope {isSidechain}, envelope key in the middle (698 signatures)",
+      "style": "compact",
+      "key_order": [
+        "parentUuid",
+        "isSidechain",
+        "type",
+        "uuid",
+        "timestamp"
+      ],
+      "line": "{\"parentUuid\":null,\"isSidechain\":false,\"type\":\"user\",\"uuid\":\"uuid-0001\",\"timestamp\":\"2026-01-01T00:00:00.000Z\"}",
+      "line_sha256": "abee02909c9267e3a46ea5fd851718590cd610c5cbbd0c0c478f6f4ee86d43ca",
+      "line_byte_length": 111
+    },
+    {
+      "name": "class_spaced_env_issidechain",
+      "covers": "corpus class 4 of 6: the spaced style, which occurs on 720 corpus rows and is easy to assume away (3 signatures)",
+      "style": "spaced",
+      "key_order": [
+        "parentUuid",
+        "isSidechain",
+        "type",
+        "uuid"
+      ],
+      "line": "{\"parentUuid\": null, \"isSidechain\": false, \"type\": \"system\", \"uuid\": \"uuid-0004\"}",
+      "line_sha256": "b2f8067dba464e61943aeb0cc297f0a70833f7a4a407b02b07a69dde39b90d8f",
+      "line_byte_length": 81
+    },
+    {
+      "name": "deep_nesting",
+      "covers": "ten levels of nesting, the deepest measured in the corpus",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "d"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0021\",\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":1}}}}}}}}",
+      "line_sha256": "f979e4e7de98fb88c52a31bb0ec4112f44cc83c8b5cbee3fac3ecb14d5bb1924",
+      "line_byte_length": 82
+    },
+    {
+      "name": "empty_object",
+      "covers": "an empty object line, whose key order is [] and must not be confused with the not-an-object sentinel",
+      "style": "compact",
+      "key_order": [],
+      "line": "{}",
+      "line_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "line_byte_length": 2
+    },
+    {
+      "name": "envelope_key_last",
+      "covers": "an envelope key at the FINAL position, which occurs on 474 corpus appearances",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "agentId"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0012\",\"agentId\":\"a2222222\"}",
+      "line_sha256": "9c11be9bbbbc8808e51bfa8e11bcc445b5b71de86440d8b6f62a11db9e163ba3",
+      "line_byte_length": 55
+    },
+    {
+      "name": "envelope_only_object",
+      "covers": "a line consisting of nothing BUT an envelope key, so the stored body is an empty object",
+      "style": "compact",
+      "key_order": [
+        "isSidechain"
+      ],
+      "line": "{\"isSidechain\":false}",
+      "line_sha256": "8c7e85dbeaa72f31eb3d9053c1e199a592cd428e018b5c00c995c6fcbc488f3a",
+      "line_byte_length": 21
+    },
+    {
+      "name": "forward_slash_unescaped",
+      "covers": "a forward slash, which JSON permits escaped or not and which Python does not escape - a real byte-level trap",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "p"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0024\",\"p\":\"/a/b\"}",
+      "line_sha256": "46d5d03d7810db3272aea761affdd55c64036d85a73eec4fe5c5fb815dafaf66",
+      "line_byte_length": 45
+    },
+    {
+      "name": "gap_compact_ascii",
+      "covers": "census gap: serializer_style compact_ascii, zero corpus rows. Non-ASCII escaped as \\uXXXX",
+      "style": "compact_ascii",
+      "key_order": [
+        "type",
+        "uuid",
+        "text"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0006\",\"text\":\"caf\\u00e9\"}",
+      "line_sha256": "4e06d7b71fe411e7d6e19a95863e679b48c7a07550b1641a5d489ad555e1c58d",
+      "line_byte_length": 53
+    },
+    {
+      "name": "gap_content_absent",
+      "covers": "census gap: message present, content key ABSENT",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0013\",\"message\":{\"role\":\"assistant\",\"model\":\"synthetic-model\"}}",
+      "line_sha256": "3e4bf50531e96c7d3403230a28a0d877c63585815e8afba13b7a67a524b54dfe",
+      "line_byte_length": 96
+    },
+    {
+      "name": "gap_content_null",
+      "covers": "census gap: message.content explicitly null, distinct from absent",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0014\",\"message\":{\"role\":\"assistant\",\"content\":null}}",
+      "line_sha256": "c9c208544ddca3b1ea37fdfe80e586e0e988a43df0948131085915fa8ed1f739",
+      "line_byte_length": 85
+    },
+    {
+      "name": "gap_content_number",
+      "covers": "census gap: message.content as a number",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0015\",\"message\":{\"role\":\"assistant\",\"content\":7}}",
+      "line_sha256": "0f8dfb7f565e0e519db509c646c916e90a5d35556134e19c2fa86ebd49a47854",
+      "line_byte_length": 82
+    },
+    {
+      "name": "gap_content_object",
+      "covers": "census gap: message.content as an object rather than a string or array",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0016\",\"message\":{\"role\":\"assistant\",\"content\":{\"type\":\"text\"}}}",
+      "line_sha256": "c4e56a10e64ed3fe5db41436710f9e88a6b48533f31615eac0360a4b6f7b0e36",
+      "line_byte_length": 96
+    },
+    {
+      "name": "gap_envelope_key_first",
+      "covers": "census gap: an envelope key at position 0. Measured over the whole corpus, isSidechain is NEVER first, so this interleaving has no live exemplar",
+      "style": "compact",
+      "key_order": [
+        "isSidechain",
+        "agentId",
+        "type",
+        "uuid"
+      ],
+      "line": "{\"isSidechain\":true,\"agentId\":\"a1111111\",\"type\":\"user\",\"uuid\":\"uuid-0011\"}",
+      "line_sha256": "56882932329812260e9bccc7d68666d307dc8bc89273a27782a3b6133c47ed90",
+      "line_byte_length": 74
+    },
+    {
+      "name": "gap_non_object_content_block",
+      "covers": "census gap: a content array holding non-object blocks",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0018\",\"message\":{\"role\":\"assistant\",\"content\":[\"bare string block\",42]}}",
+      "line_sha256": "a73e97fbe0e6fc53572cd726d129d02c788da70f7d594ffa53d4b627df702eff",
+      "line_byte_length": 105
+    },
+    {
+      "name": "gap_non_string_block_type",
+      "covers": "census gap: a content block whose type is not a string",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0019\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":5}]}}",
+      "line_sha256": "0d054f54cd13d2cc1825e2c870491eeb34650332dd103a2e2ad0b5583167615f",
+      "line_byte_length": 93
+    },
+    {
+      "name": "gap_not_an_object_array",
+      "covers": "census gap: a line whose top-level JSON is an ARRAY, so there is no key order to walk",
+      "style": "compact",
+      "key_order": null,
+      "line": "[1,2,3]",
+      "line_sha256": "a615eeaee21de5179de080de8c3052c8da901138406ba71c38c032845f7d54f4",
+      "line_byte_length": 7
+    },
+    {
+      "name": "gap_not_an_object_null",
+      "covers": "census gap: a bare top-level null, which must not be confused with an absent body",
+      "style": "compact",
+      "key_order": null,
+      "line": "null",
+      "line_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "line_byte_length": 4
+    },
+    {
+      "name": "gap_not_an_object_number",
+      "covers": "census gap: a bare top-level NUMBER line",
+      "style": "compact",
+      "key_order": null,
+      "line": "42",
+      "line_sha256": "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049",
+      "line_byte_length": 2
+    },
+    {
+      "name": "gap_not_an_object_string",
+      "covers": "census gap: a bare top-level STRING line",
+      "style": "compact",
+      "key_order": null,
+      "line": "\"a synthetic bare string line\"",
+      "line_sha256": "7467a82cf70110958a5ab1d3861616f293702ae946a27b295964e66432949016",
+      "line_byte_length": 30
+    },
+    {
+      "name": "gap_spaced_ascii",
+      "covers": "census gap: serializer_style spaced_ascii, zero corpus rows",
+      "style": "spaced_ascii",
+      "key_order": [
+        "type",
+        "uuid",
+        "text"
+      ],
+      "line": "{\"type\": \"user\", \"uuid\": \"uuid-0007\", \"text\": \"caf\\u00e9\"}",
+      "line_sha256": "a5440c8afbd26c50915274882df497ca0125004f752d5918bf0c50701f4a44bf",
+      "line_byte_length": 58
+    },
+    {
+      "name": "gap_usage_null",
+      "covers": "census gap: message.usage null, never observed live",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "message"
+      ],
+      "line": "{\"type\":\"assistant\",\"uuid\":\"uuid-0017\",\"message\":{\"role\":\"assistant\",\"usage\":null}}",
+      "line_sha256": "36ee13b931f11ec94c08059e1942e84421eec3564bfdf974aedfd24e3cb61cc4",
+      "line_byte_length": 83
+    },
+    {
+      "name": "nested_key_order_not_alphabetical",
+      "covers": "a NESTED object whose keys are in non-alphabetical order. This is the exact shape that broke when body storage sorted keys - the line stays valid JSON and the bytes move",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "payload"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0020\",\"payload\":{\"z\":1,\"m\":2,\"a\":0}}",
+      "line_sha256": "104e041ad8ebdbda9e04cf248e3dc5eb59a2e9697d68e29652dc9d81fa95c0b7",
+      "line_byte_length": 64
+    },
+    {
+      "name": "scalar_types_preserved",
+      "covers": "every JSON scalar type in one line, so an integer cannot come back as a float or a bool as a number",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "n",
+        "f",
+        "t",
+        "g",
+        "z"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0022\",\"n\":0,\"f\":1.5,\"t\":true,\"g\":false,\"z\":null}",
+      "line_sha256": "b1036e743be9a22cbc450e43f2fbbf7d47c9a876c2a741012b28d21e5a4a3817",
+      "line_byte_length": 76
+    },
+    {
+      "name": "string_escapes",
+      "covers": "quote, backslash, newline, tab and a control character inside a string value",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "s"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0023\",\"s\":\"a\\\"b\\\\c\\nd\\te\\u0001f\"}",
+      "line_sha256": "bf77f5f7bb13604e14f47c9bae6d60ead352413b87b522876bd279758f5ccb7c",
+      "line_byte_length": 61
+    },
+    {
+      "name": "unicode_astral_escaped",
+      "covers": "an astral character under compact_ascii becomes a SURROGATE PAIR, which is where a naive escaper breaks",
+      "style": "compact_ascii",
+      "key_order": [
+        "type",
+        "uuid",
+        "text"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0010\",\"text\":\"\\ud834\\udd1e\"}",
+      "line_sha256": "318a32970ba8eebbbedab80487f4ff9857dca9160e5364989b9b3bce2d0dd090",
+      "line_byte_length": 56
+    },
+    {
+      "name": "unicode_astral_unescaped",
+      "covers": "astral-plane characters above U+FFFF, on 1.22 percent of corpus bodies, unescaped",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "text"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0009\",\"text\":\"𝄞\"}",
+      "line_sha256": "b0c980f3fa1abd9da2105923e960fd02c76fe6ed7aeee0933824072b6a3cba9d",
+      "line_byte_length": 48
+    },
+    {
+      "name": "unicode_unescaped_compact",
+      "covers": "19.66 percent of corpus bodies are non-ASCII and every one was written with escaping OFF",
+      "style": "compact",
+      "key_order": [
+        "type",
+        "uuid",
+        "text"
+      ],
+      "line": "{\"type\":\"user\",\"uuid\":\"uuid-0008\",\"text\":\"café\"}",
+      "line_sha256": "d2174c24f7856dc236fce70794f79c936677deff2b67a5f85769aa109d7fe338",
+      "line_byte_length": 49
+    }
+  ]
+}

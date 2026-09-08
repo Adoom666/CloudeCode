@@ -1,0 +1,80 @@
+{
+ "meta": {
+  "paging": {
+   "has_more": true,
+   "limit": 4,
+   "next_cursor": "eyJpZCI6MTk1NDUsImluZ2VzdGVkX2F0IjoiMjAyNi0wOC0zMFQxNjowMTo0My41MTE1MjJaIiwidiI6MX0",
+   "returned": 4
+  },
+  "scope": {
+   "kind": "project",
+   "project_id": 12,
+   "slug": "-Users-jsugamele-Development-Assistants-Infrastructure"
+  }
+ },
+ "result": [
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "b5be1b4852f2a58ba57f1b24067ca4fb600e59afb297bed42d109adf3482dabd",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:01:45.022332Z",
+   "line_count": 254,
+   "line_ending": "LF",
+   "project_attribution": "derived",
+   "raw_byte_length": 609842,
+   "session_ref": "agent-add459f16848bb276",
+   "session_ref_scheme": "agent",
+   "source_path": "-Users-jsugamele-Development-Assistants-Infrastructure/ce8c2dca-477f-442d-b993-85e3307c8e68/subagents/agent-add459f16848bb276.jsonl",
+   "transcript_id": 19548
+  },
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "51bb5269e6ba4baf225bd4a341148f53ea25c59113f168f42593e8b209fb4087",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:01:44.595640Z",
+   "line_count": 124,
+   "line_ending": "LF",
+   "project_attribution": "derived",
+   "raw_byte_length": 363066,
+   "session_ref": "agent-aaa61cc3fd8f1f720",
+   "session_ref_scheme": "agent",
+   "source_path": "-Users-jsugamele-Development-Assistants-Infrastructure/ce8c2dca-477f-442d-b993-85e3307c8e68/subagents/agent-aaa61cc3fd8f1f720.jsonl",
+   "transcript_id": 19547
+  },
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "e08275e851195e64c145a2b25032f081080055b4d4318e0c9eedf739d3c37107",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:01:43.962669Z",
+   "line_count": 212,
+   "line_ending": "LF",
+   "project_attribution": "derived",
+   "raw_byte_length": 528620,
+   "session_ref": "agent-a4a9505f6b74d33a5",
+   "session_ref_scheme": "agent",
+   "source_path": "-Users-jsugamele-Development-Assistants-Infrastructure/ce8c2dca-477f-442d-b993-85e3307c8e68/subagents/agent-a4a9505f6b74d33a5.jsonl",
+   "transcript_id": 19546
+  },
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "398d2c7b6fef79ab667d86b535b4c0c22a5e99b38c6127334c0c62107312d52a",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:01:43.511522Z",
+   "line_count": 150,
+   "line_ending": "LF",
+   "project_attribution": "derived",
+   "raw_byte_length": 369894,
+   "session_ref": "agent-a17478716b1d661f6",
+   "session_ref_scheme": "agent",
+   "source_path": "-Users-jsugamele-Development-Assistants-Infrastructure/ce8c2dca-477f-442d-b993-85e3307c8e68/subagents/agent-a17478716b1d661f6.jsonl",
+   "transcript_id": 19545
+  }
+ ],
+ "result_status": "ok",
+ "scope_status": "resolved",
+ "unevaluated": []
+}

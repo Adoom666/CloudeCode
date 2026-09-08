@@ -1,0 +1,17 @@
+{
+ "content-disposition": "attachment; filename=\"0bd09502-f4be-48f2-ac56-dce81b92d20b.jsonl\"",
+ "content-length": "3181330",
+ "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none';",
+ "content-type": "application/x-ndjson",
+ "date": "Mon, 31 Aug 2026 17:49:32 GMT",
+ "referrer-policy": "no-referrer",
+ "server": "uvicorn",
+ "x-archive-actual-bytes": "3181330",
+ "x-archive-actual-sha256": "97e784442e92b8fd770b469310557666c551bd140fc6b4787c1703fd7bf7d242",
+ "x-archive-expected-bytes": "3181330",
+ "x-archive-expected-sha256": "97e784442e92b8fd770b469310557666c551bd140fc6b4787c1703fd7bf7d242",
+ "x-archive-transcript-id": "4",
+ "x-archive-verification": "before_send",
+ "x-archive-verified": "true",
+ "x-content-type-options": "nosniff"
+}

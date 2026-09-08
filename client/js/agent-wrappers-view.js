@@ -132,7 +132,7 @@
             '    <div class="settings-wrapper-row-actions">' +
             '      <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="edit" data-wrapper-id="' + id + '">edit</button>' +
             (w.default ? '' : '      <button type="button" class="modal-btn modal-btn-secondary" data-wrapper-action="default" data-wrapper-id="' + id + '">set default</button>') +
-            '      <button type="button" class="modal-btn modal-btn-danger" data-wrapper-action="delete" data-wrapper-id="' + id + '">delete</button>' +
+            '      <button type="button" class="modal-btn modal-btn-danger" data-wrapper-action="delete" data-wrapper-id="' + id + '">remove</button>' +
             '    </div>' +
             '  </div>' +
             descHtml +
@@ -191,7 +191,7 @@
         var editable = legacyIsEditable(family);
         var copy = family.in_use
             ? 'in use now. ' + (family.description || '')
-            : 'not in use. wrappers above take precedence; this only runs if you delete every wrapper.';
+            : 'not in use. wrappers above take precedence; this only runs if you remove every wrapper.';
         if (!editable) {
             copy += ' read only here: this key has no settings endpoint. edit it in config.json.';
         }

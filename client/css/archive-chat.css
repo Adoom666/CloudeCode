@@ -1,0 +1,529 @@
+/* THE CONVERSATION VIEW.
+ *
+ * THE CHAT METAPHOR MUST NOT DEPEND ON ROUNDED CORNERS. Three of this
+ * app's themes - terminal, gameboy, legacy_apple - deliberately zero
+ * every radius token, and that is a recorded, deliberate choice, not an
+ * oversight to work around. So a bubble here is defined by a LEADING
+ * RAIL, an INDENT and a spelled-out speaker name, all of which survive
+ * `--radius-md: 0`. The radius is the pleasant, redundant half.
+ *
+ * AND IT MUST NOT DEPEND ON COLOUR ALONE. Every distinction that
+ * matters - who spoke, whether a tool errored, whether text was withheld
+ * - is carried in TEXT or in geometry as well as in colour, because a
+ * two-colour theme and a greyscale screenshot are both real.
+ *
+ * NOTHING HERE SETS A HEIGHT ON A TURN. archive-chat-view.js measures
+ * every painted bubble and reconciles the geometry against it, so a
+ * fixed height would make the measurement a lie and the scrollbar with
+ * it. Padding and borders are fine; `height` and `max-height` on a turn
+ * are not.
+ */
+
+.archive-chat {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.archive-chat__status {
+    flex: 0 0 auto;
+}
+
+.archive-chat__scroller {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* SCROLL ANCHORING OFF, same as the raw reader. Chrome's anchoring
+     * tries to keep a chosen element still while content above it
+     * changes height - which is exactly what this view does on every
+     * frame, deliberately, and it fights the anti-jump compensation the
+     * virtual list already applies. Two mechanisms correcting the same
+     * scrollTop produce drift neither of them intends. */
+    overflow-anchor: none;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 10px;
+}
+
+.archive-chat__spacer {
+    position: relative;
+    width: 100%;
+}
+
+/* The render window is translated into place by the view; it must not
+ * introduce a layout box of its own or the offsets stop matching. */
+.archive-chat__window {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+}
+
+/* ---- the drill chain ------------------------------------------------ */
+
+.archive-chat__chain {
+    flex: 0 0 auto;
+}
+
+.archive-chat-chain {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.archive-chat-chain__up {
+    font: inherit;
+    color: var(--color-accent);
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.archive-chat-chain__up:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.archive-chat-chain__here {
+    color: var(--color-fg);
+    padding: 2px 4px;
+    font-weight: 600;
+}
+
+.archive-chat-chain__sep {
+    color: var(--color-fg-muted);
+}
+
+/* ---- one turn ------------------------------------------------------- */
+
+.archive-chat-turn {
+    display: block;
+    margin: 0 0 10px 0;
+    padding: 6px 10px;
+    /* THE RAIL IS THE BUBBLE. It is 3px of solid colour on the leading
+     * edge and it renders identically at every radius, including zero. */
+    border-left: 3px solid var(--color-border);
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-md);
+}
+
+/* WHO SPOKE, IN THREE REDUNDANT REGISTERS: the rail colour, the indent,
+ * and the name in the header. Remove any two and it still reads. */
+.archive-chat-turn[data-role="user"] {
+    border-left-color: var(--color-accent);
+    margin-left: 0;
+    margin-right: 12%;
+}
+
+.archive-chat-turn[data-role="assistant"] {
+    border-left-color: var(--color-fg-muted);
+    margin-left: 12%;
+    margin-right: 0;
+}
+
+.archive-chat-turn[data-role="system"],
+.archive-chat-turn[data-role="unknown"] {
+    border-left-style: dashed;
+    margin-left: 6%;
+    margin-right: 6%;
+}
+
+.archive-chat-turn__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+    margin-bottom: 4px;
+}
+
+.archive-chat-turn__who {
+    font-weight: 700;
+    color: var(--color-fg);
+    text-transform: none;
+}
+
+.archive-chat-turn__model,
+.archive-chat-turn__ts {
+    opacity: 0.85;
+}
+
+/* A flagged secret is named in text and given a border, never a colour
+ * alone: this is the one chip whose meaning is a security fact. */
+.archive-chat-turn__secrets {
+    border: 1px solid var(--color-danger, var(--color-accent));
+    color: var(--color-danger, var(--color-accent));
+    padding: 0 4px;
+    border-radius: var(--radius-sm);
+}
+
+/* The "i" and the subagent expander. `margin-left: auto` on the first
+ * one pushes the pair to the trailing edge without a wrapper. */
+.archive-chat-turn__toggle {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg);
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 7px;
+    cursor: pointer;
+}
+
+.archive-chat-turn__head .archive-chat-turn__toggle:first-of-type {
+    margin-left: auto;
+}
+
+.archive-chat-turn__toggle:hover {
+    border-color: var(--color-accent);
+}
+
+.archive-chat-turn__toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* An OPEN panel's control says so with a filled state AND with
+ * aria-expanded, which is what a screen reader reads. */
+.archive-chat-turn__toggle[data-open="true"] {
+    background: var(--color-accent);
+    color: var(--color-bg);
+    border-color: var(--color-accent);
+}
+
+/* A subagent expander whose lookup FAILED must not look like one with a
+ * count. Dashed border plus the word NOT KNOWN in its own label. */
+.archive-chat-turn__toggle[data-subagent-state="cannot-determine"] {
+    border-style: dashed;
+}
+
+/* ---- blocks --------------------------------------------------------- */
+
+.archive-chat-block {
+    margin: 4px 0;
+}
+
+.archive-chat-block__label {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-chat-block__tool {
+    color: var(--color-accent);
+}
+
+.archive-chat-block__error {
+    color: var(--color-danger, var(--color-accent));
+    border: 1px solid currentColor;
+    padding: 0 4px;
+    font-weight: 700;
+}
+
+/* PROSE READS AS PROSE. `pre-wrap` keeps the transcript's own line
+ * breaks, which are meaningful, while still wrapping at the measure. */
+.archive-chat-block__text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.86rem;
+    line-height: 1.45;
+    color: var(--color-fg);
+    margin: 2px 0;
+}
+
+/* Inside a disclosure the content is a payload, not prose, so it is
+ * monospace and visibly bounded. */
+.archive-chat-block__disclosure .archive-chat-block__text {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    /* vh then dvh, in that order: the raw unit is the fallback for
+     * engines with no dvh, and the dynamic one is what stops a mobile
+     * URL bar from cropping the payload. tests/test_viewport_units
+     * enforces the pair. */
+    max-height: 40vh;
+    max-height: 40dvh;
+    overflow: auto;
+}
+
+.archive-chat-block__summary {
+    cursor: pointer;
+    padding: 2px 0;
+}
+
+/* WITHHELD AND MASK-REFUSED ARE NOT EMPTY, and they are drawn so that
+ * nobody can read them as an empty box. Both get a dashed edge, a label
+ * in words, and no background fill that could pass for content. */
+.archive-chat-block__withheld,
+.archive-chat-block__refused {
+    border: 1px dashed var(--color-fg-muted);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-chat-block__refused {
+    border-color: var(--color-danger, var(--color-accent));
+    color: var(--color-danger, var(--color-accent));
+}
+
+.archive-chat-block__refused-head,
+.archive-chat-block__withheld-head {
+    font-weight: 700;
+    margin: 0 0 2px 0;
+}
+
+.archive-chat-block__withheld p,
+.archive-chat-block__refused p {
+    margin: 0;
+}
+
+/* ---- the "i" panel -------------------------------------------------- */
+
+.archive-chat-info {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-subtle);
+    padding: 6px 8px;
+    margin: 4px 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
+.archive-chat-info__head,
+.archive-chat-info__usage-head,
+.archive-chat-info__extra-head {
+    margin: 4px 0 2px 0;
+    color: var(--color-fg-muted);
+    font-weight: 700;
+}
+
+.archive-chat-info__list,
+.archive-chat-info__usage,
+.archive-chat-info__extra {
+    display: grid;
+    grid-template-columns: minmax(7rem, auto) 1fr;
+    gap: 1px 10px;
+    margin: 0;
+}
+
+.archive-chat-info__key {
+    color: var(--color-fg-muted);
+}
+
+.archive-chat-info__value {
+    margin: 0;
+    color: var(--color-fg);
+    overflow-wrap: anywhere;
+}
+
+/* A GAP IS DRAWN AS A GAP. `NOT KNOWN` is dimmed and italic so a scan
+ * of the panel finds the missing facts without reading every row. */
+.archive-chat-info__value[data-known="false"] {
+    color: var(--color-fg-muted);
+    font-style: italic;
+}
+
+/* ---- subagents ------------------------------------------------------ */
+
+.archive-chat-subagents {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    margin: 4px 0;
+}
+
+.archive-chat-subagents__basis {
+    margin: 0 0 4px 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--color-fg-muted);
+}
+
+/* The ordinals are the point, so the numbering is OURS and not the
+ * browser's - a `list-style` number would be a position in a list, and
+ * what is being asserted is a position in TIME. */
+.archive-chat-subagents__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    counter-reset: none;
+}
+
+.archive-chat-subagents__open {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 4px 6px;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.archive-chat-subagents__open:hover:not([disabled]) {
+    border-color: var(--color-accent);
+}
+
+.archive-chat-subagents__open:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.archive-chat-subagents__open[disabled] {
+    cursor: not-allowed;
+    opacity: 0.7;
+    border-style: dashed;
+}
+
+.archive-chat-subagents__ordinal {
+    font-weight: 700;
+    color: var(--color-accent);
+    min-width: 3.2em;
+}
+
+/* An ordinal that could not be determined must not read as a rank. */
+.archive-chat-subagents__ordinal[data-ordinal="unknown"] {
+    color: var(--color-fg-muted);
+    font-style: italic;
+    font-weight: 400;
+}
+
+.archive-chat-subagents__started,
+.archive-chat-subagents__tid {
+    color: var(--color-fg-muted);
+    font-size: 0.68rem;
+}
+
+/* ---- truncation, and the end of a partial conversation --------------- */
+
+/* A TRUNCATION NOTE IS NOT DECORATION. It is the difference between an
+ * excerpt and a document, so it is bordered and stated, never a faint
+ * ellipsis somebody can miss. */
+.archive-chat-block__truncated-note {
+    margin: 2px 0 0 0;
+    padding: 3px 6px;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--color-fg-muted);
+    border-left: 2px solid var(--color-fg-muted);
+}
+
+.archive-chat__sentinel {
+    margin: 6px 0 24px 0;
+    padding: 8px 10px;
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-chat__sentinel-text,
+.archive-chat__sentinel-nopager {
+    margin: 0 0 6px 0;
+}
+
+.archive-chat__pager {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 3px 10px;
+    cursor: pointer;
+}
+
+.archive-chat__pager:hover:not([disabled]) {
+    border-color: var(--color-accent);
+}
+
+.archive-chat__pager[disabled] {
+    cursor: progress;
+    opacity: 0.7;
+}
+
+.archive-chat-subagents__multi,
+.archive-chat-subagents__unlinked {
+    margin: 4px 0 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--color-fg-muted);
+}
+
+/* ---- the collapsed progress chip ------------------------------------ */
+
+.archive-chat-turn--progress {
+    border-left-style: dotted;
+    background: none;
+    padding: 2px 10px;
+}
+
+.archive-chat-turn__progress-chip {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--color-fg-muted);
+    background: none;
+    border: 1px dotted var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    cursor: pointer;
+}
+
+/* ---- narrow ---------------------------------------------------------- */
+
+/* The role indent is the first thing to go on a phone: 12 percent of a
+ * 375px viewport is 45px of a 330px measure, which costs more than the
+ * signal is worth when the rail and the name are both still there. */
+@media (max-width: 768px) {
+    .archive-chat-turn[data-role="user"],
+    .archive-chat-turn[data-role="assistant"],
+    .archive-chat-turn[data-role="system"],
+    .archive-chat-turn[data-role="unknown"] {
+        margin-left: 0;
+        margin-right: 0;
+    }
+
+    .archive-chat-info__list,
+    .archive-chat-info__usage,
+    .archive-chat-info__extra {
+        grid-template-columns: 1fr;
+        gap: 0 0;
+    }
+
+    .archive-chat-info__key {
+        margin-top: 4px;
+    }
+}

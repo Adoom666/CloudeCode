@@ -167,18 +167,27 @@ test('the X and the trash are still never both on one row', () => {
     // was written to prevent.
     const running = SessionRowActions.html('working', 'cloude_api', 'running-session-kill');
     const stopped = SessionRowActions.html('dead', 'cloude_api', 'running-session-kill');
-    assert.equal((running.match(/<button/g) || []).length, 1, 'running row grew a control');
+    const unread = SessionRowActions.html('unknown', 'cloude_api', 'running-session-kill');
+    // Two apiece on a MEASURED row, since TODO item 22 part 2 - the live
+    // row draws close plus restart, the stopped row restart plus trash.
+    // A row whose status could not be read keeps the single X.
+    assert.equal((running.match(/<button/g) || []).length, 2, 'running row lost a control');
     assert.equal((stopped.match(/<button/g) || []).length, 2, 'stopped row must offer restart + remove');
+    assert.equal((unread.match(/<button/g) || []).length, 1, 'an unreadable row grew a control');
 
     const closeGlyph = SessionStatusUI.closeIconSvg();
     const trashGlyph = SessionStatusUI.trashIconSvg();
     const restartGlyph = SessionStatusUI.restartIconSvg();
     assert.ok(running.includes(closeGlyph), 'running row must draw the X');
     assert.ok(!running.includes(trashGlyph), 'running row must not draw the trash');
-    assert.ok(!running.includes(restartGlyph), 'a live agent must not be offered a restart');
+    // THE PAIR IS WHAT THIS TEST GUARDS. A live row may draw the restart
+    // arrow now; it may still never draw the trash, because close and
+    // remove make opposite promises about whether anything is running.
+    assert.ok(running.includes(restartGlyph), 'running row lost its restart arrow');
     assert.ok(stopped.includes(trashGlyph), 'stopped row must draw the trash');
     assert.ok(stopped.includes(restartGlyph), 'stopped row must draw the restart arrow');
     assert.ok(!stopped.includes(closeGlyph), 'stopped row must not draw the X');
+    assert.ok(!unread.includes(restartGlyph), 'an unreadable row was offered a restart');
 });
 
 test('the control always has BOTH a title and an aria-label (the original bug)', () => {
@@ -246,8 +255,8 @@ test('neither copy may claim disk is left untouched', async () => {
             !/nothing (?:on disk is touched|is deleted)|no files are deleted|disk is untouched|leaves? (?:disk|files) (?:alone|untouched)/i.test(details),
             `${action}: copy must not claim disk is untouched`,
         );
-        // Stating the deletion is the positive half of the same guarantee.
-        assert.ok(/deleted/.test(details), `${action}: must say files are deleted`);
+        // Stating the removal is the positive half of the same guarantee.
+        assert.ok(/removed/.test(details), `${action}: must say files are removed`);
         assert.ok(/\.cloude_uploads/.test(details), `${action}: must name the directory that is removed`);
     }
 });
@@ -256,8 +265,8 @@ test('both copies state that the transcript survives', async () => {
     for (const action of [SessionRowActions.ACTION_CLOSE, SessionRowActions.ACTION_REMOVE]) {
         const { details } = await confirmCopyFor(action, 'api-work');
         assert.ok(
-            /transcript is not\s+deleted/.test(details),
-            `${action}: must say the transcript is not deleted`,
+            /transcript is kept/.test(details),
+            `${action}: must say the transcript is kept`,
         );
         assert.ok(/~\/\.claude\/projects/.test(details), `${action}: must say where it stays`);
     }
@@ -297,10 +306,10 @@ test('remove copy still reads exactly as written', async () => {
     assert.equal(
         details,
         'this cannot be undone. this session already exited, so no running ' +
-            "process is stopped, but files uploaded to it are deleted from the " +
+            "process is stopped, but files uploaded to it are removed from the " +
             "project's .cloude_uploads folder. the leftover tmux shell is " +
-            'cleared and cloudecode forgets the entry. the transcript is not ' +
-            'deleted and stays under ~/.claude/projects.',
+            'cleared and cloudecode forgets the entry. the transcript is kept ' +
+            'and stays under ~/.claude/projects.',
     );
 });
 
@@ -379,6 +388,11 @@ function makeRenderSandbox(moduleFile, containerId) {
     // now delegates to it, so it has to be in the sandbox too. Harmless
     // for the launchpad case, which does not use it.
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
+    // The row's kebab, and the menu it builds. rowHtml() calls into this
+    // for its one remaining control, and the sidebar assertion below
+    // reads the folded actions back out of it.
+    vm.runInContext(readClientJs('kebab-icon.js'), context);
+    vm.runInContext(readClientJs('session-row-menu.js'), context);
     vm.runInContext(readClientJs(moduleFile), context, { filename: moduleFile });
     return { win, container };
 }
@@ -400,20 +414,50 @@ test('launchpad running-session rows paint the right control per state', () => {
 });
 
 test('sidebar rows paint the same control with the same wording', () => {
+    // THE CONTROL MOVED, THE WORDING DID NOT. The sidebar row folded its
+    // action icons into a per-row overflow menu
+    // (client/js/session-row-menu.js), so the buttons are no longer in
+    // the row's own markup - they are in the panel that row's kebab
+    // opens. The parity this test exists to protect is between the two
+    // SURFACES, launcher and sidebar, not between two strings in one
+    // element, so what is compared is what each surface OFFERS.
+    //
+    // Narrowing this to the row's inline markup would have quietly turned
+    // it into an assertion about nothing: every needle below would be
+    // absent, and the test would have to be deleted rather than moved.
     const { win, container } = makeRenderSandbox('session-sidebar.js', 'session-sidebar-list');
     win.SessionSidebar.listEl = container;
     win.SessionSidebar.render([
         { name: 'cloude_alive', created_by_cloude: true, status: 'idle', is_active: true },
         { name: 'cloude_gone', created_by_cloude: true, status: 'dead', is_active: false },
     ]);
-    const html = container.innerHTML;
+    const menus = ['cloude_alive', 'cloude_gone'].map((name) => {
+        const kebab = { getAttribute: (attr) => ({
+            'data-row-menu': name,
+            'data-row-status': name === 'cloude_gone' ? 'dead' : 'idle',
+            'data-row-pinned': '0',
+            'data-row-unread': '0',
+        }[attr] || null) };
+        return win.SessionRowMenu.controlHtmlFor(kebab).join('');
+    }).join('');
+    const html = container.innerHTML + menus;
+    assert.ok(container.innerHTML.includes('data-row-menu='),
+        'the row must paint a kebab to hang its actions off');
     assert.ok(html.includes('title="close session"'), 'same tooltip wording as the launcher');
     assert.ok(html.includes('title="remove from the list"'));
-    // 3, not 2: the live row draws close, the dead row draws restart
-    // AND remove. Updated by feat/session-respawn - see the launcher
-    // assertion above for why the dead row now carries two.
-    assert.ok(html.includes('title="restart the agent"'), 'dead row lost its restart');
-    assert.equal((html.match(/data-session-action=/g) || []).length, 3);
+    // 4, not 3: BOTH rows now draw two. The dead row draws restart and
+    // remove; the live row draws close and, since TODO item 22 part 2,
+    // restart as well - restarting a running session is a supported
+    // operation now (respawn-pane -k in place). Offering the control is
+    // not permitting the kill: it opens the picker, which needs an arm
+    // box and a confirm modal, and the server needs
+    // `confirm_restart_live` after that.
+    assert.ok(html.includes('title="restart the agent"'), 'a row lost its restart');
+    assert.equal((html.match(/data-session-action=/g) || []).length, 4);
+    assert.equal(
+        (html.match(/data-session-action="restart"/g) || []).length, 2,
+        'both the live row and the dead row must offer restart',
+    );
 });
 
 await runQueue();

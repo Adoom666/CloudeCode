@@ -1,0 +1,304 @@
+/* Status LED - the two-ring session indicator.
+ *
+ * Renders the markup from client/js/status-led.js. Everything here is
+ * selected off the two data attributes that module emits:
+ *
+ *   [data-inner] - the chat's own status  -> the colour of the centre dot
+ *   [data-outer] - activity and attention -> the colour, motion and
+ *                  presence of the halo behind it
+ *
+ * The two are INDEPENDENT. No rule may read one to decide the other; the
+ * whole point of two rings is that either can change without the other.
+ *
+ * STRUCTURE. One inline-block `<span>` is the dot. The halo is its
+ * ::after, absolutely positioned and centred, larger than the dot, and
+ * blurred at the edges by a wide box-shadow in its own colour. It is a
+ * pseudo-element rather than a second span so the LED is one element in
+ * the markup and one inline box in the layout - it drops into any row
+ * that held a `.status-dot` without moving anything.
+ *
+ * The halo is drawn UNDER the dot (negative z-index on the pseudo) so a
+ * bright glow never washes out the state colour at the centre.
+ *
+ * SIZING. `--led-size` is the dot's diameter and every other dimension is
+ * derived from it, so one custom property scales the whole component.
+ * ledHtml() may set it per instance; nothing else should.
+ *
+ * NO THEME MAY NEED TO OVERRIDE THIS FILE. The six state colours are
+ * tokens declared once in the block below, each falling back to a theme
+ * token where one exists and to a literal only when it does not. A theme
+ * that wants a different LED palette redefines --led-color-*, not these
+ * rules.
+ */
+
+.status-led {
+    /* ---- the one place the six state colours are named --------------
+     * Each is the hue for BOTH rings of that state - the halo is the
+     * same colour as the dot, only larger and blurred, which is what
+     * makes it read as one lit object rather than two shapes.
+     *
+     * Every value defers to a theme token first. --color-accent and
+     * --color-danger already exist in every theme; the rest fall back to
+     * a literal that is legible on both the light and dark palettes this
+     * app ships, because there is no existing token that means them. */
+    --led-color-working: var(--color-info, #4a9eff);
+    --led-color-waiting: var(--color-accent, #ffb020);
+    /* BLOCKED ON A YES/NO gets its own hue, added with the 2026-09-08
+     * split of `question` (a PermissionRequest, the agent is stopped)
+     * from `notice` (a Notification, it is not). Two states that ask
+     * different things of the user may not paint the same colour, or the
+     * split buys nothing at the only place it matters - the light.
+     *
+     * WHY --color-status-pending (#ffa500) AND NOT A NEW VALUE. It is an
+     * existing palette token, so no theme has to learn a new one. It is a
+     * saturated orange sitting between the terracotta `--color-accent`
+     * that `waiting` resolves to (#d77757, muted) and the red
+     * `--color-danger` that `dead` takes (#ff4444), which is exactly
+     * where this state belongs: hotter than "come and look", and NOT a
+     * red, because a blocked session is not a dead one and the two lights
+     * must never be confusable at a glance. The danger-adjacent
+     * --color-danger-strong (#ff6b6b) was rejected for that last reason
+     * alone. It is also clear of --color-unread's amber (#fbbf24), which
+     * rides the halo and could otherwise sit behind it. */
+    --led-color-permission: var(--color-status-pending, #ffa500);
+    --led-color-done: var(--color-success, #3fb950);
+    --led-color-dead: var(--color-danger, #ff4444);
+    --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
+
+    /* Attention has its own hue, deliberately NOT one of the five above.
+     * Unread is a property of the halo alone and can sit behind any
+     * inner state, so if it shared a colour with one of them the two
+     * rings would read as one signal in exactly the case where they are
+     * saying different things. */
+    --led-color-unread: var(--color-warning, #d29922);
+
+    /* Geometry. The halo ring is 1.3x the dot and the soft glow beyond it
+     * is a fixed 1.5px - fixed rather than proportional because at this
+     * size a flat pixel value reads truer than a fraction of the dot.
+     * At the 9px default every call site actually renders at (sidebar
+     * row, launchpad card - neither passes `size`, so both get this
+     * value), the whole lit object - halo ring plus glow, at the
+     * breathing peak - is about 14.7px across: 9 * 1.3 = 11.7px halo,
+     * plus 2 * 1.5 = 3px of glow. The owner's own calibration: "glowing
+     * is still to big. like 1 or 2 px larger than the front circle" -
+     * i.e. the halo ring itself should read as only a couple of px
+     * bigger than the dot, with the glow adding a further 1-2px on top.
+     *
+     * PRIOR VALUES, for anyone tracing a regression:
+     *   - 1.7x scale, 0.3x spread (shipped 2026-09-08 morning) put the
+     *     lit object at about 21px across - still visibly larger than
+     *     "1 or 2px more than the dot".
+     *   - 2.6x scale, 0.62x spread (the original) put it at about 35px
+     *     across - larger than the row text itself and overlapping
+     *     neighbours on the compact sidebar density and the launchpad
+     *     cards, the owner's "breathing is way too big" report. */
+    --led-size: 9px;
+    --led-halo-scale: 1.3;
+    --led-glow-spread: 1.5px;
+
+    /* Resolved per state by the [data-inner] / [data-outer] rules below.
+     * Declared here so every LED always has a value for both, and an
+     * unstyled state is impossible. */
+    --led-ink: var(--led-color-unknown);
+    --led-halo-ink: var(--led-color-unknown);
+    --led-halo-opacity: 0.35;
+
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+    width: var(--led-size);
+    height: var(--led-size);
+    border-radius: var(--radius-full);
+    background: var(--led-ink);
+    /* Isolate the negative-z-index halo to this element's own stacking
+     * context, so it can sit behind the dot without falling behind the
+     * row background it is painted on. */
+    isolation: isolate;
+}
+
+.status-led::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: calc(var(--led-size) * var(--led-halo-scale));
+    height: calc(var(--led-size) * var(--led-halo-scale));
+    margin-top: calc(var(--led-size) * var(--led-halo-scale) / -2);
+    margin-left: calc(var(--led-size) * var(--led-halo-scale) / -2);
+    border-radius: var(--radius-full);
+    background: var(--led-halo-ink);
+    /* The glow itself. A wide, spread box-shadow in the halo colour is
+     * what softens the edge; `filter: blur()` was rejected because it
+     * forces a compositing layer per LED and there can be dozens of
+     * these in a long session list. */
+    box-shadow: 0 0 var(--led-glow-spread) var(--led-glow-spread)
+        var(--led-halo-ink);
+    opacity: var(--led-halo-opacity);
+    z-index: -1;
+    pointer-events: none;
+}
+
+/* ---- inner dot: the chat's own status ------------------------------
+ * Colour only. Motion belongs to the halo. */
+
+.status-led[data-inner='working'] {
+    --led-ink: var(--led-color-working);
+}
+
+.status-led[data-inner='waiting-permission'] {
+    --led-ink: var(--led-color-permission);
+}
+
+.status-led[data-inner='waiting-input'] {
+    --led-ink: var(--led-color-waiting);
+}
+
+.status-led[data-inner='done'] {
+    --led-ink: var(--led-color-done);
+}
+
+.status-led[data-inner='dead'] {
+    --led-ink: var(--led-color-dead);
+}
+
+.status-led[data-inner='unknown'] {
+    /* THE ONLY HOLLOW DOT, carried over from `.status-dot--unknown` for
+     * the reason recorded there: `unknown` is not a new severity, so it
+     * may not take a louder colour, but it must not be pixel-identical
+     * to a measured state under a theme that flattens the greys. Shape
+     * separates them without ranking them. An inset shadow rather than a
+     * border or a radius trick, so it stays hollow under the themes that
+     * set --radius-full to 0 and turn every dot into a square. */
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--led-color-unknown);
+    --led-ink: var(--led-color-unknown);
+}
+
+/* ---- outer halo: activity and attention ----------------------------
+ * Colour, opacity and motion. */
+
+.status-led[data-outer='active'] {
+    --led-halo-ink: var(--led-ink);
+    --led-halo-opacity: 0.55;
+}
+
+.status-led[data-outer='steady'] {
+    /* Lit and still. Done, seen, nothing pending. */
+    --led-halo-ink: var(--led-ink);
+    --led-halo-opacity: 0.3;
+}
+
+.status-led[data-outer='unread'] {
+    /* Its own hue, and it breathes - this is the state the whole feature
+     * exists to surface. Same 2s period as `active`: unread is not more
+     * urgent than working, it is a different KIND of thing, and a faster
+     * pulse would read as a severity ranking that is not intended. */
+    --led-halo-ink: var(--led-color-unread);
+    --led-halo-opacity: 0.6;
+}
+
+.status-led[data-outer='off'] {
+    /* Dead. No halo at all - not a dim one. A corpse must not glow. */
+    --led-halo-opacity: 0;
+}
+
+.status-led[data-outer='dim'] {
+    --led-halo-ink: var(--led-color-unknown);
+    --led-halo-opacity: 0.18;
+}
+
+/* The breathing glow. Animates the HALO only (the ::after), never the
+ * dot, so the state colour at the centre stays at full strength and
+ * legible at every point in the cycle. Opacity and scale together, so it
+ * reads as a glow swelling rather than a light flickering. */
+.status-led[data-outer='active']::after,
+.status-led[data-outer='unread']::after {
+    animation: status-led-breathe 2s ease-in-out infinite;
+}
+
+@keyframes status-led-breathe {
+    0%,
+    100% {
+        opacity: calc(var(--led-halo-opacity) * 0.45);
+        transform: scale(0.92);
+    }
+    50% {
+        opacity: var(--led-halo-opacity);
+        transform: scale(1);
+    }
+}
+
+/* REDUCED MOTION. The glow stays - it is what makes the LED readable -
+ * but it stops breathing and sits at its full lit value. A user who has
+ * asked for no motion must still be able to tell an active session from
+ * a resting one, so the distinction moves entirely into opacity: `active`
+ * and `unread` remain the brightest haloes on screen, they just hold
+ * still. */
+@media (prefers-reduced-motion: reduce) {
+    .status-led,
+    .status-led::after {
+        animation: none !important;
+    }
+
+    .status-led[data-outer='active']::after,
+    .status-led[data-outer='unread']::after {
+        opacity: var(--led-halo-opacity);
+        transform: none;
+    }
+}
+
+/* ---- legacy `.status-dot` compatibility -----------------------------
+ * session-status-ui.js emits ONE element carrying both vocabularies:
+ * the legacy `status-dot status-dot--<state>` classes (so existing
+ * selectors and harnesses keep finding it) and this component's two data
+ * attributes (which do the drawing).
+ *
+ * That means status-dot.css and this file would otherwise BOTH paint the
+ * same element. This block is the referee: where both classes are
+ * present, the LED owns the paint and the legacy element-level treatment
+ * is switched off. Specifically it drops the `dead` ring and the
+ * `unknown` inset rim (both element box-shadows), and the per-state
+ * `status-dot-pulse` animation, which would otherwise flash the centre
+ * dot on top of the halo's breathing and read as two lights.
+ *
+ * This is a PAIR with the extraClass call in session-status-ui.js's
+ * dotHtml. Deleting either one alone leaves the other wrong. status-dot.css
+ * is still the sole styling for any `.status-dot` emitted WITHOUT the LED
+ * (the fallback path when status-led.js fails to load), which is why that
+ * file is not deleted.
+ *
+ * Must load AFTER status-dot.css. */
+
+.status-dot.status-led {
+    animation: none;
+    box-shadow: none;
+    background: var(--led-ink);
+}
+
+/* The hollow treatment is the one legacy shape worth keeping, so it is
+ * re-asserted here in LED terms rather than inherited by accident. */
+.status-dot.status-led[data-inner='unknown'] {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--led-color-unknown);
+}
+
+/* ---- the unread-count badge ----------------------------------------
+ * Rendered beside a SUMMARY led (a group header, the launchpad top bar)
+ * by client/js/session-status-summary.js. Never rendered at zero - see
+ * that module for why. Copy is a bare number; the count's meaning is in
+ * its title and aria-label. */
+
+.status-summary-badge {
+    display: inline-block;
+    min-width: 1.25em;
+    padding: 0 0.35em;
+    margin-left: 0.4em;
+    border-radius: var(--radius-full);
+    background: var(--led-color-unread, var(--color-warning, #d29922));
+    color: var(--color-bg, #111);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.5;
+    text-align: center;
+    vertical-align: middle;
+}

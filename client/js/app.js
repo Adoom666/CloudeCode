@@ -341,7 +341,14 @@ class AppController {
      * light - the stated rule, applied honestly. The auth screen reports
      * its own failures inline.
      *
-     * @param {'auth'|'launchpad'|'terminal'} screen - Screen being shown.
+     * ARCHIVE: `#archive-bar-status` lives in the shell that
+     * archive-screen.js builds at SCRIPT LOAD, precisely so it exists
+     * before this runs - showArchive() calls this before ArchiveScreen
+     * .show(), the same order showLaunchpad() uses. A third named target
+     * rather than an else-branch: left alone, the archive screen would
+     * put its light in the terminal bar, which is not on screen.
+     *
+     * @param {'auth'|'launchpad'|'terminal'|'archive'} screen - Screen being shown.
      * @returns {void}
      */
     _placeStatusLight(screen) {
@@ -349,7 +356,9 @@ class AppController {
         if (!el) return;
         const target = screen === 'launchpad'
             ? document.getElementById('home-bar-status')
-            : document.getElementById('terminal-bar-status');
+            : screen === 'archive'
+                ? document.getElementById('archive-bar-status')
+                : document.getElementById('terminal-bar-status');
         if (!target || el.parentElement === target) return;
         // Before the label span in both bars, so the dot leads the pair.
         target.insertBefore(el, target.firstChild);
@@ -373,6 +382,8 @@ class AppController {
         if (homeLabel) homeLabel.textContent = text;
         const terminalLabel = document.getElementById('terminal-bar-status-text');
         if (terminalLabel) terminalLabel.textContent = text;
+        const archiveLabel = document.getElementById('archive-bar-status-text');
+        if (archiveLabel) archiveLabel.textContent = text;
     }
 
     /**
@@ -598,6 +609,25 @@ class AppController {
             if (this.currentScreen === 'terminal') {
                 console.log('App: Title clicked, returning to launcher');
                 this.goHome();
+                return;
+            }
+            // THE ARCHIVE'S ONLY IN-APP EXIT. Its own Back button steps
+            // panes within the archive and bottoms out at the root pane,
+            // so before this the browser's Back button was the only way
+            // out. Routed through ArchiveEntry.close() rather than
+            // showLaunchpad() because the address bar has to be written
+            // too - see that function for why showLaunchpad() cannot do
+            // it itself.
+            if (this.currentScreen === 'archive') {
+                console.log('App: Title clicked, leaving the archive');
+                if (window.ArchiveEntry && typeof window.ArchiveEntry.close === 'function') {
+                    window.ArchiveEntry.close();
+                } else {
+                    // Named, not silent: a title that does nothing is
+                    // indistinguishable from a title nobody clicked.
+                    console.warn('App: ArchiveEntry.close is unavailable; ' +
+                                 'the archive has no exit.');
+                }
             }
         });
 
@@ -688,30 +718,12 @@ class AppController {
         this.currentScreen = 'auth';
         this._placeStatusLight('auth');
         if (window.GlobalAudioToggle) window.GlobalAudioToggle.place('auth');
-        // Leaving the terminal: drop any session-scoped theme so xterm
-        // and the terminal screen revert to the global theme on next entry.
-        if (window.Themes && typeof window.Themes.clearSession === 'function') {
-            window.Themes.clearSession();
-        }
-        // SESSION-IDENTITY-V2 - clear active-session pin scope and restore
-        // the user's global localStorage theme + brand identity.
-        if (window.Themes) {
-            if (typeof window.Themes.setActiveSession === 'function') {
-                window.Themes.setActiveSession(null);
-            }
-            if (typeof window.Themes.applyTheme === 'function') {
-                var stored = null;
-                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
-                window.Themes.applyTheme(stored || 'claude', { persist: false });
-            }
-        }
-        // Leaving session scope closes the audio gate: with no session in
-        // scope ThemeAudio's sessionName is null and the gate cannot open
-        // whatever the global on/off says. Must run AFTER
-        // setActiveSession(null) - it reads the active session.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // The auth screen is not a session: drop the session theme scope and
+        // paint the user's own global theme. Same one call every navigation
+        // makes - see client/js/theme-navigation.js for why the three
+        // hand-copied versions of this block became one function. It also
+        // re-syncs the audio gate, which must happen after the scope clears.
+        window.ThemeNavigation.applyForGlobal();
         setHeaderIdentity({ icon: 'brand', title: 'Cloude Code' });
         // v0.7.1 - auth screen has no session context; reset tab title.
         setPageTitle(null);
@@ -722,10 +734,164 @@ class AppController {
     }
 
     /**
+     * Description: hand a stashed archive route to showArchive(), if
+     *   router.js parked one because auth had not completed when the URL
+     *   was read. Idempotent: clears the stash on the way through, so a
+     *   later showLaunchpad() does not bounce the user back.
+     *
+     *   CALLED FROM showLaunchpad()'S FIRST LINE, AND IT RETURNS THERE.
+     *   Called from showLaunchpad() for the same reason the settings deep
+     *   link is: only ONE of the two login paths fires the
+     *   `authenticated` event (init()'s existing-token branch calls
+     *   showLaunchpad() directly), and BOTH paths reach it.
+     *   FIRST, because MEASURED 2026-08-31: delivering the archive route
+     *   from router.js's `authenticated` listener instead produced a race
+     *   the launchpad won every time - both handlers run on their own
+     *   setTimeout(0), the archive screen was activated, and then
+     *   hideAllScreens() from showLaunchpad() put it straight back. The
+     *   observable result was a fully built and loaded archive screen -
+     *   50 transcript rows in the DOM - inside a `display: none` div,
+     *   with /archive in the address bar, the launcher on screen and no
+     *   error anywhere. Consuming the stash before showLaunchpad() has
+     *   touched any screen state removes the race rather than re-tuning
+     *   it, which is why it is the first line and not the last.
+     * Inputs: none.
+     * Output: boolean - true when a route was delivered; the caller must
+     *   return on true, or it will render the launchpad over the archive.
+     */
+    _showArchiveIfDeepLinked() {
+        const target = window.ArchiveDeepLinkTarget;
+        if (!target) return false;
+        window.ArchiveDeepLinkTarget = null;
+        this.showArchive(target);
+        return true;
+    }
+
+    /**
+     * Description: show the archive (message browser) screen.
+     *
+     * Modelled directly on showLaunchpad(). It does not call
+     * SessionSidebar.show(): the sidebar is the working set of LIVE
+     * sessions and the archive is a different corpus with its own
+     * navigation, so showing both puts two unrelated trees on one screen.
+     *
+     * IT NOW CALLS SessionSidebar.hide(), AND THE COMMENT THAT SAID IT
+     * MUST NOT WAS STALE. That comment read "hide() persists a closed
+     * state that then affects the launchpad". True when it was written;
+     * false since 4af93ca, which changed hide() to close({persist: false})
+     * for exactly that reason - see hide()'s own doc comment, which now
+     * says leaving a screen is not the user closing the bar. Nobody
+     * re-read the claim after the thing it described was fixed, so the
+     * archive went on being the one authenticated screen that left the
+     * conversation list on top of itself. What the user reported:
+     * "when clicking into it, it should take over the page, no
+     * conversations sidebar". With the bar PINNED the cost is not merely
+     * cosmetic - `body.session-sidebar-pinned .screen` pads every screen,
+     * `#archive-screen` included, by --sidebar-dock-w, so the archive was
+     * rendering into a 320px-narrower box with the panel sitting in the
+     * gap. hide() takes the panel off screen, drops that body class via
+     * SessionSidebarPin.apply(), stops the poller, and leaves the user's
+     * open/pinned PREFERENCE untouched, so showLaunchpad()'s and
+     * showTerminal()'s existing show() call restores it on the way out.
+     *
+     * IT ALSO DROPS THE SESSION IDENTITY, which is the second half of the
+     * same report ("it stays on current session"). Arriving from a
+     * terminal, showArchive() used to leave FOUR live references to the
+     * session the user had just navigated away from: the sidebar's
+     * active-row pin (setActiveSession was never cleared), the header
+     * title, the browser tab title, and the per-session theme scope.
+     * Clearing them is not cosmetic tidying - a screen that still claims
+     * to be a session is a screen whose Back, theme and audio controls
+     * all act on something that is no longer on screen.
+     *
+     * THE WEBSOCKET IS PAUSED, NOT DETACHED, and the distinction is the
+     * whole point. This reuses TerminalController.pauseForHome() - the
+     * same call App.goHome() makes - which closes only the browser-side
+     * socket under the existing _intentionalClose flag. The tmux session
+     * and the server's session record both stay alive and adopted, so the
+     * session keeps appearing in GET /sessions/list and re-entering it
+     * reconnects through the usual reconnectToExistingSession() path.
+     * Anything stronger here (detachSession, destroySession) would mean a
+     * user lost a live session by looking at the archive, which is a far
+     * worse bug than the layout one this change is fixing.
+     *
+     * Inputs: params (object) - {view, projectId, transcriptId, lineNo,
+     *   query} from router.js. May be {} for the bare /archive route.
+     * Output: void.
+     */
+    showArchive(params) {
+        console.log('App: Showing archive screen', params);
+        // Captured BEFORE hideAllScreens()/currentScreen is reassigned,
+        // for the same reason showTerminal() captures cameFromTerminal:
+        // the question is what the user was on a moment ago, and by the
+        // end of this function that is no longer readable anywhere.
+        const cameFromTerminal = this.currentScreen === 'terminal';
+        if (cameFromTerminal && window.TerminalController
+            && typeof window.TerminalController.pauseForHome === 'function') {
+            window.TerminalController.pauseForHome();
+        }
+        this.hideAllScreens();
+        document.getElementById('archive-screen').classList.add('active');
+        // Same one-way opt-in as showLaunchpad(): these ship
+        // class="hidden" in index.html so they are absent on first paint.
+        // Stripping it is not the screen gate; ScreenChrome.apply() is.
+        this.logoutBtn.classList.remove('hidden');
+        if (this.settingsBtn) this.settingsBtn.classList.remove('hidden');
+        if (this.configEditorBtn) this.configEditorBtn.classList.remove('hidden');
+
+        this.currentScreen = 'archive';
+        window.ScreenChrome.apply('archive');
+        this._placeStatusLight('archive');
+        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.place === 'function') {
+            window.GlobalAudioToggle.place('archive');
+        }
+        // THE ARCHIVE IS A FULL-PAGE MODE. Order matters: clear the
+        // active-session pin FIRST so that if anything re-renders the row
+        // list on the way down it cannot re-mark a row active, then take
+        // the bar off screen. hide() does not persist, so the user's own
+        // open/pinned choice survives and is restored by the show() that
+        // showLaunchpad() and showTerminal() already call on the way back.
+        if (window.SessionSidebar) {
+            window.SessionSidebar.setActiveSession(null, null);
+            window.SessionSidebar.hide();
+        }
+        // THE ARCHIVE IS NOT A SESSION. Drop the pin scope and restore the
+        // user's global theme, so a ThemeSelector swap made while browsing
+        // the archive cannot PATCH a pin onto a session the user is no
+        // longer looking at. This used to be a six-line block copy-pasted
+        // from showLaunchpad() under a comment declaring the duplication
+        // deliberate; that decision is what let the session-to-session
+        // switch ship with no restore at all. One function now.
+        window.ThemeNavigation.applyForGlobal();
+        // NO `subheader` HERE, DELIBERATELY. A subheader switches
+        // `.header-row` to the `.header--home` GRID layout and stamps
+        // `home-header-active` on <body>; that is the launchpad's layout
+        // and borrowing it would change the archive's header geometry as
+        // a side effect of wanting a caption. The archive takes the plain
+        // flex header the terminal screen uses.
+        setHeaderIdentity({ icon: 'brand', title: 'Message archive' });
+        // The tab title said the session's name for as long as the user
+        // browsed the archive. It is not that session any more.
+        setPageTitle(null);
+        if (window.ArchiveScreen && typeof window.ArchiveScreen.show === 'function') {
+            window.ArchiveScreen.show(params || {});
+        } else {
+            // A NAMED refusal. The screen div is active and empty at this
+            // point, and a blank screen with no console line is the
+            // hardest defect to trace back to a missing script tag.
+            console.error('App: ArchiveScreen is not loaded - check the ' +
+                'archive script tags in index.html.');
+        }
+    }
+
+    /**
      * Show launchpad screen
      */
     showLaunchpad() {
         console.log('App: Showing launchpad screen');
+        // Archive deep link: consumed FIRST, and it RETURNS. See
+        // _showArchiveIfDeepLinked() for why the position matters.
+        if (this._showArchiveIfDeepLinked()) return;
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
         // These three ship `class="hidden"` in index.html so they are
@@ -748,31 +914,13 @@ class AppController {
         }
         this.currentScreen = 'launchpad';
         window.ScreenChrome.apply('launchpad');
-        // Leaving the terminal: drop the session theme so the launchpad
-        // chrome renders under pure global-theme rules and so the next
-        // session entry re-applies cleanly from a known baseline.
-        if (window.Themes && typeof window.Themes.clearSession === 'function') {
-            window.Themes.clearSession();
-        }
-        // SESSION-IDENTITY-V2 - leave per-session pin scope and restore
-        // the global localStorage theme + brand identity on the launchpad.
-        if (window.Themes) {
-            if (typeof window.Themes.setActiveSession === 'function') {
-                window.Themes.setActiveSession(null);
-            }
-            if (typeof window.Themes.applyTheme === 'function') {
-                var stored = null;
-                try { stored = localStorage.getItem('cloude.theme'); } catch (_) { /* ignore */ }
-                window.Themes.applyTheme(stored || 'claude', { persist: false });
-            }
-        }
-        // Leaving session scope closes the audio gate: with no session in
-        // scope ThemeAudio's sessionName is null and the gate cannot open
-        // whatever the global on/off says. Must run AFTER
-        // setActiveSession(null) - it reads the active session.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // The launchpad is not a session: drop the session theme scope so
+        // the home chrome renders under pure global-theme rules, and paint
+        // the user's own theme. This is the restore the owner could see
+        // working - clicking the title DID change the theme back - while
+        // the session-to-session switch had no equivalent. Both go through
+        // the same function now.
+        window.ThemeNavigation.applyForGlobal();
         // HOME-HEADER-CONSOLIDATION: the launchpad title + prompt used to be
         // a standalone block at the top of .launchpad-container (see
         // launchpad.js renderLaunchpadUI). It now lives in the header
@@ -867,9 +1015,14 @@ class AppController {
         // "adopted:<name>" for adopted sessions, which the backend rejects
         // and causes the PATCH to 404, silently breaking pin persistence.
         var sessionName = (session && (session.tmux_session || session.name)) || null;
-        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
-            window.Themes.setActiveSession(sessionName);
-        }
+        // Enter this session's theme: its pin if it has one, the user's own
+        // global theme if it does not. The "if it does not" half is the fix
+        // for 2026-09-07 - this used to be a bare
+        // `if (session.pinned_theme) applyTheme(...)` further down with no
+        // else, so switching from a pinned session straight into an unpinned
+        // one left the previous session's theme painted. Also sets the pin
+        // scope and re-syncs the audio gate in the required order.
+        window.ThemeNavigation.applyForSession(session, sessionName);
         // Outbound URL sync: reuses Router's SAME slug/encoding scheme
         // build_deep_link() (server) and parseCurrentPath() (inbound
         // router) already use - see Router.enterSession()'s doc comment
@@ -881,23 +1034,6 @@ class AppController {
         if (window.SessionSidebar) {
             window.SessionSidebar.show();
             window.SessionSidebar.setActiveSession(session && session.id, sessionName);
-        }
-        // If a pinned theme came back on the session payload, paint it WITHOUT
-        // persisting (server is already authoritative on the pin). forXterm:true
-        // forces the xterm repaint regardless of activeSessionAgent ordering -
-        // the freshly-attached session must immediately have its terminal
-        // palette styled (not just the page chrome).
-        if (session && session.pinned_theme && window.Themes
-            && typeof window.Themes.applyTheme === 'function') {
-            window.Themes.applyTheme(session.pinned_theme, { persist: false, forXterm: true });
-        }
-        // Global audio: apply the stored on/off to THIS session's gate so
-        // music never carries over from the session we just left (the
-        // engine's sessionOn half is per session-name in memory even
-        // though the on/off itself is one global choice now). Must run
-        // after setActiveSession above - it keys off the tmux session name.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
         }
         // Header identity: brand icon + the session's LABEL as title.
         // NOT sessionName - that is the tmux handle, which identity is
@@ -955,6 +1091,32 @@ class AppController {
         // create leaves them undefined and connectToSession treats
         // that as a normal (non-adopt) path.
         window.TerminalController.connectToSession(session, opts);
+        this.focusTerminal();
+    }
+
+    /**
+     * Description: hand keyboard focus to the terminal's own input. Every
+     *   path that puts a session on screen ends with this, because
+     *   whatever the user clicked to get here - a sidebar row, most often
+     *   - otherwise KEEPS focus, and that element's key handlers then
+     *   swallow what the user believes they are typing at the terminal.
+     *   Doing it in showTerminal() and returnToExistingTerminal() covers
+     *   both arrival paths; the sidebar separately stops being focusable
+     *   once closed (session-sidebar.js), because fixing only the switch
+     *   path would leave every OTHER way of closing the bar stranded the
+     *   same way.
+     * Inputs: none.
+     * Output: void.
+     * Example: this.focusTerminal();
+     */
+    focusTerminal() {
+        // Deferred for the same reason SlashCommandsModal.selectCommand()
+        // defers it: .xterm-helper-textarea is created by xterm during its
+        // own attach, so a synchronous query can find nothing at all.
+        setTimeout(() => {
+            const input = document.querySelector('.xterm-helper-textarea');
+            if (input) input.focus();
+        }, 100);
     }
 
     /**
@@ -1002,23 +1164,18 @@ class AppController {
         var sessionName = (session && (session.tmux_session || session.name))
             || (inner && (inner.tmux_session || inner.name))
             || null;
-        var pinnedTheme = (session && session.pinned_theme)
-            || (inner && inner.pinned_theme)
-            || null;
-        if (window.Themes && typeof window.Themes.setActiveSession === 'function') {
-            window.Themes.setActiveSession(sessionName);
-        }
-        // Global audio: re-apply the stored on/off to THIS session's gate.
-        // FIXED 2026-08-19: this path used to skip the sync entirely, so
-        // re-attaching to a running session (from the launchpad's
-        // active-session banner or the sidebar) left ThemeAudio's gate
-        // pointed at whatever session was last synced through
-        // showTerminal() - global audio could go silent on a plain
-        // re-attach with no toggle touched. Must run after
-        // setActiveSession above - it keys off the tmux session name.
-        if (window.GlobalAudioToggle && typeof window.GlobalAudioToggle.syncForSession === 'function') {
-            window.GlobalAudioToggle.syncForSession();
-        }
+        // THIS IS THE PATH THE SIDEBAR'S SESSION-TO-SESSION SWITCH TAKES
+        // (session-sidebar-clicks.js calls straight into here, never via the
+        // home screen). It used to read the pin, then paint it only
+        // `if (pinnedTheme)`, so switching into an UNPINNED session painted
+        // nothing and inherited the previous session's theme - the defect
+        // the owner reported on 2026-09-07. applyForSession() is total: an
+        // unpinned target restores the user's own global theme. It also
+        // resolves the pin off both payload levels (`pinned_theme` rides on
+        // the SessionInfo wrapper, not the nested `.session`), sets the pin
+        // scope, and re-syncs the audio gate afterwards - the gate keys off
+        // the active session name, so that ordering is not optional.
+        window.ThemeNavigation.applyForSession(session, sessionName);
         // Outbound URL sync: same encoding Router.enterSession() shares
         // with build_deep_link() (server) and the inbound router parser.
         this._syncSessionUrl(sessionName, cameFromTerminal);
@@ -1027,12 +1184,6 @@ class AppController {
             var activeSid = (inner && inner.id) || (session && session.id) || null;
             window.SessionSidebar.show();
             window.SessionSidebar.setActiveSession(activeSid, sessionName);
-        }
-        if (pinnedTheme && window.Themes && typeof window.Themes.applyTheme === 'function') {
-            // forXterm:true - see showTerminal() for rationale. Re-entry to an
-            // already-running session must immediately repaint the xterm pane,
-            // not just page chrome.
-            window.Themes.applyTheme(pinnedTheme, { persist: false, forXterm: true });
         }
         // Same rule as showTerminal(): the header says the LABEL. The
         // outer SessionInfo carries it; an older caller handing us the
@@ -1078,6 +1229,7 @@ class AppController {
         }
 
         window.TerminalController.reconnectToExistingSession(session);
+        this.focusTerminal();
     }
 
     /**

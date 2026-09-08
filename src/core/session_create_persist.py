@@ -66,9 +66,8 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_RUNNING,
     SESSION_ORIGIN_CREATED,
 )
-from src.core.project_attribution import attribute
 from src.core.session_adopt_persist import find_live_instance
-from src.core.session_import_mapping import _project_roots
+from src.core.session_project_binding import resolve_project_binding
 from src.core.tmux_listing import TmuxListing
 
 logger = structlog.get_logger()
@@ -150,6 +149,8 @@ def persist_creation(
     working_dir_probe: Optional[Callable[[str], Optional[str]]] = None,
     agent_type: Optional[str] = None,
     agent_launched: Optional[bool] = None,
+    reuse_session_id: Optional[int] = None,
+    label: Optional[str] = None,
     now: Optional[str] = None,
 ) -> CreatePersistResult:
     """Record a just-created tmux instance as ``origin='created'``.
@@ -182,7 +183,17 @@ def persist_creation(
       exists to remove: the launcher KNOWS what it ran, and a row that
       does not say so forces the UI to fall through to a scrollback
       guess for a session the user opened through the interface.
-      now (str | None) - ISO-8601 stamp.
+      label (str | None) - the human-chosen name this session was born
+      with, the same string ``launch_name_args`` turns into ``--name``.
+      Recorded as ``sessions.title`` ONLY on a fresh INSERT (see
+      ``_OPTIONAL_INSERT_COLUMNS`` in ``session_identity.py``, which is
+      applied on INSERT and never on a MERGE) - so a row that already
+      exists, or the reuse/rebind branch below, can never have this
+      overwrite a title the user or a later rename already set. An
+      empty/whitespace label is treated the same as no label, matching
+      the truthiness check ``launch_name_args`` already uses so the row's
+      title and the command's ``--name`` flag agree on what counts as
+      "no label". now (str | None) - ISO-8601 stamp.
     Output: CreatePersistResult.
     Example: persist_creation(conn, socket='cloude', name='cloude_a',
                               listing=listing).recorded
@@ -249,7 +260,26 @@ def persist_creation(
     resolved_dir = working_dir or live.get("working_dir")
     if resolved_dir is None and working_dir_probe is not None:
         resolved_dir = working_dir_probe(name)
-    project_id, attribution = attribute(resolved_dir, _project_roots(conn))
+    # A SESSION BEING CREATED IS THE MOMENT A PROJECT MAY BE MINTED. The
+    # user has just chosen a directory to work in, so "no project
+    # contains it" is a gap to close rather than a fact to record - see
+    # the invariant in src/core/session_project_binding.py. This is also
+    # one half of punchlist item 16: the create path can no longer
+    # observe a projects table that does not yet contain its own
+    # project, because if it does not contain one, this puts one there.
+    binding = resolve_project_binding(
+        conn, resolved_dir, allow_create=True, now=now
+    )
+    project_id, attribution = binding.project_id, binding.attribution
+
+    # THE FIX. A label reaching ``--name`` used to be the only place it
+    # landed - the row itself stayed titleless until the title-sync's
+    # transcript read caught up, which only ever writes ``claude_title``
+    # on its first pass (see claude_title_sync_apply's BASELINE_RECORDED
+    # rung), never the visible ``title``. ``resolved_title`` is INSERT-
+    # only via ``_OPTIONAL_INSERT_COLUMNS``, so this can never clobber a
+    # title on a row that already exists.
+    resolved_title = label if label else None
 
     # PROVENANCE, DECIDED HERE AND NOWHERE ELSE. One place turns the
     # caller's (agent_type, agent_launched) pair into the two stored
@@ -267,6 +297,64 @@ def persist_creation(
         recorded_agent_type = None
         family_source = None
 
+    # ROW REUSE, WHEN THE CALLER NAMED A ROW TO REUSE. A RESTART is the
+    # same session coming back, so it keeps its row rather than leaving
+    # the old one behind and inserting a second. Tried FIRST because a
+    # successful rebind is exactly the write record_instance would
+    # otherwise do on a NEW row - and only one of the two may run.
+    #
+    # A refusal is not a failure. If the row vanished or another row
+    # already holds this instance, we fall through and record the
+    # instance the ordinary way: the session is live either way, and an
+    # unreused row is a cosmetic duplicate while a forced write is a
+    # corrupted identity.
+    if reuse_session_id is not None:
+        from src.core.session_restart import rebind_instance
+
+        rebound = rebind_instance(
+            conn,
+            row_id=int(reuse_session_id),
+            socket=socket,
+            name=name,
+            epoch=epoch,
+            tmux_session_id=live.get("tmux_session_id"),
+            working_dir=resolved_dir,
+            lifecycle_source=CREATE_LIFECYCLE_SOURCE,
+            now=now,
+        )
+        if rebound.rebound:
+            logger.info(
+                "create_persisted_by_reuse",
+                tmux_name=name,
+                tmux_socket=socket,
+                tmux_created_epoch=epoch,
+                session_uuid=rebound.session_uuid,
+                reused_session_id=int(reuse_session_id),
+                note=(
+                    "restart reused the existing row; no second row was "
+                    "inserted, so nothing references a session the user "
+                    "cannot see"
+                ),
+            )
+            return CreatePersistResult(
+                outcome=CREATE_RECORDED,
+                session_uuid=rebound.session_uuid,
+                epoch=epoch,
+            )
+        logger.warning(
+            "create_persist_reuse_declined",
+            tmux_name=name,
+            tmux_socket=socket,
+            tmux_created_epoch=epoch,
+            reused_session_id=int(reuse_session_id),
+            outcome=rebound.outcome,
+            detail=rebound.detail,
+            note=(
+                "falling through to an ordinary instance record; the "
+                "session is live and simply keeps a separate row"
+            ),
+        )
+
     result = record_instance(
         conn,
         socket=socket,
@@ -282,6 +370,7 @@ def persist_creation(
         project_attribution=attribution,
         agent_type=recorded_agent_type,
         agent_family_source=family_source,
+        title=resolved_title,
     )
     if result.refused:
         logger.warning(
@@ -311,6 +400,8 @@ def persist_creation(
         tmux_created_epoch=epoch,
         session_uuid=result.session_uuid,
         record_outcome=result.outcome,
+        project_id=project_id,
+        project_binding_rule=binding.rule,
         note=(
             "origin='created' is written once; a MERGE here leaves an "
             "existing origin alone, so this can never demote an adoption"

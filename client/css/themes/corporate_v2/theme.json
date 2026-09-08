@@ -6,6 +6,7 @@
   "version": "2.0.0",
   "cssVars": {
     "--color-bg": "#0A0A0B",
+    "--color-bg-page": "#0a0a0a",
     "--color-bg-elevated": "#141417",
     "--color-bg-overlay": "rgba(99, 102, 241, 0.04)",
     "--color-header-bg": "#06060a",

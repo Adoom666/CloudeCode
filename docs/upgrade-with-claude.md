@@ -13,6 +13,9 @@ nothing more than point at this document.
 This covers the **from-source install** (README "Path B"): a git checkout with
 its own `venv/`, `.env` and `config.json`. The packaged `.app` has no in-place
 upgrader; a new version there means a new DMG dragged over `/Applications`.
+The one exception is the developer's own mini: `scripts/deploy-mini.sh` pushes
+this repo's `src/`/`client/` onto it directly, a different mechanism for a
+different audience - see `docs/deploy-mini.md`, not this file, for that path.
 
 ---
 

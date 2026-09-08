@@ -1,0 +1,425 @@
+/* =====================================================================
+ * ARCHIVE TRANSCRIPT LIST - the middle pane, and the archive's primary
+ * browse surface.
+ *
+ * WHY THIS FILE EXISTS. It did not, until now. `archive-transcript-list.js`
+ * has shipped since 9d190df emitting a complete BEM tree under
+ * `.archive-tlist`, and `grep -rn 'archive-tlist' client/css/` returned
+ * ZERO matches across all 30 stylesheets. Every node in it therefore
+ * rendered in Chrome's user-agent defaults. Measured on the live server
+ * at 1440x900 before this file was added:
+ *
+ *   .archive-tlist__row    padding 0px, margin 0px, background transparent
+ *   .archive-tlist__open   background rgb(239,239,239), color rgb(0,0,0),
+ *                          border 2px outset, font-size 13.3333px
+ *
+ * That is the whole explanation for the raw white-bordered buttons, the
+ * centered wrapping labels and the fields running together - a UA button
+ * is white with a bevel and 13.33px Arial in EVERY theme, so the theme
+ * tokens the rest of the archive uses correctly were never reaching this
+ * pane at all.
+ *
+ * THE VALUES BELOW ARE NOT NEW. They are read out of the app's own
+ * components in client/css/styles.css, because the archive's problem was
+ * never its colours (those were right) - it was re-inventing every
+ * SHAPE, SIZE and INTERACTION value from scratch. The reference
+ * components and what each one contributes:
+ *
+ *   .project-item          the card: 14px/16px padding, 1px border,
+ *                          radius-md, `inset 3px 0` accent rail,
+ *                          `color-mix(--color-bg 80%)` fill over an
+ *                          accent wash, `transition: all 0.3s ease`
+ *   .project-item:hover    bg-hover fill, accent border, 0 0 8px glow
+ *   .project-list          `gap: 10px` between cards
+ *   .project-name          1rem, bold, accent - the primary label
+ *   .project-description   0.9rem / 1.4 - body copy
+ *   .recent-session-lifecycle  the badge: 0.7em, 2px 6px, radius-sm,
+ *                          uppercase, 0.5px tracking, soft accent fill
+ *
+ * TYPE SCALE. Five sizes, all of them already in styles.css: 0.7rem
+ * (badge), 0.8rem (meta), 0.85rem (secondary), 0.9rem (body), 1rem
+ * (primary label). No sixth size is introduced here.
+ *
+ * SPACING. Whole pixels off the app's own set - 4, 6, 8, 10, 12, 14, 16 -
+ * not a rem soup. The app spaces in px; so does this.
+ *
+ * NOTHING'S MEANING DEPENDS ON BORDER-RADIUS OR ON COLOUR ALONE.
+ * `terminal`, `gameboy` and `legacy_apple` deliberately zero every radius
+ * token, so every state below is ALSO carried by geometry or by text: the
+ * keyboard-selected row doubles its accent rail from 3px to 6px and adds
+ * a ring, and the scheme filter buttons carry a literal `[ ]` / `[x]`
+ * marker rather than a fill.
+ *
+ * STATE ATTRIBUTES ARE EMITTED ELSEWHERE. `data-selected="true"` on a
+ * keyboard-selected row and `aria-pressed="true"` on an active scheme
+ * button are written by the archive JS. The rules for both are here now,
+ * ahead of the DOM carrying them, so the styling half is never the thing
+ * that is missing.
+ *
+ * Load AFTER archive-screen.css (which owns the pane geometry) and
+ * BEFORE archive-align.css.
+ * ===================================================================== */
+
+.archive-tlist {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* --- header: the scheme filters ------------------------------------- */
+
+.archive-tlist__header {
+    flex: 0 0 auto;
+    padding: 8px 8px 0;
+}
+
+.archive-tlist__schemes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* THE MARKER IS TEXT, NOT A FILL. Which filter is active has to survive
+ * a zero-radius theme, a monochrome theme (gameboy is two greens) and a
+ * screenshot, so the state is spelled out in a leading `[ ]` / `[x]`
+ * that no theme can remove. The fill and the accent border are the
+ * redundant, pleasant half - never the only half. */
+.archive-tlist__scheme {
+    font: inherit;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    padding: 6px 10px;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-tlist__scheme::before {
+    content: "[ ] ";
+    font-family: var(--font-mono);
+}
+
+.archive-tlist__scheme:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+.archive-tlist__scheme:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.archive-tlist__scheme[aria-pressed="true"] {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-bg);
+    font-weight: 700;
+}
+
+.archive-tlist__scheme[aria-pressed="true"]::before {
+    content: "[x] ";
+}
+
+/* --- the honesty note under the filters ----------------------------- */
+
+.archive-tlist__split-note {
+    margin: 8px 8px 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.archive-tlist__split-note:empty {
+    display: none;
+}
+
+/* --- the rows ------------------------------------------------------- */
+
+/* `gap: 10px` and the 8px pad are .project-list's, not new numbers. The
+ * pad also gives the 4px focus outline-offset below somewhere to land -
+ * the pane is `overflow: auto`, so an outline drawn at the pane's own
+ * edge would be clipped. */
+.archive-tlist__rows {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 8px;
+    min-width: 0;
+}
+
+/* The <li> is a wrapper only. The CARD is the button inside it, because
+ * the card is the thing you click and the focus ring has to be drawn
+ * around the control rather than around a box next to it. */
+.archive-tlist__row {
+    display: block;
+    min-width: 0;
+}
+
+.archive-tlist__open {
+    /* Layout: a wrapping row whose first child claims a full line, so the
+     * name sits alone and the four metadata fields share the line below
+     * it. This is what stops
+     * `ee039f7f-...transcript 210398 lines12.1 KiB2026-08-30 12:03:31`
+     * from reading as one string - measured live before this file. */
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+
+    /* .project-item, verbatim. background-color and background-image are
+     * separate declarations on purpose: the `background` shorthand would
+     * silently discard one of the two layers, which is documented at
+     * .project-item in styles.css and is just as true here. */
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    border: 1px solid var(--color-border);
+    /* ITEM 37: an accent rail is an INSET SHADOW, never a `border-left`.
+     * A 3px left border against a 1px ring is joined by a diagonal miter
+     * drawn along the corner arc under `border-radius` - the smeared
+     * two-tone wedge. A shadow is clipped to the radius instead. */
+    box-shadow: inset 3px 0 0 var(--color-accent);
+    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    transition: all 0.3s ease;
+}
+
+.archive-tlist__open:hover {
+    background-color: color-mix(in srgb, var(--color-bg-hover, #323235) 80%, transparent);
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent),
+                0 0 8px var(--color-accent-border-soft);
+}
+
+/* The app's focus treatment. The UA default is a 1px blue ring that is
+ * very nearly invisible on every dark theme here. */
+.archive-tlist__open:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+/* KEYBOARD SELECTION, emitted by the archive JS as `data-selected`.
+ * It has to be distinguishable from hover, because both can be true at
+ * once and they mean different things (where the pointer is, versus
+ * where the keyboard cursor is). The difference is GEOMETRY: the accent
+ * rail doubles from 3px to 6px and gains a ring. Both survive a theme
+ * with no radius and a theme with two colours. */
+.archive-tlist__row[data-selected="true"] > .archive-tlist__open,
+.archive-tlist__open[data-selected="true"] {
+    background-color: color-mix(in srgb, var(--color-bg-hover, #323235) 80%, transparent);
+    border-color: var(--color-accent);
+    box-shadow: inset 6px 0 0 var(--color-accent),
+                0 0 0 2px var(--color-accent-border-strong);
+}
+
+/* --- the five fields ------------------------------------------------ */
+
+/* THE PRIMARY LABEL, .project-name's treatment: 1rem, bold, accent. It
+ * takes a full line of its own (`flex-basis: 100%`), which is half of
+ * the run-together fix - the other half is the delimiters below.
+ *
+ * It is DISPLAY TEXT and not an identity: `archive-transcript-list.js`
+ * documents that `session_ref` names 14 different transcripts in one
+ * case. `transcript <id>` below is the addressable thing, which is why
+ * it keeps the mono face and a real weight rather than being demoted to
+ * anonymous grey. */
+.archive-tlist__ref {
+    flex: 0 0 100%;
+    min-width: 0;
+    font-size: 1rem;
+    font-weight: bold;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+}
+
+.archive-tlist__id,
+.archive-tlist__lines,
+.archive-tlist__bytes,
+.archive-tlist__ingested {
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    color: var(--color-fg-muted);
+}
+
+/* The identity, so it does not read as one more grey statistic. */
+.archive-tlist__id {
+    font-weight: 600;
+    color: var(--color-fg);
+}
+
+/* DELIMITERS, NOT JUST GAPS. `gap` alone puts whitespace between the
+ * fields, and whitespace is exactly what `transcript 12115,073 lines`
+ * already had too little of to parse. A middot makes each boundary
+ * explicit at any wrap position and in any theme. `__id` is always the
+ * first field on the metadata line, so it carries none. */
+.archive-tlist__lines::before,
+.archive-tlist__bytes::before,
+.archive-tlist__ingested::before {
+    content: "\00b7";
+    margin-right: 10px;
+    color: var(--color-fg-subtle);
+}
+
+/* --- badges --------------------------------------------------------- */
+
+/* .recent-session-lifecycle's shape: real vertical padding, a soft fill,
+ * radius-sm, uppercase with 0.5px tracking. The archive's version had
+ * `padding: 0 0.35rem` - no vertical padding at all - and no fill.
+ *
+ * These carry whole sentences rather than a one-word lifecycle, and that
+ * is deliberate upstream (the two attribution conditions are never
+ * merged and each states itself in full), so the pill wraps and takes
+ * its own line instead of being clipped to a chip. */
+.archive-tlist__badge {
+    flex: 0 0 100%;
+    margin-top: 4px;
+    padding: 2px 6px;
+    font-size: 0.7em;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-faint);
+    background: var(--color-accent-bg-soft);
+}
+
+/* The two conditions are separate findings and never look alike. Each
+ * gets a colour AND a bracketed text marker, so neither depends on the
+ * colour surviving a theme. */
+.archive-tlist__badge--no-project {
+    color: var(--color-warning);
+    border-color: var(--color-warning-border);
+    background: var(--color-warning-bg);
+}
+
+.archive-tlist__badge--no-project::before {
+    content: "[!] ";
+    font-family: var(--font-mono);
+}
+
+.archive-tlist__badge--host-unknown {
+    color: var(--color-info);
+    border-color: var(--color-info-border);
+    background: var(--color-info-bg);
+}
+
+.archive-tlist__badge--host-unknown::before {
+    content: "[?] ";
+    font-family: var(--font-mono);
+}
+
+/* --- footer: paging and the stated end ------------------------------ */
+
+.archive-tlist__footer {
+    flex: 0 0 auto;
+    padding: 0 8px 8px;
+}
+
+.archive-tlist__more {
+    font: inherit;
+    font-size: 0.85rem;
+    width: 100%;
+    padding: 8px 12px;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-tlist__more:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+.archive-tlist__more:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.archive-tlist__end,
+.archive-tlist__loading {
+    margin: 0;
+    padding: 8px 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.archive-tlist__loading {
+    font-style: italic;
+}
+
+/* "NOT KNOWN" is not "there is nothing more". The unknown end-of-list
+ * gets the warning colour AND a bracketed marker, matching the
+ * three-outcome treatment archive-outcomes.css uses everywhere else. */
+.archive-tlist__end--unknown {
+    color: var(--color-warning);
+    padding-left: 8px;
+    box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.archive-tlist__end--unknown::before {
+    content: "[?] ";
+    font-family: var(--font-mono);
+    font-weight: 700;
+}
+
+.archive-tlist__transport-reason {
+    margin: 8px 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-danger-strong);
+}
+
+/* =====================================================================
+ * NARROW. 700px is the archive's existing second breakpoint (see the
+ * header of archive-screen.css); no new number is introduced.
+ * ===================================================================== */
+
+@media (max-width: 700px) {
+    .archive-tlist__rows {
+        padding: 8px 6px;
+    }
+
+    .archive-tlist__open {
+        padding: 12px 14px;
+    }
+
+    /* Each field on its own line at phone width. The delimiters would be
+     * pointing at a line break rather than at a neighbour, so they come
+     * off - the separation is now the line itself. */
+    .archive-tlist__id,
+    .archive-tlist__lines,
+    .archive-tlist__bytes,
+    .archive-tlist__ingested {
+        flex: 0 0 100%;
+    }
+
+    .archive-tlist__lines::before,
+    .archive-tlist__bytes::before,
+    .archive-tlist__ingested::before {
+        content: none;
+    }
+
+    .archive-tlist__scheme {
+        flex: 1 1 auto;
+    }
+}

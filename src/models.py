@@ -305,6 +305,19 @@ class SessionInfo(BaseModel):
             "src.core.agent_families.resolve_family_for_display."
         ),
     )
+    # The WRAPPER pill's text. A family says what KIND of agent is in the
+    # pane; this says which configured script started it ("claude
+    # (chrome)"). None means nothing can be named honestly - the value was
+    # fingerprinted, or is a bare family name, or names a wrapper config
+    # no longer carries - and the client renders NOTHING for None rather
+    # than the raw agent_type, which is an internal id. Computed by
+    # ``src.core.agent_wrapper_display.resolve_wrapper_for_display`` from
+    # the same inputs as agent_family, so the two pills on one row can
+    # never disagree about which wrapper matched.
+    agent_wrapper_label: Optional[str] = Field(
+        default=None,
+        description="Configured label of the launch wrapper, or None if none can be named",
+    )
     # SESSION-IDENTITY-V2 - surface the pinned theme at the top level so
     # the UI can paint identity (header icon + title swap) without diving
     # into ``.session``. Mirrors Session.pinned_theme.
@@ -334,14 +347,17 @@ class SessionInfo(BaseModel):
     # client never has to dig into ``.session`` to paint the dot.
     # feat/hook-driven-status - activity_status now carries the UNIFIED
     # hook + tmux vocabulary (src.core.session_status.ALL_ACTIVITY_STATUSES):
-    # 'dead' | 'question' | 'working' | 'working_subagent' |
-    # 'finished_unread' | 'idle' | 'unknown'. Resolved by
+    # 'dead' | 'question' | 'notice' | 'working' | 'working_subagent' |
+    # 'finished_unread' | 'idle' | 'unknown'. 'question' is a
+    # PermissionRequest (the agent is blocked); 'notice' is a
+    # Notification (it wants attention and is not). Resolved by
     # SessionManager._session_info_for() via SessionActivityTracker.resolve().
     activity_status: str = Field(
         default="unknown",
         description=(
-            "Unified activity status: 'dead' | 'question' | 'working' | "
-            "'working_subagent' | 'finished_unread' | 'idle' | 'unknown'"
+            "Unified activity status: 'dead' | 'question' | 'notice' | "
+            "'working' | 'working_subagent' | 'finished_unread' | 'idle' | "
+            "'unknown'"
         ),
     )
     # feat/hook-driven-status - raw unread flag (auto-from-Stop OR manual
@@ -385,6 +401,29 @@ class SessionInfo(BaseModel):
             "we have never claimed"
         ),
     )
+    # punchlist 19 - IS THIS SESSION BLOCKED ON A STARTUP PROMPT IT HAS
+    # NOT BEEN ANSWERED? A claude parked on its folder-trust dialog is a
+    # live pane running a real process that has fired NO hook, so every
+    # other field on this model reads healthy and the row painted a green
+    # dot over a session waiting for a keypress.
+    #
+    # DELIBERATELY NOT A SIXTH ``activity_status``. That vocabulary
+    # describes what a RUNNING agent is doing; this says whether it
+    # started. Three outcomes, resolved by
+    # ``src.core.session_startup_gate.resolve_startup_gate``:
+    # 'ready' (measured no - a hook fired for this instance, or the pane
+    # is gone, or the scrollback was read and carries no prompt),
+    # 'awaiting_startup_prompt' (measured yes), 'unknown' (could not
+    # determine - liveness, age or the scrollback did not answer). The
+    # client renders an indicator ONLY for 'awaiting_startup_prompt';
+    # 'unknown' must never be painted as either of the other two.
+    startup_gate: str = Field(
+        default="unknown",
+        description=(
+            "Startup-prompt gate: 'ready' | 'awaiting_startup_prompt' | "
+            "'unknown'. See src.core.session_startup_gate."
+        ),
+    )
 
 
 # API Request Models
@@ -406,6 +445,49 @@ class CreateSessionRequest(BaseModel):
     project_name: Optional[str] = Field(
         None,
         description="Optional human-readable project display name"
+    )
+    # THE NAME THE SESSION IS BORN WITH, on both sides at once.
+    #
+    # Every other path that creates a session already passes a label -
+    # fork (routes.py fork endpoint) and restart-of-stopped both do - and
+    # ``SessionManager.create_session`` turns a non-empty one into
+    # ``--name <label>`` on the launch command via
+    # ``claude_rename.launch_name_args_for_agent_type``. The plain create
+    # endpoint was the ONE creator that passed none, so a session started
+    # from the launchpad got a row title and a claude that had never
+    # heard of it: measured, a project named "Punchlist Test" launched
+    # claude with no ``--name`` at all and the TUI status line showed the
+    # directory.
+    #
+    # ``--name`` AT BIRTH IS THE RISK-FREE HALF OF NAME SYNCING. It is
+    # set before anything is running, so it interrupts nothing and needs
+    # none of the gating the after-the-fact ``/rename`` push needs. An
+    # empty or absent label leaves the launch exactly as it was.
+    #
+    # DELIBERATELY SEPARATE FROM ``project_name``. A project is a folder
+    # and many sessions share one; a label names THIS session and the
+    # user renames it freely afterwards. The launchpad happens to seed
+    # the label from the project name, which is a client decision, not a
+    # rule the server should bake in.
+    label: Optional[str] = Field(
+        None,
+        description="Name for the new session; also passed to claude as --name"
+    )
+    # The PARENT folder a brand-new project is created inside. Sent only
+    # by the "start empty" flow, which had no folder step at all and so
+    # let every project land at ``<projects root>/ses_<hex>``. When set,
+    # the server composes ``<realpath(parent)>/<project_name>``, validates
+    # it (src/core/project_directory.py) and uses it as working_dir.
+    #
+    # DELIBERATELY NOT ``working_dir``. Three shipped flows already post
+    # that field with folders from anywhere on disk - "open an existing
+    # folder", the new-console FAB (it posts "~") and clone - so putting a
+    # root restriction on it would refuse folders they have always
+    # accepted. A restriction on a field nothing used to send cannot
+    # regress any of them.
+    project_parent_dir: Optional[str] = Field(
+        None,
+        description="Parent folder for a new project; composed with project_name"
     )
     # Optional client-measured terminal dims. When supplied, the backend
     # births the pane at these dims instead of the INITIAL_COLS/INITIAL_ROWS
@@ -661,6 +743,29 @@ class ProjectResponse(BaseModel):
     path: str = Field(..., description="Project directory path")
     description: Optional[str] = Field(None, description="Project description")
     root: Optional[str] = Field(None, description="Normalised project root, the identity key")
+    work_at: Optional[str] = Field(
+        None,
+        description=(
+            "MAX(sessions.last_work_at) across this project's sessions - "
+            "the key GET /projects is ordered by. None means NO WORK HAS "
+            "BEEN RECORDED, which is a third outcome and not a zero: such "
+            "a project sorts below every project that has a value and is "
+            "labelled as unrecorded rather than blended in with them. "
+            "Never derived from last_opened_at - opening is not working"
+        ),
+    )
+    archived_at: Optional[str] = Field(
+        None,
+        description=(
+            "ISO-8601 stamp of when this project was ARCHIVED (retired "
+            "from the default list), or None when it is live. Carried on "
+            "every row so a client rendering an include_archived=true "
+            "list can tell the two apart per row - the flag it sent says "
+            "what it asked for, not what any given row is. Archiving a "
+            "project never touches its sessions: a session of an "
+            "archived project still appears in RUNNING and RECENT"
+        ),
+    )
 
 
 class UpdateProjectRequest(BaseModel):
@@ -773,6 +878,13 @@ class AttachableSession(BaseModel):
             "'fingerprint' | 'derived_deepest' | 'unknown'."
         ),
     )
+    # See SessionInfo.agent_wrapper_label for the full contract. Same
+    # resolver, so a row merged from either endpoint agrees about which
+    # wrapper started the session.
+    agent_wrapper_label: Optional[str] = Field(
+        default=None,
+        description="Configured label of the launch wrapper, or None if none can be named",
+    )
     # SESSION-IDENTITY-V2 - pinned theme for this attachable session. None
     # = no pin. Discovery code populates from the active SessionManager
     # state when the row matches the active backend; otherwise None.
@@ -789,8 +901,8 @@ class AttachableSession(BaseModel):
     # no hook signal is ever possible for them (see
     # SessionManager.list_attachable_sessions); this is the tmux-fallback
     # subset of the unified vocabulary: 'dead' | 'working' |
-    # 'finished_unread' | 'idle' | 'unknown' (never 'question' or
-    # 'working_subagent' - those require a live hook stream).
+    # 'finished_unread' | 'idle' | 'unknown' (never 'question', 'notice'
+    # or 'working_subagent' - those require a live hook stream).
     # THE DURABLE ROW ID, shown bottom-right on the home screen so a
     # human can point at a session and follow a fork tree. Declared HERE
     # and not only produced by the enricher: this is a response_model,
@@ -884,15 +996,43 @@ class AttachableListingStatus(BaseModel):
 class RespawnSessionRequest(BaseModel):
     """Request body for ``POST /sessions/respawn``.
 
-    Only the tmux name. There is deliberately no command, agent_type or
-    wrapper field: a restart re-runs what the session was already running,
-    and letting a client name the command would turn this into a create
-    with none of a create's checks. Choosing a DIFFERENT agent is the New
-    Session flow, not this one.
+    STILL NO COMMAND CROSSES THIS BOUNDARY, and that distinction is the
+    whole reason ``agent_type`` is safe to accept where a command is not.
+    A command would let a client run anything - a create wearing a
+    restart's clothes. An ``agent_type`` is an ID that must match a
+    wrapper the user has already configured on this machine; the server
+    resolves it to a command itself, and refuses an id it does not
+    recognise rather than falling back to the default wrapper.
+
+    Why it is accepted at all: moving a session onto another wrapper
+    (``claude-chrome``, say) previously required hand-editing
+    ``sessions.agent_type`` in cloude.db. See
+    ``src/core/session_agent_choice.py``.
     """
 
     session_name: str = Field(
         ..., description="Literal tmux session name to restart in place"
+    )
+    agent_type: Optional[str] = Field(
+        None,
+        description=(
+            "Id of a configured launch wrapper to restart this session "
+            "with, replacing what it was launched with. Omit to keep the "
+            "existing behaviour exactly. An unconfigured id returns 400; "
+            "it is never resolved to the default wrapper"
+        ),
+    )
+    confirm_restart_live: bool = Field(
+        False,
+        description=(
+            "Replace what is RUNNING. True kills the pane's process and "
+            "restarts it in place (tmux respawn-pane -k), keeping the "
+            "same tmux name, the same row and the same conversation. "
+            "DESTRUCTIVE and irreversible, so it must be an explicit act "
+            "by the user: no prediction produces it and the server never "
+            "infers it. Left false (the default) a live session still "
+            "answers kind='not_dead' and nothing is destroyed"
+        ),
     )
 
 
@@ -931,6 +1071,243 @@ class RespawnSessionResponse(BaseModel):
             "Command handed to respawn-pane, or null when tmux reused its "
             "own recorded start command"
         ),
+    )
+    chosen: bool = Field(
+        False,
+        description=(
+            "True when that command came from a wrapper the caller picked "
+            "in this request rather than from the session's stored record"
+        ),
+    )
+    agent_type: Optional[str] = Field(
+        None,
+        description="The wrapper id that was picked, or null when none was",
+    )
+    agent_type_persisted: bool = Field(
+        False,
+        description=(
+            "True when the picked wrapper was written to sessions.agent_type "
+            "so the next restart remembers it. False alongside ok=true means "
+            "the restart happened and the choice was NOT remembered - which "
+            "is reported rather than hidden, because the next restart will "
+            "then not repeat it"
+        ),
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description=(
+            "In-app id of the session that was restarted, read back AFTER "
+            "the restart so a client can reopen THIS session rather than "
+            "search the list by name. Null for a session the app has no "
+            "live backend for; the client then reopens through adopt"
+        ),
+    )
+    session_uuid: Optional[str] = Field(
+        None,
+        description=(
+            "Durable sessions.session_uuid of the row that was restarted. "
+            "A respawn preserves the instance triple, so this is the same "
+            "value the row carried before - which is what makes it usable "
+            "as proof the reopened terminal is the SAME session"
+        ),
+    )
+    killed_live_pane: bool = Field(
+        False,
+        description=(
+            "True when this restart killed a process that was RUNNING "
+            "rather than reviving a pane that was already empty. Stated "
+            "rather than left to be inferred from kind, because 'we "
+            "destroyed something' is not recoverable from a rung name"
+        ),
+    )
+    identity_status: str = Field(
+        "unchecked",
+        description=(
+            "Whether the row is still keyed on the tmux instance it "
+            "belongs to: 'unchecked' (no live pane was killed, so the "
+            "question was not asked) | 'unchanged' (both #{session_created} "
+            "readings agreed, which is what tmux 3.7c does) | 'rekeyed' "
+            "(the epoch moved and sessions.tmux_created_epoch was moved "
+            "with it) | 'cannot_determine' (a reading did not answer). "
+            "cannot_determine is NOT unchanged - see "
+            "src/core/session_instance_rekey.py"
+        ),
+    )
+
+
+class RestartPreviewOption(BaseModel):
+    """One wrapper, and what restarting with it would do.
+
+    ``kind`` is the respawn ladder's own verdict, produced by the SAME
+    function the action runs (``src/core/session_respawn.py``), so a
+    preview cannot promise an agent and then deliver a shell.
+    """
+
+    agent_type: str = Field(..., description="Configured wrapper id")
+    label: str = Field(..., description="Display name, falls back to the id")
+    is_current: bool = Field(
+        ..., description="True when the session's row already records this id"
+    )
+    resolvable: bool = Field(
+        ...,
+        description=(
+            "True when this wrapper turned into a command. A fact about "
+            "the WRAPPER. False ones stay in the list with a reason in "
+            "detail - a choice that vanishes reads as one never configured"
+        ),
+    )
+    actionable_now: bool = Field(
+        ...,
+        description=(
+            "True when a respawn would act on this option right now. A "
+            "fact about the PANE: false for every option on a live "
+            "session however well configured the wrapper is. Kept apart "
+            "from resolvable so a client can say WHY it greyed a row out"
+        ),
+    )
+    kind: str = Field(
+        ...,
+        description=(
+            "Ladder verdict for picking this RIGHT NOW: 'agent' | "
+            "'replay' | 'shell' | 'not_dead' | 'cannot_determine'"
+        ),
+    )
+    detail: str = Field(..., description="One sentence fit to show verbatim")
+    conversation: str = Field(
+        "unknown",
+        description=(
+            "'resumed' | 'none_recorded' | 'unknown' - what this does to the "
+            "session's CONVERSATION. A restart means resume, so this says "
+            "whether it actually will. 'none_recorded' means the row names "
+            "no conversation and the session comes back WITHOUT its "
+            "history; 'unknown' means the row could not be read. Rendering "
+            "the three identically presents a blank session as a continued "
+            "one, which is the defect this field exists to prevent"
+        ),
+    )
+    projected_kind: str = Field(
+        "",
+        description=(
+            "The rung this option WOULD land on if the pane were "
+            "restartable, liveness ignored. Never 'not_dead'. This is "
+            "what answers 'what would this session come back as' for a "
+            "session that is still running - a prediction, not a permission"
+        ),
+    )
+    projected_detail: str = Field(
+        "", description="One sentence about projected_kind, fit to show verbatim"
+    )
+    command: Optional[str] = Field(
+        None, description="What would be run, or null when nothing could be"
+    )
+
+
+class RestartPlanPreview(BaseModel):
+    """The predicted outcome of a restart, with nothing picked.
+
+    READ ``actionable`` IN CONTEXT. It means "this verdict is one of the
+    three real rungs (agent/replay/shell)" rather than one of the two
+    that are answers (not_dead/cannot_determine). On the ``unchanged``
+    plan that coincides with "you may restart now". On the ``projected``
+    plan it does NOT: a live session can project an actionable rung while
+    being entirely un-restartable, which is the normal case this endpoint
+    exists to describe. Whether anything may actually be done is
+    ``pane_state`` plus ``unchanged.actionable``, never this field on
+    ``projected``.
+    """
+
+    kind: str = Field(
+        ...,
+        description=(
+            "'agent' | 'replay' | 'shell' | 'not_dead' | 'cannot_determine'"
+        ),
+    )
+    detail: str = Field(..., description="One sentence fit to show verbatim")
+    command: Optional[str] = Field(None, description="What would be run, or null")
+    actionable: bool = Field(
+        ...,
+        description=(
+            "True only for agent/replay/shell. 'not_dead' and "
+            "'cannot_determine' are answers, not instructions"
+        ),
+    )
+    conversation: str = Field(
+        "unknown",
+        description=(
+            "'resumed' | 'none_recorded' | 'unknown' - what this does to the "
+            "session's CONVERSATION. A restart means resume, so this says "
+            "whether it actually will. 'none_recorded' means the row names "
+            "no conversation and the session comes back WITHOUT its "
+            "history; 'unknown' means the row could not be read. Rendering "
+            "the three identically presents a blank session as a continued "
+            "one, which is the defect this field exists to prevent"
+        ),
+    )
+
+
+class RestartPreviewResponse(BaseModel):
+    """Result of ``GET /sessions/restart/preview``. Read-only, always 200.
+
+    THE POINT OF THIS ENDPOINT is that ``POST /sessions/respawn`` mutates,
+    so before it there was no way to ask which rung a session would land
+    on. Without that answer the UI cannot warn honestly, and the rung
+    that needs warning about is ``shell``: a pane whose
+    ``#{pane_start_command}`` is empty silently comes back as a login
+    shell instead of the agent.
+
+    ``wrappers_status`` carries the third outcome for the LIST itself.
+    'ok' with an empty ``options`` means this install configures no
+    wrappers; 'unavailable' means the list could not be read. A client
+    that renders the second as the first is stating something nobody
+    measured.
+    """
+
+    name: str = Field(..., description="tmux session name previewed")
+    current_agent_type: Optional[str] = Field(
+        None,
+        description=(
+            "sessions.agent_type for this session, or null. Null is "
+            "ambiguous by nature - it means both 'launched as a bare "
+            "shell' and 'never recorded' - and must not be rendered as "
+            "the name of an agent"
+        ),
+    )
+    pane_state: str = Field(
+        ...,
+        description=(
+            "'dead' | 'alive' | 'unknown'. Whether the pane can be "
+            "respawned AT ALL, reported separately from every rung "
+            "because they answer different questions. 'unknown' means "
+            "the probe did not answer and must never render as either "
+            "of the other two"
+        ),
+    )
+    unchanged: RestartPlanPreview = Field(
+        ...,
+        description=(
+            "What restarting WITHOUT picking anything would do RIGHT "
+            "NOW. On a live pane this is 'not_dead' and not actionable, "
+            "which is the answer a restart button must obey"
+        ),
+    )
+    projected: RestartPlanPreview = Field(
+        ...,
+        description=(
+            "The rung a restart WOULD land on with nothing picked, "
+            "liveness ignored. Never 'not_dead'. For a LIVE session this "
+            "is the only field that says anything useful, and it is what "
+            "exposes the shell landmine on a session still running. A "
+            "PREDICTION, NEVER A PERMISSION: acting is gated by "
+            "pane_state and by unchanged, never by this"
+        ),
+    )
+    options: List[RestartPreviewOption] = Field(
+        default_factory=list,
+        description="One predicted outcome per configured wrapper, config order",
+    )
+    wrappers_status: str = Field(
+        ...,
+        description="'ok' (options reflect the config) or 'unavailable'",
     )
 
 
@@ -1074,6 +1451,44 @@ class ForkSessionResponse(BaseModel):
     session: dict = Field(default_factory=dict)
     parent_session_id: Optional[int] = None
     lineage_recorded: bool = False
+    detail: Optional[str] = None
+
+
+class RestartSessionResponse(BaseModel):
+    """Response for ``POST /sessions/{session_uuid}/restart``.
+
+    THREE FIELDS THAT MUST NOT BE COLLAPSED INTO ``success``.
+
+    ``conversation`` says whether the old conversation was actually
+    resumed: ``'resumed'`` (a bare ``--resume <uuid>`` against the stored
+    ``claude_session_uuid``), ``'none_recorded'`` (the row never learned a
+    Claude session uuid, so this is a NEW conversation wearing the old
+    name - stated, never implied), or ``'unknown'`` (the row itself could
+    not be read). A client that renders all three identically has
+    reintroduced the defect: a blank session presented as a continued one.
+
+    ``row_reused`` says whether the restarted session kept its OWN record
+    - the same ``sessions.id``, and with it its title, conversation link,
+    group membership and history. That is the normal outcome and it is
+    what stops a restart leaving an abandoned twin behind. It is separate
+    from ``success`` because the session can be live and working while
+    reuse was refused (another row already holds the new tmux instance, or
+    the row was deleted mid-flight), and that is neither a failure nor an
+    unqualified success: the user gets a working session that may show up
+    as a second entry.
+
+    ``title_carried`` reports the label the session came back with, so the
+    caller can show what it actually got rather than what it asked for.
+    """
+    success: bool = True
+    session: dict = Field(default_factory=dict)
+    conversation: str = Field(
+        ...,
+        description="'resumed' | 'none_recorded' | 'unknown' - never collapse these",
+    )
+    replaced_session_id: Optional[int] = None
+    row_reused: bool = False
+    title_carried: Optional[str] = None
     detail: Optional[str] = None
 
 
@@ -1697,6 +2112,54 @@ class SessionRecord(BaseModel):
         description="Visibility only. NEVER hides a running session",
     )
     title: Optional[str] = Field(default=None)
+    # LINEAGE, SHIPPED SO THE CLIENT CAN TELL A RESTART REPLACEMENT FROM A
+    # DELIBERATE FORK. Both write fork_kind='fork' and a parent_session_id
+    # (see src/core/session_restart.py's "THE LINEAGE THAT IS RECORDED"
+    # block for why no 'restart' kind was invented), so neither field
+    # discriminates on its own. What does is WHEN: a restart replaces a
+    # session that was ALREADY dead, so the parent's last_seen_running_at
+    # precedes the child's created_at by however long it sat stopped,
+    # while a fork branches a session that is still RUNNING and whose
+    # last_seen_running_at therefore keeps advancing past its child's
+    # birth. The client needs all four columns to make that comparison,
+    # and `id` because parent_session_id points at sessions.id and
+    # nothing else on this model carried it.
+    id: Optional[int] = Field(
+        default=None,
+        description="sessions.id - what parent_session_id points at",
+    )
+    parent_session_id: Optional[int] = Field(
+        default=None,
+        description="sessions.id of the row this one branched from",
+    )
+    fork_kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "Claude Code's own SessionStart.source. NOT a restart marker "
+            "- a restart replacement records 'fork' like any other fork"
+        ),
+    )
+    created_at: Optional[str] = Field(default=None)
+    last_seen_running_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "When this session was last PROVEN alive by a tmux probe. "
+            "None means never - which is a cannot-determine, not a zero"
+        ),
+    )
+    last_work_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "When WORK last happened in this session - stamped only from "
+            "a Claude Code hook event that means the conversation did "
+            "something (claude_hooks.WORK_EVENTS). NOT an opened time: "
+            "attaching, selecting or deep-linking to a session never "
+            "moves it. NOT last_seen_running_at, which is a liveness "
+            "probe that advances on a session nobody has touched. None "
+            "means no work has been recorded - a third outcome, sorted "
+            "below every value and labelled, never treated as the epoch"
+        ),
+    )
 
 
 class SessionImportStatus(BaseModel):

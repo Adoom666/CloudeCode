@@ -432,7 +432,8 @@ test('the confirmation says the transcript survives and names the uploads', () =
     // Comments are stripped first: the docblock quotes the forbidden
     // phrase as the example of what NOT to write.
     const code = actionsSrc.replace(/\/\*[\s\S]*?\*\//g, '');
-    assert.match(code, /the transcript is not deleted and stays under/);
+    assert.match(code, /the transcript is kept/);
+    assert.match(code, /and stays under ~\/\.claude\/projects/);
     assert.match(code, /\.cloude_uploads/);
     assert.doesNotMatch(code, /nothing on disk is touched/);
 });

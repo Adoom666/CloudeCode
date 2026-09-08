@@ -20,11 +20,22 @@ complete.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Callable, Dict, List
 
-from src.core.db import ensure_install_id, get_meta, set_meta
+import structlog
+
+from src.core.db import (
+    column_exists,
+    ensure_install_id,
+    get_meta,
+    set_meta,
+    table_exists,
+)
 from src.core.db_models import (
+    DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP,
+    DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX,
     DDL_V1,
     DDL_V2,
     DDL_V3,
@@ -33,12 +44,38 @@ from src.core.db_models import (
     DDL_V6,
     DDL_V7,
     DDL_V8,
+    DDL_V14,
+    DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
+    DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
+    DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
+    DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
+    DDL_V23_SESSIONS_LAST_WORK_AT,
+    DDL_V24,
+    DDL_V25_SESSIONS_KIND,
+    DDL_V25_SESSIONS_KIND_BACKFILL,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
     META_SCHEMA_VERSION,
+    META_SESSIONS_CLAUDE_UUID_DUPLICATES,
 )
+from src.core.archive_overlay_ddl import DDL_V19
+from src.core.message_activity import install_transcript_activity
+from src.core.message_scheme_repair import repair_session_ref_schemes
+from src.core.message_block_ddl import DDL_V18
+from src.core.message_host_ddl import DDL_V17
+from src.core.message_archive_flag import message_archive_enabled
+from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
+from src.core.session_group_membership_migrate import carry_memberships
+
+logger = structlog.get_logger()
 
 
 def _step_v0_to_v1(conn: sqlite3.Connection) -> None:
@@ -557,6 +594,703 @@ def _step_v10_to_v11(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN activity_state_at TEXT")
 
 
+def _v12_find_claude_uuid_duplicates(conn: sqlite3.Connection) -> List[Dict]:
+    """Find every ``claude_session_uuid`` claimed by more than one row.
+
+    Description: the pre-check that decides which branch
+      :func:`_step_v11_to_v12` takes. Read-only - it changes nothing,
+      which is what lets it run every time the step runs without being
+      guarded by its own idempotence check.
+    Inputs: conn (sqlite3.Connection).
+    Output: list[dict] - one entry per duplicated uuid, each
+      ``{"claude_session_uuid": str, "row_ids": list[int], "count": int}``,
+      ordered by uuid. Empty list means none found.
+    Example: _v12_find_claude_uuid_duplicates(conn)  # []
+    """
+    rows = conn.execute(
+        "SELECT claude_session_uuid, GROUP_CONCAT(id) AS ids, COUNT(*) AS c "
+        "FROM sessions "
+        "WHERE claude_session_uuid IS NOT NULL "
+        "GROUP BY claude_session_uuid "
+        "HAVING COUNT(*) > 1 "
+        "ORDER BY claude_session_uuid"
+    ).fetchall()
+    return [
+        {
+            "claude_session_uuid": row["claude_session_uuid"],
+            "row_ids": [int(x) for x in str(row["ids"]).split(",")],
+            "count": int(row["c"]),
+        }
+        for row in rows
+    ]
+
+
+def _step_v11_to_v12(conn: sqlite3.Connection) -> None:
+    """Make ``ux_sessions_claude_uuid`` UNIQUE, unless the data disagrees.
+
+    Description: build step for the owner's 1:1 requirement - "everything
+      should be stored and parented by id... if we do 1 for 1, this should
+      never be an issue." Up to v11 that was enforced only by
+      src/core/session_lineage.py checking before every write; this step
+      makes SQLite refuse a second row for a uuid it already knows.
+
+      THREE OUTCOMES, NEVER TWO, AND NEITHER COLLAPSE IS SAFE HERE.
+      Checked FIRST, before any DDL runs, via
+      :func:`_v12_find_claude_uuid_duplicates`:
+
+        no duplicates    ux_sessions_claude_uuid is created and
+                          ix_sessions_claude_uuid (the v7 plain index,
+                          now redundant) is dropped. This is the SUCCESS
+                          path - the common case, since v7's own comment
+                          notes claude_session_uuid was NULL on every
+                          adopted session on the owner's live machine.
+
+        duplicates found COULD NOT EVALUATE, not a failure of THIS step
+                          and not silently ignored. Neither index
+                          statement runs: ix_sessions_claude_uuid (v7)
+                          stays exactly as it was, so the database is not
+                          left with a dangling reference to an index that
+                          was dropped without its replacement existing.
+                          The exact uuid/row-id groups are recorded under
+                          META_SESSIONS_CLAUDE_UUID_DUPLICATES so a human
+                          can see precisely what to reconcile - never a
+                          silently-picked winner, per this project's own
+                          standing rule against inventing a verdict
+                          nobody measured.
+
+        CREATE UNIQUE INDEX itself fails despite the pre-check finding
+                          nothing (a defensive branch, not one the tests
+                          below expect to hit under normal SQLite
+                          behaviour) - caught narrowly as
+                          ``sqlite3.Error``, recorded the same way as a
+                          found duplicate, and NOT re-raised.
+
+      NEVER RAISES. This is the one property that matters most: the
+      caller (db_steps.run_chain, driven from db_migration.ensure_db_
+      migrated) commits every step from the database's current version up
+      to CURRENT_SCHEMA_VERSION as ONE transaction. An exception here
+      would roll back every step before it in the same run and drop the
+      whole app into DEGRADED_MIGRATION_FAILED / read-only - exactly the
+      "never block boot" posture db_migration.py already holds for every
+      other step, and a live database holding a duplicate uuid is a
+      finding to record, not a reason to take the app down.
+
+      DROPPING AN INDEX IS NOT THE "ADDITIVE ONLY" RULE THIS FILE'S
+      MODULE DOCSTRING WARNS AGAINST. That rule protects STORED DATA -
+      tables, columns, rows a restore could not reconstruct. An index is
+      derived, not stored fact (REVERSAL_SQL_V7's own comment says so),
+      and this step only ever drops ix_sessions_claude_uuid on the branch
+      where ux_sessions_claude_uuid has just been created to replace it -
+      the column stays exactly as indexable as before, only faster and
+      now constrained.
+
+      IDEMPOTENT. Both DDL statements carry IF NOT EXISTS / IF EXISTS, so
+      a retry after an INTERRUPTED trail entry re-runs cleanly whichever
+      branch applies; the duplicate check is a pure SELECT and costs
+      nothing to repeat.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v11_to_v12(conn)  # after _step_v10_to_v11
+    """
+    duplicates = _v12_find_claude_uuid_duplicates(conn)
+    if duplicates:
+        set_meta(
+            conn, META_SESSIONS_CLAUDE_UUID_DUPLICATES, json.dumps(duplicates)
+        )
+        logger.warning(
+            "sessions_claude_uuid_unique_blocked",
+            duplicate_uuid_count=len(duplicates),
+            detail=(
+                "one or more claude_session_uuid values are claimed by "
+                "more than one sessions row; ux_sessions_claude_uuid was "
+                "NOT created and ix_sessions_claude_uuid (plain) stays in "
+                "place - see meta key "
+                f"{META_SESSIONS_CLAUDE_UUID_DUPLICATES!r} for the exact "
+                "uuid/row-id groups"
+            ),
+        )
+        return
+
+    try:
+        conn.execute(DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX)
+        conn.execute(DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP)
+    except sqlite3.Error as exc:
+        # Defensive only - the pre-check above should make this
+        # unreachable in practice. Recorded the same way as a found
+        # duplicate rather than re-raised, for the same never-block-boot
+        # reason.
+        set_meta(
+            conn,
+            META_SESSIONS_CLAUDE_UUID_DUPLICATES,
+            json.dumps([{"error": f"{type(exc).__name__}: {exc}"}]),
+        )
+        logger.warning(
+            "sessions_claude_uuid_unique_index_failed", error=str(exc)
+        )
+        return
+
+    set_meta(conn, META_SESSIONS_CLAUDE_UUID_DUPLICATES, "[]")
+
+
+def _step_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """Add ``claude_session_uuid_source`` and backfill it for existing rows.
+
+    Description: the provenance column for the adopted-session correlator
+      (``src/core/claude_transcript_correlate.py``). Before this step
+      ``session_lineage.record_claude_session`` - reached only from the
+      Claude Code SessionStart hook - was the ONLY writer of
+      ``claude_session_uuid`` that has ever shipped. So every row that
+      already carries a non-NULL uuid at migration time got it from the
+      hook, as a matter of history, not inference: the backfill sets
+      ``claude_session_uuid_source = 'hook'`` on exactly those rows and
+      leaves every other row NULL, because a NULL uuid has no provenance
+      to record and inventing one would be the same false-fact problem
+      this column exists to prevent.
+
+      IDEMPOTENT. The ADD COLUMN is guarded by ``PRAGMA table_info``, and
+      the backfill's ``WHERE claude_session_uuid_source IS NULL`` makes a
+      second run touch nothing - it targets exactly the rows this step
+      has not already labelled, so re-running it after an interrupted
+      attempt cannot mislabel a row a later, different writer ('correlated')
+      may have since claimed.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v12_to_v13(conn)  # after _step_v11_to_v12
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "claude_session_uuid_source" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN claude_session_uuid_source TEXT"
+        )
+    conn.execute(
+        "UPDATE sessions SET claude_session_uuid_source = 'hook' "
+        "WHERE claude_session_uuid IS NOT NULL "
+        "AND claude_session_uuid_source IS NULL"
+    )
+
+
+def _step_v13_to_v14(conn: sqlite3.Connection) -> None:
+    """Create the transcript-archive tables: archives, records, decisions.
+
+    Description: build step for the byte-exact transcript fidelity store
+      (src/core/transcript_archive.py). Three new tables and five new
+      indexes, no existing table altered and no column added to one - so,
+      like v7/v8, every statement carries its own ``IF NOT EXISTS`` and
+      this step is idempotent without inspecting ``PRAGMA table_info``.
+
+      NO BACKFILL, AND THAT IS THE CORRECT EMPTY STATE. Nothing before
+      this version ever ingested a transcript, so there is no prior
+      ``transcript_archives`` data to translate - the same reasoning
+      v7 -> v8 already used for session_groups. Bulk ingestion of the
+      owner's existing transcripts is a separate, later task that writes
+      through this schema; this step only makes the schema exist.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v13_to_v14(conn)  # after _step_v12_to_v13
+    """
+    for statement in DDL_V14:
+        conn.execute(statement)
+
+
+def _step_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """Add prefix-dedupe columns and project-rooting columns.
+
+    Description: see db_models.py's "schema v14 -> v15" comment block for
+      the full design rationale (prefix dedupe for growing files, project-
+      level rooting as a distinct weaker root). Six ADD COLUMN statements
+      across two existing tables plus two new indexes - no existing
+      column altered, no table rebuilt. Each ADD COLUMN is guarded by
+      PRAGMA table_info, same idiom as v10/v11/v13, since SQLite's
+      ALTER TABLE ADD COLUMN has no IF NOT EXISTS.
+
+      NO BACKFILL NEEDED for growth_kind's DEFAULT 'initial': every row
+      that exists before this migration WAS the only version of its
+      source_path at the time it was ingested, so 'initial' is not a
+      placeholder for those rows, it is the same true fact this column
+      would have recorded for them had it existed then. superseded_by_
+      archive_id, project_id, project_rooted_at and project_rooted_by
+      all default to NULL, correctly meaning "not superseded" / "not yet
+      project-rooted" for every pre-existing row - nothing before this
+      version ever superseded a row or resolved a project.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v14_to_v15(conn)  # after _step_v13_to_v14
+    """
+    archive_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(transcript_archives)")
+    }
+    if "superseded_by_archive_id" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY)
+    if "growth_kind" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND)
+    if "project_id" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID)
+    if "project_rooted_at" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT)
+    if "project_rooted_by" not in archive_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY)
+
+    decision_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(transcript_root_decisions)")
+    }
+    if "project_id" not in decision_cols:
+        conn.execute(DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID)
+
+    conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX)
+    conn.execute(DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX)
+
+
+# ---------------------------------------------------------------------------
+# THE MESSAGE-ARCHIVE GATE (feat/message-archive-flag)
+# ---------------------------------------------------------------------------
+# Steps 15->16, 16->17 and 17->18 build the message archive's schema, and
+# the message archive is off by default. So each of those three steps asks
+# src.core.message_archive_flag.message_archive_enabled() first and returns
+# without executing a single DDL statement when the answer is no.
+#
+# THE VERSION COUNTER STILL ADVANCES, AND THAT IS DELIBERATE. meta.schema_version
+# is one linear number for the whole datastore, not a per-feature ledger. If a
+# gated-off step refused to advance it, an install with the archive off would
+# park at v15 forever and every LATER step - none of which has anything to do
+# with messages - would become unreachable for exactly the users who never
+# opted in. So the step runs, applies nothing, and hands the counter on. The
+# honest reading of "schema_version = 18" is therefore "this install has been
+# offered every migration up to 18", not "every table any version ever
+# described is present" - which was already true of this chain (v17's ALTERs
+# are conditional, v14 and v16 are IF NOT EXISTS) and is now true on purpose.
+#
+# WHICH MAKES THE MATERIALIZER BELOW LOAD-BEARING. An install that migrated to
+# v18 with the flag off has no message tables and no remaining steps that would
+# create them, so turning the flag on could never take effect through the chain.
+# apply_message_model_schema() is the path that closes that: src/main.py calls
+# it once at startup whenever the flag is ON, it is idempotent by construction
+# (every CREATE carries IF NOT EXISTS, every ALTER is guarded against a column
+# already present), and it applies v16, v17 and v18 together rather than only
+# the newest - because the off-to-on transition can be crossing any of them.
+#
+# OFF IS DORMANT, NEVER DESTRUCTIVE. Nothing here drops, truncates or alters a
+# message table when the flag is off. An existing install that turns the
+# feature off keeps every row it had.
+
+
+def _apply_v16_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v16 message-model DDL.
+
+    Description: nine CREATE statements, each carrying its own
+      IF NOT EXISTS, so this is safe to run against a database that
+      already has them.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v16_ddl(conn)
+    """
+    for statement in DDL_V16:
+        conn.execute(statement)
+
+
+def _apply_v17_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v17 host/corpus/project DDL, skipping columns already present.
+
+    Description: SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT
+      EXISTS``, so the six ALTERs are guarded against the live column
+      list read from ``PRAGMA table_info``. Every other statement carries
+      its own IF NOT EXISTS. Idempotent either way.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v17_ddl(conn)
+    """
+    existing = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(message_transcripts)")
+    }
+    for statement in DDL_V17:
+        if statement.startswith("ALTER TABLE message_transcripts ADD COLUMN"):
+            column = statement.split("ADD COLUMN", 1)[1].split()[0]
+            if column in existing:
+                continue
+        conn.execute(statement)
+
+
+def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v18 content-block DDL.
+
+    Description: three CREATE TABLE and three CREATE INDEX statements,
+      each with IF NOT EXISTS. Touches no row of ``message_bodies``.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v18_ddl(conn)
+    """
+    for statement in DDL_V18:
+        conn.execute(statement)
+
+
+def apply_message_model_schema(conn: sqlite3.Connection) -> None:
+    """Materialize the whole message-archive schema, idempotently.
+
+    Description: the off-to-on path. Applies v16, v17 and v18 together so
+      that an install which crossed ANY of those versions with the flag
+      off ends up with the complete schema the first time it starts with
+      the flag on. Purely additive: no DROP, no UPDATE, no rewrite of
+      ``message_bodies``, so it is O(1) against a multi-gigabyte corpus
+      and safe to run on every startup.
+
+      IT DOES NOT CONSULT THE FLAG. The caller has already decided; a
+      second read here would be a second gate that could disagree with
+      the first. src/main.py is the only caller and it calls this only
+      when the flag resolved to enabled.
+    Inputs: conn (sqlite3.Connection) - the caller owns the transaction.
+    Output: None.
+    Raises: sqlite3.Error - propagated so the caller's transaction rolls
+      the whole thing back rather than leaving a half-built schema.
+    Example: apply_message_model_schema(conn)
+    """
+    _apply_v16_ddl(conn)
+    _apply_v17_ddl(conn)
+    _apply_v18_ddl(conn)
+
+
+def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
+    """Create the message identity / appearance model tables.
+
+    Description: build step for the v16 message model - four lookup
+      tables (record_type, role, model, compact_subtype), the transcript
+      container, the message identity table, the appearance table, and
+      the two findings tables. See src/core/message_model_ddl.py's module
+      docstring for why a message uuid is not a row key and why identity
+      and appearance are stored apart.
+
+      Nine CREATE TABLE / CREATE INDEX statements, every one carrying its
+      own IF NOT EXISTS, so - like v7/v8/v14 - this step is idempotent
+      without inspecting PRAGMA table_info. No existing table is altered
+      and no column is added to one.
+
+      NO BACKFILL, AND THAT IS THE CORRECT EMPTY STATE. Nothing before
+      this version wrote a message identity row, so there is no prior
+      data to translate; the same reasoning v13 -> v14 already used for
+      the transcript archive tables. Populating the model from the
+      owner's existing corpus is a separate operation that writes THROUGH
+      this schema.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v15_to_v16(conn)  # after _step_v14_to_v15
+    """
+    if not message_archive_enabled():
+        return
+    _apply_v16_ddl(conn)
+
+
+def _step_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """Create the host / corpus / project dimension.
+
+    Description: build step for v17 - three dimension tables
+      (message_hosts, message_corpora, message_projects), six columns
+      added to message_transcripts, four indexes and two views. See
+      src/core/message_host_ddl.py's module docstring for why the host
+      identity is the platform uuid, why a corpus sits between host and
+      project, and why a body gets a VIEW rather than a host_id column.
+
+      Every CREATE carries its own IF NOT EXISTS. The six ALTER TABLE
+      ADD COLUMN statements do NOT - SQLite has no IF NOT EXISTS for
+      them - so each is guarded against the columns already present,
+      which keeps this step idempotent on a retry exactly as v7/v8/v14
+      are. SQLite's ADD COLUMN rewrites only the table header, so this
+      is O(1) even against the owner's 11 GB corpus database.
+
+      NO BACKFILL, AND THE EMPTY STATE IS THE HONEST ONE. Existing v16
+      transcripts get NULL in all six columns, which reads as "not yet
+      attributed to a host" - a real third outcome that the reporting
+      names as CANNOT DETERMINE. Defaulting them to a host would invent
+      an attribution nobody measured, on the exact dimension this step
+      exists to stop inventing. Attributing them is a separate operation
+      that writes THROUGH this schema.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v16_to_v17(conn)  # after _step_v15_to_v16
+    """
+    if not message_archive_enabled():
+        return
+    _apply_v17_ddl(conn)
+
+
+def _step_v17_to_v18(conn: sqlite3.Connection) -> None:
+    """Create the derived content-block index.
+
+    Description: build step for v18 - three tables
+      (message_block_types, message_content_blocks,
+      message_body_block_status) and three indexes. See
+      src/core/message_block_ddl.py's module docstring for the measured
+      shape of the corpus this indexes and for why the status table is
+      separate from the block table.
+
+      Every CREATE carries its own IF NOT EXISTS, so the step is
+      idempotent on a retry with no PRAGMA inspection, exactly as
+      v7/v8/v14/v16 are.
+
+      IT DOES NOT TOUCH message_bodies. No ALTER, no UPDATE, no rewrite,
+      not even a read. The 7.23 GiB column this index is derived FROM is
+      not rewritten by the step that creates the index, so the migration
+      is O(1) against an 11 GB corpus rather than a multi-hour rebuild
+      inside startup.
+
+      NO BACKFILL HERE, AND THE EMPTY STATE IS THE HONEST ONE. An
+      existing v17 database gets three empty tables, and every body then
+      has NO row in message_body_block_status - which reads as NEVER
+      PROCESSED, a real third outcome, and not as "this body has no
+      content blocks". Populating 2.4M bodies takes about 20 minutes
+      measured, which is not something a startup migration may do to a
+      user who just wanted the app to open. The backfill is a separate,
+      resumable operation: scripts/message_block_backfill.py.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v17_to_v18(conn)  # after _step_v16_to_v17
+    """
+    if not message_archive_enabled():
+        return
+    _apply_v18_ddl(conn)
+
+
+def _step_v18_to_v19(conn: sqlite3.Connection) -> None:
+    """Create the presentation overlay table.
+
+    Description: build step for v19 - one table
+      (archive_project_overlay) and two partial indexes. See
+      src/core/archive_overlay_ddl.py's module docstring for the identity
+      key an overlay row attaches to and why it is the MERGE key rather
+      than message_projects.id or the slug.
+
+      Every statement carries its own IF NOT EXISTS, so the step is
+      idempotent on a retry with no PRAGMA inspection, exactly as
+      v7/v8/v14/v16/v18 are.
+
+      IT DOES NOT READ, LET ALONE WRITE, ANY ARCHIVE TABLE. No ALTER, no
+      UPDATE, no backfill, and not one SELECT against message_projects,
+      message_transcripts, message_bodies, message_appearances or
+      message_content_blocks. On the owner's 18.7 GB database this
+      migration is three CREATE statements against an empty table, which
+      is O(1) - the overlay is a statement ABOUT the archive and creating
+      somewhere to put those statements cannot require touching it.
+
+      NO BACKFILL, AND THE EMPTY STATE IS THE HONEST ONE. Every existing
+      project starts with NO overlay row, which reads as "the owner has
+      never said anything about this project" - a real third state, not a
+      default, and distinguishable in the API from a project he renamed
+      to its own folder name.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v18_to_v19(conn)  # after _step_v17_to_v18
+    """
+    for statement in DDL_V19:
+        conn.execute(statement)
+
+
+def _step_v19_to_v20(conn: sqlite3.Connection) -> None:
+    """Admit the 'opaque' session_ref_scheme, and correct the rows.
+
+    Description: ``session_ref_scheme`` used to be answered by
+      elimination - anything without an agent prefix was called a uuid -
+      so 19 transcripts whose ref is a literal filename stem ('audit',
+      'journal') were stored as uuid and counted in the owner's own
+      sessions. This step widens the column's CHECK to admit the third,
+      MEASURED value and rewrites exactly those rows.
+
+      IT REWRITES NO TABLE. message_appearances references this table
+      ON DELETE CASCADE and PRAGMA foreign_keys is a no-op inside the
+      transaction every step runs in, so the standard rebuild recipe
+      cannot be made safe here. The CHECK is edited in place instead -
+      see src/core/message_scheme_repair.py for the full argument and
+      the measurements behind it.
+
+      IDEMPOTENT ON BOTH HALVES. The relax is skipped when the stored
+      constraint already lists the value, and the backfill is defined as
+      "rows whose stored scheme disagrees with the classifier", which is
+      empty on a second run. It is also a no-op on an install that
+      crossed v16..v18 with the message archive gated off and therefore
+      has no message_transcripts table at all.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v19_to_v20(conn)  # after _step_v18_to_v19
+    """
+    repair_session_ref_schemes(conn)
+
+
+def _step_v20_to_v21(conn: sqlite3.Connection) -> None:
+    """Give every transcript the timestamp its PROJECT is ordered by.
+
+    Description: adds ``message_transcripts.newest_message_ts`` and fills
+      it with the newest ``message_bodies.ts`` reachable from that
+      transcript, so the project rail can sort by when the owner last
+      WORKED in a project rather than by when this tool collected the
+      files. Those are different facts, and measured on the live corpus
+      the collection date puts all 80 projects on two days while the work
+      date spreads across nine months.
+
+      THIS STEP IS THE EXPENSIVE ONE, ON PURPOSE. It scans
+      ``message_appearances`` once (3.1M rows, about 15s cold on a 22 GB
+      archive). That is the whole point: paying it once here is what
+      lets the route stay at ~10ms instead of paying 3.9s on every
+      paint. See src/core/message_activity.py for the numbers and for
+      why no index removes the cost.
+
+      ADD COLUMN ONLY - no table is rewritten and nothing cascades, so
+      the hazard that forced step 19 -> 20 to edit the schema text in
+      place does not apply. Idempotent, and a no-op on an install with
+      the message archive gated off and therefore no transcripts table.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v20_to_v21(conn)  # after _step_v19_to_v20
+    """
+    install_transcript_activity(conn)
+
+
+def _step_v21_to_v22(conn: sqlite3.Connection) -> None:
+    """Make transcript ingest idempotent on CONTENT, not on path.
+
+    Description: adds the index on ``transcript_archives.content_sha256``
+      that the content-addressed idempotency check reads on every file of
+      every pass, and the nullable ``dedupe_kind`` column that names why
+      a row stores a sentinel instead of its own bytes. See
+      src/core/transcript_content_dedupe.py for the mechanism and
+      db_models' v22 block for the 3.78 GB re-archive that made a
+      path-keyed check untenable.
+
+      ADD COLUMN plus CREATE INDEX. No table is rewritten, nothing is
+      backfilled, and every pre-existing row keeps NULL ``dedupe_kind``,
+      which reads as "this row holds its own bytes" - the truth for every
+      row written before this step.
+
+      IDEMPOTENT ON BOTH HALVES: the index carries its own IF NOT EXISTS,
+      and the ALTER is guarded by ``column_exists`` because SQLite's
+      ALTER TABLE ADD COLUMN has none - same idiom as v3/v10/v11/v13/v15.
+      It is also a no-op on an install whose transcript tables were never
+      created.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v21_to_v22(conn)  # after _step_v20_to_v21
+    """
+    conn.execute(DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX)
+    if not column_exists(conn, "transcript_archives", "dedupe_kind"):
+        conn.execute(DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND)
+
+
+def _step_v22_to_v23(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.last_work_at``, the session/project ordering key.
+
+    Description: one nullable column, no backfill and no index. See
+      db_models' v23 block for why work needed a column of its own rather
+      than a reuse of ``updated_at``, ``activity_state_at`` or
+      ``last_seen_running_at``.
+
+      NOTHING IS BACKFILLED, DELIBERATELY. Every pre-existing row keeps
+      NULL, and NULL means "no work has been recorded for this session",
+      which is the truth for all of them - nothing was measuring work
+      before this step. Seeding them from ``created_at`` or
+      ``last_seen_running_at`` would manufacture a work history that never
+      happened, and it would do it in exactly the column the lists are
+      about to be ordered by.
+
+      IDEMPOTENT: guarded by ``column_exists`` because SQLite's ALTER
+      TABLE ADD COLUMN has no IF NOT EXISTS - same idiom as
+      v3/v10/v11/v13/v15/v22. A no-op on an install whose sessions table
+      was never created (pre-v2).
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v22_to_v23(conn)  # after _step_v21_to_v22
+    """
+    if not table_exists(conn, "sessions"):
+        return
+    if not column_exists(conn, "sessions", "last_work_at"):
+        conn.execute(DDL_V23_SESSIONS_LAST_WORK_AT)
+
+
+
+def _step_v23_to_v24(conn: sqlite3.Connection) -> None:
+    """Re-key group membership on ``session_uuid``, and give it an order.
+
+    Description: creates ``session_group_membership`` and carries every
+      v8 ``session_group_members`` row onto it, resolving each tmux NAME
+      to the ``sessions`` row the sidebar was drawing when the user filed
+      it. The resolution rule, its three outcomes and why the seed order
+      is what it is all live in
+      src/core/session_group_membership_migrate.py; db_models' v24 block
+      carries the argument for the key itself.
+
+      THE OLD TABLE IS NOT TOUCHED. Not dropped, not renamed, not
+      retyped - read once, here, and never again. That keeps this step
+      additive like every other one, so a rollback stays a RESTORE from a
+      verified backup rather than a hand-written reversal, and it leaves
+      the pre-migration filing readable if anybody ever needs to check
+      what this step decided.
+
+      IDEMPOTENT ON BOTH HALVES. Each DDL statement carries its own
+      IF NOT EXISTS, and ``carry_memberships`` skips any session_uuid the
+      new table already holds - so a re-run after an interrupted attempt
+      finishes the remainder and never overwrites a filing the user has
+      made since.
+
+      A NO-OP ON AN INSTALL WITHOUT GROUPS. Both source tables are
+      checked: an install that crossed v8 with the tables absent (or a
+      database predating v2's ``sessions``) gets the new table and no
+      backfill, which is the truth for it.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v23_to_v24(conn)  # after _step_v22_to_v23
+    """
+    for statement in DDL_V24:
+        conn.execute(statement)
+    if not table_exists(conn, "session_group_members"):
+        return
+    if not table_exists(conn, "sessions"):
+        return
+    carried = carry_memberships(conn)
+    outcomes: Dict[str, int] = {}
+    for entry in carried:
+        outcomes[entry.outcome] = outcomes.get(entry.outcome, 0) + 1
+    logger.info(
+        "session_group_membership_rekeyed",
+        legacy_rows=len(carried),
+        **outcomes,
+    )
+
+
+def _step_v24_to_v25(conn: sqlite3.Connection) -> None:
+    """Add ``sessions.kind``, and stamp the rows this app made itself.
+
+    Description: gives every session row a place to record whether a
+      HUMAN drove the conversation or machinery did. The owner's rule,
+      verbatim: "lists should always just be mine. the rest can be found
+      in the archive explorer." src/core/session_kind.py owns the
+      three-word vocabulary and the evidence ladder behind it.
+
+      THE COLUMN IS NULLABLE WITH NO SQL DEFAULT, ON PURPOSE. SQLite
+      backfills a column default into every existing row, which would
+      have written 'interactive' onto all 895 imported rows and destroyed
+      the only thing that distinguishes "classified" from "never looked
+      at". NULL is that distinction, and because every reader excludes on
+      ``kind = 'automated'`` alone, NULL keeps a row in the lists. An
+      unwritten value can never hide a session.
+
+      THE ONE BACKFILL IS A MEASUREMENT, NOT A GUESS. Rows with
+      ``origin`` 'created' or 'adopted' were launched or attached by the
+      owner through this app; it has no other way to make one. Rows with
+      ``origin = 'imported'`` are left NULL for
+      scripts/classify_session_kind.py, which reads the transcript rather
+      than assuming.
+
+      IDEMPOTENT ON BOTH HALVES: the ALTER is guarded by
+      ``column_exists`` because SQLite's ADD COLUMN has no IF NOT EXISTS,
+      and the UPDATE carries its own ``kind IS NULL`` clause so a re-run
+      after an interrupted attempt never overwrites a classification made
+      since. A no-op on an install whose sessions table was never created
+      (pre-v2).
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v24_to_v25(conn)  # after _step_v23_to_v24
+    """
+    if not table_exists(conn, "sessions"):
+        return
+    if not column_exists(conn, "sessions", "kind"):
+        conn.execute(DDL_V25_SESSIONS_KIND)
+    conn.execute(DDL_V25_SESSIONS_KIND_BACKFILL)
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -573,6 +1307,20 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     8: _step_v8_to_v9,
     9: _step_v9_to_v10,
     10: _step_v10_to_v11,
+    11: _step_v11_to_v12,
+    12: _step_v12_to_v13,
+    13: _step_v13_to_v14,
+    14: _step_v14_to_v15,
+    15: _step_v15_to_v16,
+    16: _step_v16_to_v17,
+    17: _step_v17_to_v18,
+    18: _step_v18_to_v19,
+    19: _step_v19_to_v20,
+    20: _step_v20_to_v21,
+    21: _step_v21_to_v22,
+    22: _step_v22_to_v23,
+    23: _step_v23_to_v24,
+    24: _step_v24_to_v25,
 }
 
 

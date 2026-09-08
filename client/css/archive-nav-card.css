@@ -1,0 +1,345 @@
+/* =====================================================================
+ * THE PROJECT CARD, and the info modal behind it.
+ *
+ * Load AFTER archive-nav.css: this file overrides the rail's generic
+ * `.archive-nav__row` for project nodes only, and AFTER
+ * archive-outcomes.css, because the modal renders a COULD NOT EVALUATE
+ * block when a project row carries no machine list.
+ *
+ * ------------------------------------------------------------------
+ * THIS IS THE APP'S EXISTING CARD, NOT A NEW ONE.
+ * ------------------------------------------------------------------
+ * Every value below is lifted from `.project-item` in styles.css rather
+ * than invented, so the archive rail and the launchpad read as one app:
+ *
+ *   background-color  color-mix(--color-bg 80%, transparent)
+ *   background-image  a flat --color-accent-bg-soft wash on top
+ *   border            1px solid --color-border, UNIFORM on all four sides
+ *   accent rail       box-shadow: inset 3px 0 0 --color-accent
+ *   radius            --radius-md
+ *   hover             --color-bg-hover at 80%, accent border,
+ *                     the rail RE-DECLARED plus a soft accent glow
+ *
+ * THE ACCENT RAIL IS A SHADOW AND NEVER A `border-left`. styles.css
+ * records why at length (its ITEM 37): a 1px ring and a 3px left border
+ * in two different colours are joined by the painting algorithm with a
+ * diagonal miter, and under `border-radius` that miter is drawn along
+ * the corner arc - the two-tone smear at the top-left and bottom-left
+ * corners. An inset shadow is clipped to the radius instead. Because
+ * `box-shadow` is ONE property and not a list that accumulates, every
+ * rule here that adds a glow re-declares the rail alongside it.
+ *
+ * ------------------------------------------------------------------
+ * THE CARD MUST STILL BE A CARD AT ZERO RADIUS.
+ * ------------------------------------------------------------------
+ * `terminal`, `gameboy` and `legacy_apple` deliberately zero every
+ * radius token (a documented, owner-confirmed choice, not an
+ * oversight). So the card metaphor is carried by FOUR things that all
+ * survive `--radius-md: 0`: a uniform 1px ring, the 3px inset accent
+ * rail, a fill that differs from the rail's own background, and the gap
+ * between siblings. Not one of them is a corner, and not one of them is
+ * colour alone.
+ *
+ * ------------------------------------------------------------------
+ * THE TWO COUNTS
+ * ------------------------------------------------------------------
+ * The sessions figure and the transcript total are told apart by FOUR
+ * independent signals, because a theme may flatten any single one:
+ *   1. different WORDS - "sessions" and "transcripts";
+ *   2. the connective "of", which makes them one sentence rather than
+ *      two rival numbers;
+ *   3. size - the sessions figure is larger;
+ *   4. colour - accent against muted.
+ * Contrast, measured on legacy_windows (page #C0C0C0), which is the
+ * theme that was recently repaired from 1.06:1 and must not regress:
+ *   --color-accent    #000080 on #C0C0C0 = 8.80:1
+ *   --color-fg-muted  #404040 on #C0C0C0 = 5.70:1
+ * --color-fg-faint (#595959, 3.85:1) is deliberately NOT used for
+ * either count.
+ * ===================================================================== */
+
+.archive-nav__node--project {
+    /* The gap between cards IS part of the card metaphor at zero radius,
+     * so it lives on the node and not on an ancestor's `gap`, which a
+     * different level's rules could quietly change. */
+    margin-bottom: 6px;
+}
+
+/* The card is a two-column grid: the selectable face, and the info
+ * affordance pinned to its right. A grid rather than absolute
+ * positioning so the face's padding never has to leave a hole the button
+ * happens to sit in - the button occupies a real track. */
+.archive-nav__card {
+    display: grid;
+    /* minmax(0, 1fr), NOT 1fr. A bare `1fr` is `minmax(auto, 1fr)`, and
+     * `auto` as a MINIMUM resolves to min-content - which for the
+     * white-space:nowrap counts row below is its full, untruncatable
+     * width. The card then refuses to shrink to the rail and is clipped
+     * by the PANE instead, which looks exactly like a truncation bug and
+     * is not one: the element itself never overflowed, so an
+     * `scrollWidth > clientWidth` check on it reports clean. Pinning the
+     * minimum to 0 is what lets the ellipsis inside ever engage. */
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    background-color: color-mix(in srgb, var(--color-bg, #1e1e1e) 80%, transparent);
+    background-image: linear-gradient(var(--color-accent-bg-soft), var(--color-accent-bg-soft));
+    border: 1px solid var(--color-border);
+    box-shadow: inset 3px 0 0 var(--color-accent);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.archive-nav__card:hover {
+    background-color: color-mix(in srgb, var(--color-bg-hover, #323235) 80%, transparent);
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent), 0 0 8px var(--color-accent-border-soft);
+}
+
+/* FOCUS IS THE CARD'S, not the inner button's. The face fills the card,
+ * so a ring on the button alone is drawn inside the border and reads as
+ * a second, smaller box. `:focus-within` puts it on the card itself. */
+.archive-nav__card:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: inset 3px 0 0 var(--color-accent), 0 0 0 2px var(--color-accent-border-soft);
+}
+
+/* The selectable face. Overrides the rail's generic row: no border of
+ * its own (the card owns the ring), no radius of its own (the card
+ * clips), and a transparent background so the card's fill shows. */
+.archive-nav__node--project .archive-nav__card-main {
+    display: grid;
+    /* Same reason as the card above: a bare 1fr would take its minimum
+     * from the nowrap counts row. */
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    width: 100%;
+    min-width: 0;
+    font: inherit;
+    text-align: left;
+    padding: 9px 6px 9px 12px;
+    background: transparent;
+    color: var(--color-fg);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+/* The hover and focus treatment belongs to the CARD. Neutralising it
+ * here stops the generic `.archive-nav__row:hover` rule from painting a
+ * second, inset box inside the one that is already reacting. */
+.archive-nav__node--project .archive-nav__card-main:hover,
+.archive-nav__node--project .archive-nav__card-main:focus-visible {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    outline: none;
+}
+
+.archive-nav__node--project .archive-nav__label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--color-fg);
+    /* TRUNCATE, NEVER WRAP - the rail is 272px at its narrowest and a
+     * wrapped name pushes 76 siblings down. `min-width: 0` is what lets
+     * the ellipsis engage inside a grid track at all; without it the
+     * item's min-content width wins and the text overflows instead. */
+    min-width: 0;
+    max-width: 100%;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---- the counts, as one sentence ---------------------------------- */
+
+.archive-nav__counts {
+    /* A BLOCK OF INLINE TEXT, NOT A FLEX ROW. `text-overflow: ellipsis`
+     * applies to a block container's own inline content; it does nothing
+     * for a flex container's items, and nothing for a flex ITEM whose own
+     * children are what overflow. An earlier build had this as flex with
+     * inline-flex children, so the row clipped mid-word with no ellipsis
+     * AND `scrollWidth > clientWidth` measured equal on it - a chopped
+     * row that every programmatic check called clean. One block, one
+     * line, one ellipsis, and it is measurable.
+     *
+     * Sized against the real rail: about 240px, less the 12/6 padding,
+     * the 1px ring and the 22px info button, leaves roughly 198px. An
+     * ordinary card ("NOT KNOWN sessions of 718 transcripts") fits; the
+     * handful with four-digit totals ellipsis at the END, which is the
+     * SECONDARY half by construction - the sessions figure is first, so
+     * what gives way is always the number that matters less. The full
+     * sentence is in this element's own title attribute. */
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.archive-nav__count {
+    /* `inline`, not inline-flex: an inline-flex child would re-create the
+     * problem the block above solves, because the ellipsis cannot reach
+     * inside a flex formatting context. */
+    display: inline;
+}
+
+.archive-nav__count-value,
+.archive-nav__count-noun,
+.archive-nav__count-of {
+    display: inline;
+}
+
+/* Spacing between the words comes from margins, because there is no flex
+ * `gap` on an inline run. */
+.archive-nav__count-noun,
+.archive-nav__count-of {
+    margin-left: 0.34em;
+}
+
+.archive-nav__count-of {
+    margin-left: 0.5em;
+}
+
+.archive-nav__count-of + .archive-nav__count-value {
+    margin-left: 0.34em;
+}
+
+.archive-nav__count--sessions {
+    color: var(--color-accent);
+    font-weight: 600;
+}
+
+.archive-nav__count--sessions .archive-nav__count-value {
+    font-family: var(--font-mono);
+    /* Larger than the total's, so size is a second signal after the
+     * nouns and before colour. */
+    font-size: 1.15em;
+}
+
+/* A count nobody measured is rendered in the MUTED colour, never the
+ * accent, so it does not read as a figure - and it is never 0. The
+ * literal is NOT KNOWN, written by ArchiveNavRow.renderCount. */
+.archive-nav__count--sessions[data-session-state="not-reported"],
+.archive-nav__count--sessions[data-session-state="cannot-determine"] {
+    color: var(--color-fg-muted);
+    font-weight: 400;
+}
+
+.archive-nav__count--sessions[data-session-state="not-reported"]
+    .archive-nav__count-value,
+.archive-nav__count--sessions[data-session-state="cannot-determine"]
+    .archive-nav__count-value {
+    font-size: 0.92em;
+    letter-spacing: 0.2px;
+    /* Not colour alone: a dotted underline marks it as a stated absence
+     * in a theme that flattens the palette. */
+    border-bottom: 1px dotted var(--color-fg-muted);
+}
+
+.archive-nav__count--total {
+    color: var(--color-fg-muted);
+}
+
+.archive-nav__count--total .archive-nav__count-value {
+    font-family: var(--font-mono);
+}
+
+.archive-nav__count-of {
+    font-style: italic;
+    opacity: 0.85;
+}
+
+/* ---- the info affordance ------------------------------------------ */
+
+.archive-nav__info-btn {
+    flex: 0 0 auto;
+    align-self: stretch;
+    width: 22px;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    font-style: italic;
+    line-height: 1;
+    color: var(--color-fg-muted);
+    background: transparent;
+    /* A divider, not a box: it separates the affordance from the face
+     * without drawing a second card inside the card. */
+    border: none;
+    border-left: 1px solid var(--color-border);
+    border-radius: 0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.archive-nav__info-btn:hover,
+.archive-nav__info-btn:focus-visible {
+    color: var(--color-on-accent);
+    background: var(--color-accent);
+    outline: none;
+}
+
+/* A project the overlay hides but the list still renders (include_hidden)
+ * is MARKED, never silently dropped - a card that vanishes and a card
+ * that was never built look identical. */
+.archive-nav__node--project[data-project-hidden="true"] .archive-nav__card {
+    opacity: 0.55;
+    border-style: dashed;
+}
+
+/* ---- when this project was last worked in --------------------------
+ * The card face is a single-column grid, so this lands as its own line
+ * under the counts. Same treatment as .archive-nav__counts above and for
+ * the same measured reason: a BLOCK with nowrap + ellipsis, because
+ * text-overflow does nothing for a flex item whose children overflow. */
+.archive-nav__node--project .archive-nav__when {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--color-fg-muted);
+}
+
+/* NOT a warning colour, and never colour alone: "undated" and "no date"
+ * are findings, not faults, and the WORDS carry the difference so a
+ * monochrome theme loses nothing. */
+.archive-nav__node--project .archive-nav__when--unknown {
+    font-style: italic;
+    opacity: 0.85;
+}
+
+/* ---- a card the active order cannot place --------------------------
+ * These sit at the END of the list, and the end of a most-recent-first
+ * list IMPLIES a date. This is the only thing standing between "we could
+ * not place it" and "this is the oldest project you have", so it is
+ * words on the card, not a shade of grey. It sits on the CARD rather
+ * than inside the button: it is a statement about the row's position,
+ * not a label for the thing the button selects. */
+.archive-nav__node--project .archive-nav__unsorted {
+    display: block;
+    padding: 0 12px 8px 12px;
+    font-size: 0.66rem;
+    line-height: 1.35;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--color-fg-muted);
+}
+
+/* A dotted top edge, so the parked block reads as a group without
+ * relying on a radius (three themes zero every radius token) or on a
+ * colour that a monochrome theme would flatten. */
+.archive-nav__node--project[data-unsorted] .archive-nav__card {
+    border-style: dashed;
+}

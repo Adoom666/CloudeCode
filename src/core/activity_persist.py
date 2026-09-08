@@ -54,12 +54,15 @@ logger = structlog.get_logger(__name__)
 #: seconds ago.
 STALE_AFTER = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 60)
 
-#: States that describe a LIVE process and therefore rot. ``idle`` and
+#: States that describe a LIVE process and therefore rot. ``notice`` is
+#: perishable for the same reason ``question`` is: both are claims about
+#: what a RUNNING agent is waiting on right now, and a claim about right
+#: now goes stale. ``idle`` and
 #: ``finished_unread`` describe a session AT REST, which does not become
 #: false by sitting still - a session that was idle an hour ago and has
 #: received no hook since is still idle, so those are trusted until
 #: something contradicts them.
-PERISHABLE = ("working", "working_subagent", "question")
+PERISHABLE = ("working", "working_subagent", "question", "notice")
 
 RESTORE_OK = "restored"
 RESTORE_STALE = "stale"

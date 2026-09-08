@@ -33,6 +33,7 @@ from src.core.agent_wrappers import (
     wrapper_scripts_dir,
 )
 from src.core import auth_defaults
+from src.core.message_archive_flag import CONFIG_KEY as MESSAGE_ARCHIVE_KEY
 from src.core.workspace_settings import SERVER_PREFS_KEY, WORKSPACE_KEY
 from src.core.terminal_commands import (
     TERMINAL_COMMANDS_KEY,
@@ -355,6 +356,36 @@ class UploadsConfig(BaseModel):
     max_file_size_mb: int = Field(default=50, ge=1)
 
 
+class MessageArchiveConfig(BaseModel):
+    """Master switch for the message archive subsystem.
+
+    OFF BY DEFAULT, AND THAT DEFAULT IS THE POINT. Turning this on
+    creates the ``message_*`` schema, starts a background scheduler that
+    walks ``~/.claude/projects`` and indexes the user's own conversations
+    into their local database, mounts thirteen API routes and reveals a
+    UI screen. None of that may arrive by upgrading, so an install that
+    has never heard of this block gets none of it.
+
+    THIS MODEL IS THE DOCUMENTED SHAPE, NOT THE RESOLVER. The value
+    actually consulted by the migration gate, the scheduler, the route
+    mount and the UI is resolved by
+    :func:`src.core.message_archive_flag.resolve`, which reads the same
+    ``message_archive`` block plus the ``CLOUDE_MESSAGE_ARCHIVE`` env
+    override and returns THREE outcomes rather than a bool. A pydantic
+    model cannot express "could not determine": it either parses a value
+    or raises, and the malformed-block tolerance every sibling block here
+    uses would turn an unreadable switch into a confident False. That is
+    exactly the false green this subsystem must not have, so the resolver
+    is the authority and this model is what makes the key discoverable,
+    typed and settable from the settings surfaces.
+
+    Fields:
+        enabled: Whether the message archive subsystem may run at all.
+    """
+
+    enabled: bool = False
+
+
 class AuthRateLimits(BaseModel):
     """Rate-limit knobs for authentication endpoints.
 
@@ -495,6 +526,14 @@ class AuthConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    # feat/message-archive-flag - the master switch for the message
+    # archive. ADDITIVE and off by default, so a config.json predating it
+    # loads unchanged and the subsystem stays absent. See
+    # MessageArchiveConfig's docstring for why the authoritative read is
+    # src.core.message_archive_flag.resolve() and not this field.
+    message_archive: MessageArchiveConfig = Field(
+        default_factory=MessageArchiveConfig
+    )
     # feat/settings-tabs-and-commands - user-editable common shell
     # commands, each runnable in a console session (see
     # src/core/terminal_commands.py, especially its security model: these
@@ -1247,6 +1286,27 @@ class Settings(BaseSettings):
                 )
                 providers_config = ProvidersConfig()
 
+            # Build MessageArchiveConfig from the optional
+            # "message_archive" block. Same malformed-block tolerance as
+            # every sibling above, and here the fallback is the SAFE
+            # direction: a mangled block yields enabled=False, which is
+            # also what src.core.message_archive_flag.resolve() gates on
+            # (it returns cannot_determine for the same input, and every
+            # gate treats that as "do not run"). The two disagree only in
+            # how much they can SAY about it, never in what runs.
+            message_archive_data = data.get(MESSAGE_ARCHIVE_KEY, {}) or {}
+            try:
+                message_archive_config = MessageArchiveConfig(
+                    **message_archive_data
+                )
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_message_archive_config_block",
+                    raw=message_archive_data,
+                )
+                message_archive_config = MessageArchiveConfig()
+
             # Build the terminal-command list from the optional top-level
             # block; same malformed-block tolerance as every sibling above.
             # A missing block falls back to the seed defaults so the
@@ -1332,6 +1392,7 @@ class Settings(BaseSettings):
                 agents=agents_config,
                 uploads=uploads_config,
                 providers=providers_config,
+                message_archive=message_archive_config,
                 terminal_commands=terminal_commands_config,
                 workspace=workspace_config,
                 server_prefs=server_prefs_config,

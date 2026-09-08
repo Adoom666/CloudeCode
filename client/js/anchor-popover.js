@@ -59,7 +59,46 @@ console.log('[AnchorPopover Module] Loading...');
         return { left: left, top: top };
     }
 
-    window.AnchorPopover = { place: place, MARGIN: MARGIN };
+    /**
+     * Position an element at a POINT rather than against a control -
+     * what a right click means. Same clamp, same visual-viewport
+     * reasoning as place(); only the preferred corner differs. The
+     * popover opens down and to the right of the point, flipping to the
+     * other side of it when that would run off the edge, and is clamped
+     * either way so a point near a corner still lands fully on screen.
+     *
+     * The element must already be in the document and `position: fixed`
+     * so it can be measured.
+     *
+     * @param {HTMLElement} el - the popover to place.
+     * @param {number} x - client x of the pointer.
+     * @param {number} y - client y of the pointer.
+     * @returns {{left: number, top: number}} the applied offsets, in px.
+     */
+    function placeAt(el, x, y) {
+        var vp = window.visualViewport || null;
+        var vw = vp ? vp.width : window.innerWidth;
+        var vh = vp ? vp.height : window.innerHeight;
+        var offL = vp ? vp.offsetLeft : 0;
+        var offT = vp ? vp.offsetTop : 0;
+
+        var w = el.offsetWidth;
+        var h = el.offsetHeight;
+
+        var left = x;
+        var top = y;
+        if (left + w > offL + vw - MARGIN) left = x - w;
+        if (top + h > offT + vh - MARGIN) top = y - h;
+
+        left = Math.min(Math.max(left, offL + MARGIN), offL + vw - w - MARGIN);
+        top = Math.min(Math.max(top, offT + MARGIN), offT + vh - h - MARGIN);
+
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        return { left: left, top: top };
+    }
+
+    window.AnchorPopover = { place: place, placeAt: placeAt, MARGIN: MARGIN };
 })();
 
 console.log('[AnchorPopover Module] Exported as window.AnchorPopover');

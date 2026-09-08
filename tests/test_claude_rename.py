@@ -112,7 +112,115 @@ def test_no_activity_gate_exists_any_more():
     params = set(inspect.signature(decide_push).parameters)
     assert "activity_status" not in params
     assert "hooks_seen" not in params
-    assert params == {"label", "claude_uuid", "claude_version", "is_claude_session"}
+    assert params == {
+        "label",
+        "claude_uuid",
+        "claude_version",
+        "is_claude_session",
+        # ADDED 2026-09-08, and it is NOT an activity gate. It asks
+        # whether the conversation can be ADDRESSED at all, which is a
+        # fact about the filesystem, not about what the pane is doing.
+        "transcript_presence",
+    }
+
+
+# ---- the transcript guard -------------------------------------------
+#
+# THE INCIDENT THIS ENCODES. On 2026-09-08 at 14:47:41Z a browser rename
+# logged `claude_rename_pushed` and changed nothing. The row had bound a
+# uuid from the SessionStart hook, but Claude Code had not yet written
+# the transcript - it appeared at 14:50:14Z, 2m33s later. Measured
+# directly: `claude -p --resume <absent-uuid> "/rename X"` exits 1 with
+# "No conversation found with session ID: ...", and the spawn discarded
+# stderr. A bound uuid is not evidence a transcript exists.
+
+
+def test_a_measured_absent_transcript_defers_the_push():
+    """The guard. A resume against a missing file renames nothing."""
+    from src.core.session_transcript_presence import CONVERSATION_ABSENT
+
+    outcome, reason = _d(transcript_presence=CONVERSATION_ABSENT)
+
+    assert outcome == PUSH_DEFERRED
+    assert "transcript" in reason
+
+
+def test_an_unchecked_transcript_still_sends():
+    """THE ASYMMETRY, and it matches the restart guard exactly.
+
+    Not having been able to look is not evidence a file is gone.
+    Refusing on `unchecked` would break renaming on every machine whose
+    corpus lives somewhere the checker was not told about.
+    """
+    from src.core.session_transcript_presence import CONVERSATION_UNCHECKED
+
+    assert _d(transcript_presence=CONVERSATION_UNCHECKED)[0] == PUSH_SENT
+    assert _d(transcript_presence=None)[0] == PUSH_SENT
+
+
+def test_a_present_transcript_sends():
+    """The positive control, so the guard is not just always-deferring."""
+    from src.core.session_transcript_presence import CONVERSATION_PRESENT
+
+    assert _d(transcript_presence=CONVERSATION_PRESENT)[0] == PUSH_SENT
+
+
+def test_a_failed_spawn_is_reported_rather_than_swallowed():
+    """A push that cannot start returns False; it never raises.
+
+    The label is durable before the push runs, so a spawn failure may
+    not turn a completed rename into an error the user has to think
+    about - but it may not be silent either.
+    """
+    from src.core.claude_rename import spawn_oob_rename
+
+    assert (
+        spawn_oob_rename(
+            ["/nonexistent/claude-binary-that-is-not-there", "-p"],
+            session_id="ses_test",
+        )
+        is False
+    )
+
+
+def test_a_spawn_that_starts_reports_true_and_reaps_the_child():
+    """The positive control for the spawn, and it leaves no zombie.
+
+    ``true`` exits 0 immediately. If the reaper thread were missing this
+    would still return True, so the assertion that matters is that the
+    child is gone once the thread has run.
+    """
+    import time
+
+    from src.core.claude_rename import spawn_oob_rename
+
+    assert spawn_oob_rename(["/usr/bin/true"], session_id="ses_test") is True
+    # The reaper is a daemon thread; give it a moment to call
+    # communicate(). No sleep-free way to observe another thread finish
+    # without wiring a hook into production code purely for the test.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if threading_named("oob-rename-ses_test") is None:
+            break
+        time.sleep(0.02)
+    assert threading_named("oob-rename-ses_test") is None
+
+
+def threading_named(name):
+    """The live thread with this name, or None.
+
+    Description: a test helper, kept out of the assertion so the loop
+      above reads as the polling it is.
+    Inputs: name (str) - the thread name.
+    Output: threading.Thread | None.
+    Example: threading_named('oob-rename-ses_test')
+    """
+    import threading
+
+    for thread in threading.enumerate():
+        if thread.name == name:
+            return thread
+    return None
 
 
 def test_an_unbound_conversation_defers_because_resume_needs_a_uuid():

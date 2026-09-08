@@ -1,4 +1,4 @@
-"""DELETE /sessions/records/{uuid} - the soft delete, over the wire.
+"""DELETE and unarchive /sessions/records/{uuid}, over the wire.
 
 WHY A ROUTE TEST AND NOT JUST THE STORE TEST. Asserting that
 ``session_store.archive_session`` works proves the primitive works. The
@@ -11,6 +11,9 @@ THE KILL/DELETE SEPARATION IS ASSERTED, NOT ASSUMED. ``DELETE
 /sessions`` stops a process and rmtrees an uploads bucket; this route
 must do neither. A test that only checked the happy path would pass just
 as well on a build where the two had been wired together.
+
+``POST .../unarchive`` is the reverse, added 2026-09-08 for parity with
+projects. See the tests below the identity-preservation test for it.
 """
 
 from __future__ import annotations
@@ -193,3 +196,62 @@ def test_a_deleted_row_still_carries_its_identity_for_the_reconciler(seeded):
     assert row["tmux_name"] == "cloude_target"
     assert row["tmux_created_epoch"] == 9000
     assert row["tmux_socket"]
+
+
+# ---------------------------------------------------------------------
+# POST /sessions/records/{uuid}/unarchive - the reverse, added 2026-09-08
+# for parity with POST /projects/{name}/unarchive. Restarting an archived
+# row already clears archived_at as a side effect, so the launchpad UI
+# has no button wired to this yet; the route exists so the restore does
+# not require a live tmux to restart into.
+# ---------------------------------------------------------------------
+
+
+def test_unarchive_restores_an_archived_row(seeded):
+    """200, archived_at cleared, back in the listable set."""
+    client = _client()
+    client.request("DELETE", "/api/v1/sessions/records/target")
+    assert _archived_at(seeded, "target"), "control failed: row not archived"
+
+    resp = client.post("/api/v1/sessions/records/target/unarchive")
+    assert resp.status_code == 200
+    assert "restored" in resp.json()["message"].lower()
+    assert _archived_at(seeded, "target") is None
+
+    conn = connect(db_path_for(seeded), create=False)
+    try:
+        listed = {r["session_uuid"] for r in session_store.listable_sessions(conn)}
+    finally:
+        conn.close()
+    assert "target" in listed
+
+
+def test_unarchive_of_a_live_row_is_200_not_an_error(seeded):
+    """Unarchiving a row that was never archived is a no-op, not a fault.
+
+    The caller asked for a state (visible) that already holds, so this
+    must not be a 404 or a 409 - the same idempotence contract DELETE
+    already gives in the other direction.
+    """
+    resp = _client().post("/api/v1/sessions/records/target/unarchive")
+    assert resp.status_code == 200
+    assert "already" in resp.json()["message"].lower()
+    assert _archived_at(seeded, "target") is None
+
+
+def test_unarchive_of_an_unknown_uuid_is_404(seeded):
+    """POSITIVE CONTROL IN THE SAME TEST, same shape as the delete test."""
+    client = _client()
+    assert client.request(
+        "DELETE", "/api/v1/sessions/records/target"
+    ).status_code == 200, "control failed: the route is not answering at all"
+
+    resp = client.post("/api/v1/sessions/records/no-such-uuid/unarchive")
+    assert resp.status_code == 404
+
+
+def test_unarchive_with_no_datastore_is_503_not_200(monkeypatch, tmp_path):
+    """Could-not-evaluate is its own outcome, never a cheerful 200."""
+    monkeypatch.setattr(type(_settings()), "get_state_dir", lambda self: tmp_path)
+    resp = _client().post("/api/v1/sessions/records/target/unarchive")
+    assert resp.status_code == 503

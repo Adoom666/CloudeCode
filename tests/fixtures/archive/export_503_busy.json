@@ -1,0 +1,16 @@
+{
+ "meta": {
+  "limit": {
+   "max_concurrent_exports": 2
+  }
+ },
+ "result": null,
+ "result_status": "cannot_determine",
+ "scope_status": "resolved",
+ "unevaluated": [
+  {
+   "reason": "2 streaming exports are already in flight and no slot came free within 30.0s. The bound exists because one worst-case export was measured at about 600 MB peak RSS. Retry.",
+   "subject": "transcript:17266"
+  }
+ ]
+}

@@ -137,7 +137,12 @@ def test_live_pane_is_not_dead_and_is_not_actionable():
 
 
 def test_every_kind_carries_a_sentence_the_ui_can_show():
-    """A blank cell is not a report. Every verdict explains itself."""
+    """A blank cell is not a report. Every verdict explains itself.
+
+    The set comparison at the end is the part that matters: it fails when
+    a NEW kind is added to ``ALL_RESPAWN_KINDS`` and nobody constructed
+    it here, which is how a verdict ships with no sentence behind it.
+    """
     cases = [
         dict(probe_ok=True, pane_dead="1", pane_start_command='"cld"', agent_command="cld"),
         dict(probe_ok=True, pane_dead="1", pane_start_command='"x"', agent_command=None),
@@ -150,6 +155,26 @@ def test_every_kind_carries_a_sentence_the_ui_can_show():
         plan = resolve_respawn_plan(**kw)
         seen.add(plan.kind)
         assert plan.detail.strip(), f"{plan.kind} has no detail sentence"
+
+    # TRANSCRIPT_MISSING is not reachable from the ladder alone: it is
+    # applied AFTER it, by the caller, once a filesystem check has come
+    # back with a definite absence. Constructed through the same public
+    # function the caller uses, so this still exercises the real path
+    # rather than asserting on a hand-built dataclass.
+    from src.core.session_respawn import (
+        RESPAWN_REPLAY,
+        refuse_if_transcript_missing,
+    )
+
+    replayed = RespawnPlan(
+        kind=RESPAWN_REPLAY,
+        detail="restarting the command tmux recorded for this pane",
+        resume_uuid="82aabe7b-c0be-4430-b127-bbf8aad17a57",
+    )
+    refused = refuse_if_transcript_missing(replayed, "absent")
+    seen.add(refused.kind)
+    assert refused.detail.strip(), "transcript_missing has no detail sentence"
+
     assert seen == ALL_RESPAWN_KINDS
 
 

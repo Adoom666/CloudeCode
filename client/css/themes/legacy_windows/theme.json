@@ -6,6 +6,7 @@
   "version": "1.0.0",
   "cssVars": {
     "--color-bg": "#C0C0C0",
+    "--color-bg-page": "#C0C0C0",
     "--color-bg-elevated": "#D4D0C8",
     "--color-bg-card": "#D4D0C8",
     "--color-bg-hover": "#C8C4BC",

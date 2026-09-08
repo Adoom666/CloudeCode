@@ -8,14 +8,18 @@
 // innerHTML string renderProjectList() actually writes into the DOM, the
 // same string a browser would paint, not an intermediate data structure.
 //
-// THE TWO CLAIMS THIS FILE MUST PROVE:
+// THE THREE CLAIMS THIS FILE MUST PROVE:
 //   1. A 'missing' project and an 'unreachable' project render DIFFERENT
 //      visible text - different label, different detail. Collapsing them
 //      to a shared "problem" string would pass every unit-level check on
 //      the presence enum while failing a real user reading the screen.
-//   2. Neither row offers an action control: no `project-edit-btn` and no
-//      `project-delete-btn` without a `disabled` attribute, AND the row's
-//      own container is marked disabled so a click cannot open it.
+//   2. Neither row offers an edit control: no `project-edit-btn` without
+//      a `disabled` attribute, AND the row's own container is marked
+//      disabled so a click cannot open it.
+//   3. Archive is NEVER disabled by presence, on purpose: a project
+//      whose folder has gone missing is precisely one a user wants to
+//      archive, so `project-archive-btn` must render enabled even on a
+//      refused row.
 //
 // Run with: node tests/test_project_presence_render.node.mjs
 
@@ -68,10 +72,15 @@ function makeProjectListElement() {
         set innerHTML(v) { html = v; },
         get innerHTML() { return html; },
         querySelectorAll(selector) {
-            // Only the two selectors renderProjectList() actually uses.
+            // Only the selectors renderProjectList() actually uses. The
+            // hard-delete trash button (`.project-delete-btn`) is gone
+            // from the UI - archiving is the only destructive-shaped
+            // control on a project row now (owner's instruction,
+            // 2026-09-08: "sessions and projects can be archived not
+            // deleted").
             if (selector === '.project-item') return parseItems(html);
-            if (selector === '.project-delete-btn') return parseButtons(html, 'project-delete-btn');
             if (selector === '.project-edit-btn') return parseButtons(html, 'project-edit-btn');
+            if (selector === '.project-archive-btn') return parseButtons(html, 'project-archive-btn');
             return [];
         },
         // feat/project-session-tree (S8) - renderProjectList() now also
@@ -188,7 +197,7 @@ await test('present project: no badge, actions enabled, item not disabled', asyn
     assert.ok(!html.includes('MISSING'), html);
     assert.ok(!html.includes('CANNOT DETERMINE'), html);
     assert.ok(!/project-edit-btn[^>]*\bdisabled\b/.test(html), html);
-    assert.ok(!/project-delete-btn[^>]*\bdisabled\b/.test(html), html);
+    assert.ok(!/project-archive-btn[^>]*\bdisabled\b/.test(html), html);
 });
 
 await test('missing project: renders MISSING, not CANNOT DETERMINE', async () => {
@@ -268,15 +277,16 @@ await test('neither missing nor unreachable rows expose a usable action control'
     const html = getHtml();
     const items = lp.projectPresence; // sanity: not asserting on this map
 
-    // Every edit/delete button rendered on this page must carry
-    // `disabled` - both rows are refused, so there must be exactly as
-    // many disabled edit buttons and disabled delete buttons as rows.
+    // Every edit button rendered on this page must carry `disabled` -
+    // both rows are refused, so there must be exactly as many disabled
+    // edit buttons as rows. Archive is the OPPOSITE: it must render
+    // enabled on both refused rows, never disabled by presence.
     const editButtons = [...html.matchAll(/<button class="project-edit-btn"[^>]*>/g)];
-    const deleteButtons = [...html.matchAll(/<button class="project-delete-btn"[^>]*>/g)];
+    const archiveButtons = [...html.matchAll(/<button class="project-archive-btn"[^>]*>/g)];
     assert.equal(editButtons.length, 2, html);
-    assert.equal(deleteButtons.length, 2, html);
+    assert.equal(archiveButtons.length, 2, html);
     for (const btn of editButtons) assert.ok(/\bdisabled\b/.test(btn[0]), btn[0]);
-    for (const btn of deleteButtons) assert.ok(/\bdisabled\b/.test(btn[0]), btn[0]);
+    for (const btn of archiveButtons) assert.ok(!/\bdisabled\b/.test(btn[0]), btn[0]);
 
     // And the row container itself is marked aria-disabled, so the
     // click-to-open handler's own guard (item.classList.contains(

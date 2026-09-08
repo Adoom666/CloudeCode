@@ -12,25 +12,35 @@ WHAT THIS CANNOT DO, and it shapes everything below: there is no
 ``SessionRename`` hook event (verified against the shipped 2.1.248 binary:
 zero occurrences), and ``/rename`` does NOT fire ``UserPromptSubmit``,
 because Claude intercepts slash commands before they become prompts. So
-the sync is ONE-WAY BY CONSTRUCTION. CloudeCode can push a name TO Claude;
-it can never be notified that a user typed ``/rename`` in the terminal. It
-learns that only by pulling - ``session_title`` arrives on the next
-SessionStart payload, one lifecycle event late, and lands in
-``sessions.claude_title``.
+no EVENT can carry the news: CloudeCode can push a name TO Claude, and it
+can never be TOLD that a user typed ``/rename`` in the terminal.
 
-WHY IT IS GATED RATHER THAN JUST SENT. The push is `tmux send-keys` into a
-pane the user is sitting in. That is a real mutation of live state, and
-the failure mode is not an error - it is a line of text landing in the
-middle of whatever they were typing, or a slash command queued behind a
-running turn and executed minutes later against a conversation that has
-moved on. So the decision to send is made from the session's ACTIVITY
-STATUS, and the three outcomes are named rather than collapsed:
+STALE CLAIM CORRECTED, 2026-09-08. This paragraph used to end "it learns
+that only by pulling - ``session_title`` arrives on the next SessionStart
+payload", which described a channel that does not deliver: a
+``/rename`` in a live pane needs no new SessionStart, so the payload
+never comes, and the column it lands in had zero readers anywhere in the
+app. The pull that actually works reads the transcript itself - see
+:mod:`src.core.claude_title_sync`, which takes the newest
+``custom-title`` record out of the tail of the file on any hook event.
+The push below is still the only direction that WRITES to Claude.
 
-  PUSH_SENT       - the pane was idle at a prompt; the command went in.
-  PUSH_DEFERRED   - the pane was busy, dead, or its state could not be
-                    read. Nothing was sent. This is NOT a failure: the
-                    name is already stored on our side, and Claude's copy
-                    can be pushed later or set by the user.
+WHY IT IS GATED RATHER THAN JUST SENT. A SECOND STALE PARAGRAPH, also
+corrected 2026-09-08: this described the push as ``tmux send-keys`` into
+the pane and the gate as an ACTIVITY check, both of which the out-of-band
+rewrite deleted (see the ``OOB_TIMEOUT_SECONDS`` comment below, and
+``test_no_activity_gate_exists_any_more``). Nothing types into a pane any
+more. What is left to gate on is whether the conversation can be
+ADDRESSED at all: ``--resume`` needs a uuid, and it needs that uuid's
+transcript to exist on disk. The three outcomes stay named rather than
+collapsed:
+
+  PUSH_SENT       - the conversation is addressable; the child was run.
+  PUSH_DEFERRED   - no uuid is bound yet, or its transcript is measurably
+                    absent, or the label is one Claude would rewrite.
+                    Nothing was sent. This is NOT a failure: the name is
+                    already stored on our side, and Claude's copy can be
+                    pushed later or set by the user.
   PUSH_UNSUPPORTED- this session is not a Claude session, or the running
                     Claude is older than ``MIN_RENAME_VERSION``.
 
@@ -190,6 +200,7 @@ def decide_push(
     claude_uuid: Optional[str],
     claude_version: Optional[Tuple[int, int, int]],
     is_claude_session: bool,
+    transcript_presence: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Decide whether an out-of-band rename can be performed.
 
@@ -203,13 +214,35 @@ def decide_push(
       (no SessionStart hook has arrived) cannot be addressed at all. That
       is a DEFERRAL, not a failure: the name is already stored on our
       side and can be pushed once the uuid is known.
+
+      A BOUND UUID IS NOT EVIDENCE A TRANSCRIPT EXISTS, and that gap cost
+      a real rename. Measured 2026-09-08 at 14:47:41Z: a browser rename
+      logged ``claude_rename_pushed`` and delivered nothing, because the
+      row had bound its uuid from the ``SessionStart`` hook while Claude
+      Code had not yet written the file - it appeared 2m33s later, at
+      14:50:14Z. ``claude -p --resume <uuid>`` against a file that is not
+      there exits 1 with "No conversation found with session ID", and the
+      spawn discarded stderr, so the failure was invisible and the log
+      claimed success. This is the same guard
+      ``session_transcript_presence`` already puts in front of the
+      restart ladder, reusing its three-value vocabulary rather than
+      inventing a second one.
+
+      NOTE THE ASYMMETRY, WHICH IS DELIBERATE AND MATCHES THE RESTART
+      GUARD: only a MEASURED absence defers. ``unchecked`` still sends,
+      because not having been able to look is not evidence a file is
+      gone, and refusing on it would break renaming on every machine
+      whose corpus lives somewhere the checker was not told about.
     Inputs: label (str). claude_uuid (str | None) - the bound Claude
       conversation uuid. claude_version (tuple | None).
-      is_claude_session (bool).
+      is_claude_session (bool). transcript_presence (str | None) - a
+      ``session_transcript_presence.CONVERSATION_*`` verdict; None means
+      no check was made and is treated as ``unchecked``.
     Output: tuple[str, str] - (outcome, human-readable reason).
     Example: decide_push(label='x', claude_uuid='u1',
       claude_version=(2,1,248), is_claude_session=True)[0] -> 'sent'
     """
+    from src.core.session_transcript_presence import CONVERSATION_ABSENT
     if not is_claude_session:
         return (PUSH_UNSUPPORTED, "not a Claude session")
     if not supports_rename(claude_version):
@@ -230,6 +263,13 @@ def decide_push(
             PUSH_DEFERRED,
             "no Claude conversation uuid is bound yet, so there is "
             "nothing for --resume to address",
+        )
+    if transcript_presence == CONVERSATION_ABSENT:
+        return (
+            PUSH_DEFERRED,
+            "a conversation uuid is bound but its transcript is not on "
+            "this machine yet, and --resume against a missing transcript "
+            "exits without renaming anything",
         )
     return (PUSH_SENT, "out of band via --resume, no pane contact")
 
@@ -364,3 +404,87 @@ def launch_name_args_for_agent_type(
     except Exception as exc:  # noqa: BLE001 - see docstring
         logger.debug("launch_name_args_failed", error=str(exc))
         return []
+
+
+def spawn_oob_rename(argv: List[str], *, session_id: str) -> bool:
+    """Run the out-of-band rename, and REPORT IT IF IT FAILS.
+
+    Description: the spawn used to be a bare ``Popen`` with stdout and
+      stderr on ``DEVNULL`` and nobody waiting on it, which meant a push
+      that failed and a push that worked produced byte-identical logs.
+      That is how the 14:47:41Z incident stayed invisible: the server
+      wrote ``claude_rename_pushed`` while claude was exiting 1 with "No
+      conversation found with session ID" into a null device. A write
+      that cannot be observed failing is not a write, it is a hope.
+
+      Still asynchronous, because the caller is answering an HTTP request
+      that has already succeeded - the label is durable before this runs
+      and a rename must not wait on a subprocess. A daemon thread reaps
+      the child, which also gives :data:`OOB_TIMEOUT_SECONDS` a job: it
+      was quoted in the log line while nothing enforced it, so a hung
+      claude would have leaked a process per rename.
+
+      NEVER RAISES. A failure to spawn is reported as False and logged;
+      the label is already stored either way.
+    Inputs: argv (list[str]) - from :func:`oob_rename_argv`. session_id
+      (str) - for the log context only.
+    Output: bool - True when the child started. NOT a claim it succeeded;
+      that verdict arrives later, in the log.
+    Example: spawn_oob_rename(argv, session_id='ses_5a756046')
+    """
+    import subprocess
+    import threading
+
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        logger.warning(
+            "claude_rename_spawn_failed", session_id=session_id, error=str(exc)
+        )
+        return False
+
+    def _reap() -> None:
+        """Wait for the rename, then say what it did.
+
+        Inputs: none (closes over ``proc`` and ``session_id``).
+        Output: None.
+        """
+        try:
+            _out, err = proc.communicate(timeout=OOB_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            logger.warning(
+                "claude_rename_push_timed_out",
+                session_id=session_id,
+                timeout_s=OOB_TIMEOUT_SECONDS,
+            )
+            return
+        except OSError as exc:
+            logger.warning(
+                "claude_rename_push_unwaitable",
+                session_id=session_id,
+                error=str(exc),
+            )
+            return
+        if proc.returncode == 0:
+            logger.info("claude_rename_push_landed", session_id=session_id)
+            return
+        # THE LINE THAT WAS MISSING. stderr carries claude's own sentence,
+        # which named the real cause on the first read.
+        logger.warning(
+            "claude_rename_push_rejected",
+            session_id=session_id,
+            exit_code=proc.returncode,
+            stderr=(err or b"").decode("utf-8", "replace").strip()[:300],
+        )
+
+    threading.Thread(
+        target=_reap, name=f"oob-rename-{session_id}", daemon=True
+    ).start()
+    return True

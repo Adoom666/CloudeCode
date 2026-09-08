@@ -1,0 +1,387 @@
+/* =====================================================================
+ * ARCHIVE SCREEN SHELL - the three-column grid and its narrow collapse.
+ *
+ * Load AFTER archive-outcomes.css and BEFORE the per-pane files. This
+ * file owns geometry only: where the panes are, which one is visible at
+ * which width, and how the screen fills the shell. It sets no outcome
+ * colours and no row styling - archive-outcomes.css owns the first and
+ * the per-pane files own the second.
+ *
+ * NARROW IS ONE STATE RENDERED DIFFERENTLY, NOT A SECOND STATE MACHINE
+ * (design doc C.5). `archive-screen.js` writes `data-pane` on the root
+ * from the ROUTE, every time it applies one. Below 900px this file shows
+ * exactly the pane that attribute names and hides the other two. Above
+ * 900px the attribute is ignored and all three render. There is no
+ * mobile navigation model to keep in sync with the desktop one, because
+ * there is only one model.
+ *
+ * NORMATIVE, FROM DESIGN DOC C.5: the outcome blocks DO NOT shrink into
+ * icons on a narrow viewport. There is no rule in this file that hides,
+ * truncates or icon-ifies `.archive-outcome` at any width. On a 375px
+ * screen a cannot_determine still renders the words COULD NOT EVALUATE
+ * and its reason text, wrapped. Compressing the third outcome into a
+ * glyph reintroduces the exact indistinguishability the whole design
+ * exists to prevent, on the viewport where people skim hardest.
+ *
+ * BREAKPOINTS ARE REUSED, NOT INVENTED. 900px is the three-to-one
+ * collapse; 700px is the reader's metadata wrap and is already the most
+ * common breakpoint in client/css/ (7 occurrences, measured 2026-08-31).
+ * `archive-screen.js` names 900 as NARROW_MAX_PX; the two must agree,
+ * which is why each states the number rather than either implying it.
+ *
+ * Every colour is an existing theme token. No border-radius carries
+ * meaning anywhere in the archive UI - see archive-outcomes.css.
+ * ===================================================================== */
+
+/* The screen div itself is a flex item of the app shell (`.screen` in
+ * styles.css sets `flex: 1; overflow: auto; min-height: 0`). Column
+ * direction so the breadcrumb, the grid and the bottom bar stack, and
+ * `overflow: hidden` because each PANE is its own scroll container - a
+ * second scrollbar on the screen would double-scroll the reader. */
+#archive-screen {
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    background: var(--color-bg-page);
+    color: var(--color-fg);
+}
+
+/* --- breadcrumb ---------------------------------------------------- */
+
+.archive-screen__crumb {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 8px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--color-fg-muted);
+    border-bottom: 1px solid var(--color-border);
+    /* TRUNCATE, DO NOT WRAP. The previous rule wrapped on the grounds
+     * that "a truncated breadcrumb is a path the reader cannot check" -
+     * true of a truncation with no way back, and these slugs really are
+     * long (-Users-jsugamele-Development-Assistants-Infrastructure). The
+     * answer is not to wrap: a crumb that wraps to three lines reflows
+     * the whole grid under it every time a longer name is opened. Each
+     * segment now ellipsises AND carries its full text in a `title`
+     * (written by archive-deeplink.js::renderCrumb), so the path is
+     * still checkable - by hovering - and the row keeps one height. */
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* The crumb IS the archive's title row, so its leaf reads like one:
+ * .project-name's accent, at the crumb's own size. */
+.archive-screen__crumb-item {
+    color: var(--color-fg);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The LEAF gets the room. The earlier segments shrink first because the
+ * thing you are looking at matters more than the path you took to it,
+ * and every one of them keeps a readable stub rather than collapsing to
+ * an ellipsis on its own. */
+.archive-screen__crumb-item:last-of-type {
+    flex: 1 1 auto;
+    color: var(--color-accent);
+    font-weight: bold;
+}
+
+.archive-screen__crumb-item:not(:last-of-type) {
+    flex: 0 1 auto;
+    min-width: 4ch;
+}
+
+.archive-screen__crumb-sep {
+    flex: 0 0 auto;
+    color: var(--color-fg-faint);
+}
+
+/* --- back affordance ------------------------------------------------ */
+
+/* Present in the DOM at every width so the narrow layout does not need
+ * to create it. `hidden` is set from the ROUTE by setPane(); this rule
+ * only removes it from the WIDE layout, where all three panes are
+ * visible and "back" would name nothing. */
+.archive-screen__back {
+    display: none;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    margin: 8px 16px 0;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 0.85rem;
+    color: var(--color-fg);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    /* radius-md, the app's default (39 uses in styles.css). This control
+     * and the two toolbar buttons used to be the ONLY archive surfaces
+     * with any radius at all, so in the 20 themes with a non-zero radius
+     * exactly three controls looked rounded and nothing else did. */
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-screen__back:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+.archive-screen__back[hidden] {
+    display: none;
+}
+
+/* --- the three-column grid ------------------------------------------ */
+
+/* =====================================================================
+ * THE `hidden` ATTRIBUTE HAS TO WIN, AND ON THIS SCREEN IT DID NOT.
+ *
+ * MEASURED 2026-09-01, live server, 1440x900. `archive-screen.js` hides
+ * the search panel with `search.element.hidden = true` and the list with
+ * `wired.list.element.hidden = true`. Both are correct. Both did
+ * NOTHING, because `[hidden] { display: none }` lives in the USER-AGENT
+ * stylesheet and any author `display` declaration outranks it -
+ * `.archive-search { display: flex }` (archive-search.css:37) and
+ * `.archive-tlist { display: flex }` (archive-tlist.css) each did.
+ *
+ * WHAT THE OWNER SAW. The "hidden" search panel rendered its empty
+ * `.archive-search__coverage` paragraph inside the transcript-list pane:
+ * `background: var(--color-bg-elevated)` (rgb 45,45,48), a
+ * `box-shadow: inset 3px 0 0 var(--color-info)` blue rail and
+ * `border-radius: var(--radius-md)`. That is the textless dark bar with
+ * a blue rounded left cap, painted across a transcript row, that this
+ * screen has been shipping. Measured before the fix: the element was at
+ * x=272 y=832 w=336 h=20 with `visibility: visible`, and its parent
+ * `<section class="archive-search" hidden>` occupied a real 36px of the
+ * pane's flex column - so it also SQUEEZED the list it sat under.
+ *
+ * WHY `!important` AND WHY SCOPED. `hidden` is a semantic assertion that
+ * an element is not present; any author rule that beats it is a bug, not
+ * a style. The alternative - one `.archive-search[hidden]` guard - fixes
+ * exactly the two panes that are broken TODAY and leaves the next pane
+ * added to this screen carrying the same latent defect, silently, since
+ * nothing errors and nothing fails a test. Scoped to `#archive-screen`
+ * so it is a statement about this screen and not a global override of
+ * everybody else's deliberate `[hidden]` animations (archive-export.css
+ * documents one such deliberate choice).
+ * ===================================================================== */
+
+#archive-screen [hidden] {
+    display: none !important;
+}
+
+.archive-screen__grid {
+    display: grid;
+    /* RESIZABLE, AND THE TWO WIDTHS LIVE IN VARIABLES.
+     * `archive-pane-resize.js` writes `--archive-nav-w` and
+     * `--archive-list-w` on this element and NOTHING else; the template
+     * is built here, once, so there is no second place computing a
+     * column count. The fallbacks are the 17rem/22rem this replaced, at
+     * the app's 16px root - they are what renders when the JS has not
+     * run, when localStorage is unavailable, and in any theme or context
+     * that never reaches the resizer at all.
+     *
+     * `minmax` with a 0 floor on the reader so a long unbroken body
+     * cannot push the grid wider than the viewport and take the page
+     * horizontal. */
+    grid-template-columns:
+        var(--archive-nav-w, 17rem)
+        var(--archive-list-w, 22rem)
+        minmax(0, 1fr);
+    /* The containing block for the two absolutely-positioned resizer
+     * handles. They are deliberately NOT grid items: in the flow they
+     * would make this a five-column grid and every rule that says "the
+     * three columns" wrong. */
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+}
+
+.archive-screen__pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    /* Each pane scrolls itself. This is what lets the reader's virtual
+     * list own a scroller whose height it can measure. */
+    overflow: auto;
+}
+
+.archive-screen__pane--list {
+    border-right: 1px solid var(--color-border);
+}
+
+.archive-screen__pane--reader {
+    /* The reader mounts its own scroller inside; this pane must not add
+     * a second one or the virtual list reconciles against the wrong
+     * scrollTop. */
+    overflow: hidden;
+}
+
+/* --- reader toolbar ------------------------------------------------- */
+
+.archive-screen__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    /* NO EXTRA RIGHT PADDING FOR THE SESSION-EDITOR FAB. That button is
+     * hidden on this screen instead - see terminal-tools.css. Padding
+     * here would only move the collision; it would still leave a control
+     * floating over a screen it cannot act on. */
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-card);
+}
+
+.archive-screen__search-input {
+    font: inherit;
+    font-size: 0.85rem;
+    flex: 1 1 12rem;
+    min-width: 0;
+    padding: 6px 10px;
+    color: var(--color-fg);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.archive-screen__search-btn,
+.archive-screen__export-btn {
+    font: inherit;
+    font-size: 0.85rem;
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-screen__search-btn:hover,
+.archive-screen__export-btn:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+/* --- bottom bar ----------------------------------------------------- */
+
+/* The re-parent target for the status light and the global audio button.
+ * It keeps its height whether or not anything has been moved into it, so
+ * the grid does not resize on the first navigation. */
+.archive-screen__bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    min-height: 2rem;
+    padding: 6px 16px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg-card);
+}
+
+.archive-screen__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.archive-screen__status-text {
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+}
+
+/* --- the deep-linked line ------------------------------------------- */
+
+/* Written by archive-screen-reader.js ONLY when the line was actually
+ * found in the loaded page. When it was not, that file renders a
+ * cannot_determine block instead and this attribute is removed - the
+ * highlight never appears over a line the reader is not showing. */
+.archive-screen__pane--reader[data-highlight-line] .archive-line[data-line-no] {
+    scroll-margin-top: 2rem;
+}
+
+/* =====================================================================
+ * NARROW: one pane at a time, below 900px.
+ * ===================================================================== */
+
+@media (max-width: 900px) {
+    .archive-screen__grid {
+        /* ONE COLUMN, AND THE TWO WIDTH VARIABLES ARE SIMPLY IGNORED.
+         * That is why the resizer needs no narrow-layout code at all:
+         * there is nothing here reading `--archive-nav-w`, so a width
+         * stored from a wide window cannot leak into the phone layout. */
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* A divider between panes that are never side by side names
+     * nothing. Removed from the layout AND from the tab order. */
+    .archive-screen__resizer {
+        display: none;
+    }
+
+    .archive-screen__back {
+        display: inline-block;
+    }
+
+    .archive-screen__back[hidden] {
+        display: none;
+    }
+
+    /* Default: show the rail. Each data-pane value below overrides it.
+     * Written this way round so an UNSET or unrecognised data-pane shows
+     * the navigation rather than a blank screen - an unknown state must
+     * land somewhere a person can act from, not on nothing. */
+    #archive-screen .archive-screen__pane--list,
+    #archive-screen .archive-screen__pane--reader {
+        display: none;
+    }
+
+    #archive-screen[data-pane="list"] .archive-screen__pane--nav,
+    #archive-screen[data-pane="reader"] .archive-screen__pane--nav {
+        display: none;
+    }
+
+    #archive-screen[data-pane="list"] .archive-screen__pane--list {
+        display: flex;
+    }
+
+    #archive-screen[data-pane="reader"] .archive-screen__pane--reader {
+        display: flex;
+    }
+
+    .archive-screen__pane--list {
+        border-right: 0;
+    }
+}
+
+/* =====================================================================
+ * 700px: the reader's own metadata row wraps under the body. The pane
+ * files own the row itself; this only removes the horizontal padding
+ * that stops paying for itself at phone widths.
+ * ===================================================================== */
+
+@media (max-width: 700px) {
+    .archive-screen__crumb,
+    .archive-screen__tools,
+    .archive-screen__bar {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    .archive-screen__search-input {
+        flex: 1 1 100%;
+    }
+}

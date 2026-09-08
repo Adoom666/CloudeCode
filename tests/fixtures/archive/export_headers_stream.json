@@ -1,0 +1,15 @@
+{
+ "content-disposition": "attachment; filename=\"6e4a3f8b-4751-44b5-a100-fcdad830f741.jsonl\"",
+ "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none';",
+ "content-type": "application/x-ndjson",
+ "date": "Mon, 31 Aug 2026 17:49:38 GMT",
+ "referrer-policy": "no-referrer",
+ "server": "uvicorn",
+ "transfer-encoding": "chunked",
+ "x-archive-expected-bytes": "91950363",
+ "x-archive-expected-sha256": "57a488382cae743e009cee83f60bfbae43820c4ff045d7403d7a101f3c2b6d1b",
+ "x-archive-trailer-unavailable": "uvicorn implements no http.response.trailers extension; compare the bytes you received against X-Archive-Expected-Sha256 yourself",
+ "x-archive-transcript-id": "5767",
+ "x-archive-verification": "expected_only",
+ "x-content-type-options": "nosniff"
+}

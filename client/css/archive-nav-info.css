@@ -1,0 +1,250 @@
+/* =====================================================================
+ * THE PROJECT INFO MODAL - the dialog behind each card's info
+ * affordance, holding the machines, the full path and the counts the
+ * 240px rail has no room for.
+ *
+ * Split out of archive-nav-card.css when that file passed this repo's
+ * 500-line cap. The seam is the same one the JS uses: the card is
+ * archive-nav-card.js, the dialog is archive-nav-info.js, and nothing
+ * below styles a card.
+ *
+ * Load AFTER archive-outcomes.css - a project row carrying no machine
+ * list renders a COULD NOT EVALUATE block inside this dialog - and after
+ * styles.css, which owns `.modal-overlay`'s backdrop, centering and
+ * fadeIn.
+ *
+ * TWO THINGS THIS FILE DELIBERATELY OVERRIDES.
+ *
+ *   1. A REAL DIM AND A REAL SHADOW. `--color-bg-overlay` is nearly
+ *      transparent in several themes, so the app's own backdrop alone
+ *      does not separate a dialog from three dense panes behind it.
+ *      Measured: the dialog photographed as a ghost over the archive's
+ *      three-pane layout until both were added.
+ *
+ *   2. THE PATH IS ALLOWED TO WRAP, and that is not a contradiction of
+ *      the rail's no-wrap rule. That rule protects a 240px column with
+ *      77 siblings underneath it; nothing sits under this value, and a
+ *      path you cannot read in full is the reason the dialog exists.
+ * ===================================================================== */
+
+/* The dialog's own backdrop. styles.css gives `.modal-overlay` a
+ * `--color-bg-overlay` wash that several themes make almost invisible;
+ * this adds a theme-independent dim so the dialog is unambiguously
+ * modal rather than a panel floating over live content. */
+.archive-nav-info__overlay {
+    background-color: rgba(0, 0, 0, 0.5);
+    /* `modal-overlay` from styles.css supplies the backdrop, the
+     * centering and the z-index; ModalStack rewrites the z-index per
+     * entry. Only the padding is ours, so a narrow phone does not put
+     * the dialog edge-to-edge. */
+    padding: 16px;
+}
+
+.archive-nav-info {
+    display: flex;
+    flex-direction: column;
+    width: min(560px, 100%);
+    /* vh then dvh, in that order: the raw unit is the fallback for an
+     * engine with no dvh, and the dynamic one is what stops a mobile
+     * browser's collapsing toolbar from clipping the dialog's footer. */
+    max-height: min(80vh, 640px);
+    max-height: min(80dvh, 640px);
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    /* LIFT IT OFF A BUSY BACKGROUND. `--color-bg-overlay` is nearly
+     * transparent in several themes (dracula: rgba(0,0,0,0.05)-class), so
+     * the backdrop alone does not separate a dialog from three dense
+     * panes behind it. The drop shadow does, and it re-declares the inset
+     * accent rail in the same value because `box-shadow` is ONE property
+     * and not a list that accumulates. */
+    box-shadow: inset 3px 0 0 var(--color-accent),
+                0 18px 48px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+}
+
+.archive-nav-info__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.archive-nav-info__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--color-accent);
+    /* Truncates here too: the dialog is wide but a slug is wider. The
+     * full path is a selectable field in the body below. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.archive-nav-info__close {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    color: var(--color-fg);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.archive-nav-info__close:hover,
+.archive-nav-info__close:focus-visible {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    outline: none;
+}
+
+.archive-nav-info__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+}
+
+.archive-nav-info__section + .archive-nav-info__section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.archive-nav-info__section-title {
+    margin: 0 0 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--color-fg-muted);
+}
+
+.archive-nav-info__lede {
+    margin: 0 0 8px;
+    font-size: 0.84rem;
+}
+
+.archive-nav-info__note {
+    margin: 8px 0 0;
+    font-size: 0.76rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-nav-info__field {
+    display: grid;
+    grid-template-columns: 108px 1fr;
+    gap: 4px 10px;
+    margin-bottom: 6px;
+    font-size: 0.82rem;
+}
+
+.archive-nav-info__term {
+    color: var(--color-fg-muted);
+}
+
+/* THE PATH WRAPS HERE, deliberately, and this is not a contradiction of
+ * the rail's no-wrap rule. That rule protects a 272px column with 77
+ * siblings underneath; nothing sits under this value, and a path you
+ * cannot read in full is the reason the dialog exists. It is also
+ * selectable, which a `title` attribute is not. */
+.archive-nav-info__value {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+
+.archive-nav-info__value--unknown {
+    font-family: inherit;
+    color: var(--color-fg-muted);
+    font-style: italic;
+}
+
+.archive-nav-info__machines {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.archive-nav-info__machine-link {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    font: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    padding: 8px 10px;
+    color: var(--color-fg);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+}
+
+/* Only the LINKABLE ones are interactive, and they say so with a cursor,
+ * an accent name and a hover state. A machine with no id renders in the
+ * same box without them, so it is visibly present and visibly not a
+ * control - never silently dropped. */
+.archive-nav-info__machine-link[data-action="filter-host"] {
+    cursor: pointer;
+}
+
+.archive-nav-info__machine-link[data-action="filter-host"]
+    .archive-nav-info__machine-name {
+    color: var(--color-accent);
+    text-decoration: underline;
+}
+
+.archive-nav-info__machine-link[data-action="filter-host"]:hover,
+.archive-nav-info__machine-link[data-action="filter-host"]:focus-visible {
+    border-color: var(--color-accent);
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+.archive-nav-info__machine-link[data-action="none"] {
+    border-style: dashed;
+    color: var(--color-fg-muted);
+}
+
+.archive-nav-info__machine-name {
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-nav-info__machine-count {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+}
+
+/* One thing at a time on a phone: the dialog takes the width it can get
+ * and the field grid stops being two columns, which at 375px would give
+ * the value about 240px for a 60-character path. */
+@media (max-width: 480px) {
+    .archive-nav-info {
+        width: 100%;
+        max-height: 88vh;
+        max-height: 88dvh;
+    }
+    .archive-nav-info__field {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+}

@@ -206,33 +206,37 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
         const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        const rowEl = btnEl.closest('.session-sidebar-row');
+        // THE BUTTON IS NOT ALWAYS INSIDE THE ROW ANY MORE. These controls
+        // now also render inside the row's overflow menu, which is mounted
+        // on document.body (client/js/session-row-menu.js explains why: the
+        // sidebar panel is `transform`ed, so it would become the containing
+        // block for a fixed panel rendered inside it). From there the walk
+        // up to `.session-sidebar-row` finds nothing, and both `data-active`
+        // and `data-session-id` would read as absent - which looks exactly
+        // like "this is not the open tab and has no backend" and would send
+        // an own-tab close down the wrong path. Falling back to the live row
+        // by NAME keeps one handler for both mount points.
+        const rowEl = btnEl.closest('.session-sidebar-row')
+            || document.querySelector(
+                `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
         const isThisTab = !!rowEl && rowEl.dataset.active === '1';
 
-        // RESTART is handled before the own-tab branch and before the
-        // confirm, and both of those are deliberate. It destroys nothing,
-        // so it needs no dialog (SessionRowActions.requiresConfirm), and
-        // it must NOT route through destroySession() even for the tab the
-        // user is looking at - reviving this pane is the opposite of
-        // tearing it down, and the sidebar should stay open around it.
+        // RESTART is handled before the own-tab branch, and that part is
+        // unchanged: it must NOT route through destroySession() even for
+        // the tab the user is looking at - reviving this pane is the
+        // opposite of tearing it down.
+        //
+        // IT NO LONGER FIRES ON ONE CLICK, and that IS the change. It
+        // opens the restart picker instead, which does two things a bare
+        // click could not: it says which rung this session would land on
+        // BEFORE anything is spawned (an empty `pane_start_command`
+        // silently returns a LOGIN SHELL), and it lets the user move the
+        // session onto a different launch wrapper, which previously took
+        // a hand edit of cloude.db. The picker's own restart button is
+        // the confirmation - see client/js/session-restart-picker.js on
+        // why there is no second dialog after it.
         if (action === actions.ACTION_RESTART) {
-            try {
-                const result = await window.API.respawnSession(name);
-                if (!result || result.ok !== true) {
-                    // The server's sentence, verbatim. It is the only
-                    // thing that knows whether the pane could not be read
-                    // or the agent started and exited again.
-                    alert(
-                        `could not restart "${name}": `
-                        + ((result && result.detail) || 'no reason given')
-                    );
-                }
-            } catch (err) {
-                console.error('SessionSidebar: restart failed:', err);
-                alert(`could not restart "${name}": ${err.message || err}`);
-            }
-            ctrl._lastSig = null; // force a repaint even if the poll sig matches
-            await ctrl._fetchAndRender();
+            await runRestart(ctrl, name, rowEl);
             return;
         }
 
@@ -259,9 +263,117 @@ console.log('[SessionSidebarClicks Module] Loading...');
             alert(`Error: failed to ${action} conversation: ${err.message || err}`);
         }
     }
+    /**
+     * Description: the restart flow, end to end - ask, act, go back in.
+     *
+     *   THREE STEPS, AND EACH ONE CAN STOP THE NEXT.
+     *   1. the picker asks the server what a restart would do and shows
+     *      it. Cancelling, or a preview that could not be fetched, ends
+     *      here and spawns nothing. A restart that proceeds without a
+     *      prediction is the exact behaviour that made the shell rung
+     *      dangerous, so there is no fallback path around this.
+     *   2. the restart runs, with the chosen wrapper when one was picked.
+     *      `ok !== true` is reported using the SERVER's sentence, which
+     *      is the only thing that knows whether the pane could not be
+     *      read or the agent started and exited again.
+     *   3. only on `ok` does the user get put back INTO the session. That
+     *      is the half the owner asked for: the old flow left him in the
+     *      list hunting for the row he had just revived.
+     *
+     *   The sidebar is repainted on every path that did not navigate, so
+     *   a failed restart leaves an accurate list rather than a stale one.
+     * Inputs:
+     *   ctrl (object) - the SessionSidebarController.
+     *   name (string) - literal tmux session name.
+     *   rowEl (Element|null) - the row, for its activity status. The
+     *     status is shown to the user, never used to refuse.
+     * Output: Promise<void>.
+     */
+    async function runRestart(ctrl, name, rowEl) {
+        const picker = window.SessionRestartPicker;
+        if (!picker) {
+            // FAIL CLOSED. Without the picker there is no prediction and
+            // no choice, and a silent one-click restart here would be the
+            // old defect wearing the new control's clothes.
+            alert(`could not restart "${name}": the restart picker did not load.`);
+            return;
+        }
+        // The row does not carry its own status; the KEBAB does
+        // (`data-row-status`, set in SessionRowMenu.kebabHtml). Read it
+        // from there rather than adding a second copy of the same fact to
+        // the row, and resolve it by NAME so this works identically
+        // whether the button was clicked on the row or inside the
+        // body-mounted overflow panel.
+        const kebab = document.querySelector(
+            `[data-row-menu="${CSS.escape(name)}"]`);
+        const status = kebab ? kebab.getAttribute('data-row-status') : null;
+        // The name column's TEXT is the display label - the same value
+        // SessionLabel resolved when the row was painted. A dialog that
+        // names the session differently than the row does is the bug the
+        // launchpad's own confirm copy already had to fix.
+        const nameEl = rowEl
+            ? rowEl.querySelector('.session-sidebar-row-name')
+            : null;
+        const label = (nameEl && nameEl.textContent.trim()) || name;
+        const choice = await picker.open(name, label, status);
+        if (!choice) {
+            const why = picker.lastError();
+            if (why) {
+                alert(
+                    `could not work out what restarting "${name}" would do, so `
+                    + `nothing was started: ${why}`
+                );
+            }
+            return;
+        }
+
+        let result = null;
+        try {
+            result = await window.API.respawnSession(
+                name, choice.agentType, choice.confirmRestartLive === true);
+        } catch (err) {
+            console.error('SessionSidebar: restart failed:', err);
+            alert(`could not restart "${name}": ${err.message || err}`);
+            ctrl._lastSig = null;
+            await ctrl._fetchAndRender();
+            return;
+        }
+
+        if (!result || result.ok !== true) {
+            alert(
+                `could not restart "${name}": `
+                + ((result && result.detail) || 'no reason given')
+            );
+            ctrl._lastSig = null;
+            await ctrl._fetchAndRender();
+            return;
+        }
+
+        if (choice.agentType && result.agent_type_persisted === false) {
+            // The restart worked and the choice did NOT stick. Said out
+            // loud, because the next restart will not repeat it and a
+            // user who was not told would reasonably assume it had.
+            alert(
+                `restarted "${name}" with ${choice.agentType}, but the choice `
+                + 'could not be saved, so the next restart will not remember it.'
+            );
+        }
+
+        const back = window.SessionRestartReturn
+            ? await window.SessionRestartReturn.reopen(result)
+            : { status: 'not_reopened', detail: 'the reopen module did not load' };
+        if (back.status === 'reopened') {
+            ctrl._closeAfterSwitch();
+            return;
+        }
+        if (back.detail) alert(back.detail);
+        ctrl._lastSig = null;
+        await ctrl._fetchAndRender();
+    }
+
     window.SessionSidebarClicks = {
         onRowClick, onGroupToggleClick, activateRow,
-        onMarkUnreadClick, onRowActionClick,
+        onMarkUnreadClick, onRowActionClick, runRestart,
     };
     console.log('[SessionSidebarClicks Module] Exported as window.SessionSidebarClicks');
 })();

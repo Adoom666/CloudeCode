@@ -1,0 +1,54 @@
+{
+ "meta": {
+  "body_bytes_note": "body_bytes is a DEPRECATED alias for body_chars and counts UNICODE CODE POINTS, not bytes. Read body_chars.",
+  "body_bytes_units": "unicode_code_points",
+  "body_size_units": "unicode_code_points",
+  "offset_units": "unicode_code_points",
+  "offset_units_utf16_available": true,
+  "paging": {
+   "has_more": null,
+   "limit": 50,
+   "next_cursor": null,
+   "returned": 0
+  },
+  "query": {
+   "case_sensitive": false,
+   "q": "restic"
+  },
+  "scan": {
+   "budget_bytes": 536870912,
+   "budget_transcripts": 2000,
+   "bytes_scanned": null,
+   "elapsed_seconds": null,
+   "resume_cursor": null,
+   "status": "not_run",
+   "transcripts_not_scanned": null,
+   "transcripts_scanned": null
+  },
+  "scope": {
+   "kind": "project",
+   "project_id": 12,
+   "transcripts_in_scope": null
+  },
+  "snippet_gate": {
+   "guarantee": "best_effort",
+   "known_values_indexed": null,
+   "layers": [
+    "body_secret_finding_count",
+    "detectors_over_window",
+    "known_credential_value_hash"
+   ],
+   "limitation": "A credential never detected anywhere in this corpus is not in the known-value index and is invisible to the detectors for the same reason it was never detected. Pass snippets=false for a response that carries no preview text at all.",
+   "withholding_never_suppresses_a_hit": true
+  }
+ },
+ "result": null,
+ "result_status": "cannot_determine",
+ "scope_status": "resolved",
+ "unevaluated": [
+  {
+   "reason": "cursor did not decode as a v1 search cursor: search cursor decoded to bytes that are not UTF-8: 'utf-8' codec can't decode byte 0xa7 in position 1: invalid start byte",
+   "subject": "cursor"
+  }
+ ]
+}

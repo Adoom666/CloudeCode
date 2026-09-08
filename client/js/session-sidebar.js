@@ -121,6 +121,11 @@ class SessionSidebarController {
         });
 
         this._wired = true;
+        // The panel ships CLOSED, and closed here means "slid off screen by
+        // a transform" - which on its own leaves every row still focusable.
+        // Assert the closed panel's non-interactive state once at wire time
+        // so the very first Tab of the page cannot land inside it.
+        this._setInteractive(false);
         if (window.SessionSidebarArrangement) window.SessionSidebarArrangement.load();
         if (window.SessionSidebarPin) window.SessionSidebarPin.init();
         if (window.SessionSidebarDensity) window.SessionSidebarDensity.init();
@@ -202,6 +207,7 @@ class SessionSidebarController {
     open() {
         if (!this.panel) return;
         this.isOpen = true;
+        this._setInteractive(true);
         this.panel.classList.add('session-sidebar-panel--open');
         this.panel.setAttribute('aria-hidden', 'false');
         this.backdrop.hidden = false;
@@ -225,6 +231,10 @@ class SessionSidebarController {
         const persist = !opts || opts.persist !== false;
         this.isOpen = false;
         this.panel.classList.remove('session-sidebar-panel--open');
+        // Order matters: release focus BEFORE the panel is made inert, so
+        // the blur lands on an element that is still a legal focus target.
+        this._releaseFocus();
+        this._setInteractive(false);
         this.panel.setAttribute('aria-hidden', 'true');
         this.backdrop.hidden = true;
         if (this.toggleBtn) this.toggleBtn.setAttribute('aria-expanded', 'false');
@@ -233,6 +243,61 @@ class SessionSidebarController {
         }
         if (window.SessionSidebarPin) window.SessionSidebarPin.apply();
         this._stopPoll();
+    }
+
+    /**
+     * Description: whether this browser honours the `inert` attribute.
+     *   Feature-detected rather than assumed: on a build without it,
+     *   setting `inert` does nothing AND says nothing, so believing in it
+     *   would be a fix that cannot fail. The CSS `visibility` state in
+     *   session-sidebar.css is what closes the hole everywhere; `inert`
+     *   is the belt to that pair of braces.
+     * @type {boolean}
+     */
+    static get SUPPORTS_INERT() {
+        return typeof HTMLElement !== 'undefined'
+            && 'inert' in HTMLElement.prototype;
+    }
+
+    /**
+     * Description: move keyboard focus out of the panel, if it is in
+     *   there. THE BUG THIS EXISTS FOR: the panel closes by sliding off
+     *   screen with a transform, not by being removed or hidden, so the
+     *   row the user just clicked keeps document.activeElement while
+     *   invisible. session-sidebar-reorder.js's row keydown handler then
+     *   goes on preventDefault()ing ArrowUp/Down, Home/End, Enter, Space
+     *   and `p`/`P` - so typing at the terminal goes nowhere, scrolling
+     *   is swallowed, and `p` silently toggles a pin on a session the
+     *   user cannot see. Wheel scrolling still works, which is why it
+     *   reads as "wonky" rather than broken.
+     * Inputs: none.
+     * Output: void.
+     */
+    _releaseFocus() {
+        if (!this.panel) return;
+        const active = document.activeElement;
+        if (!active || !this.panel.contains(active)) return;
+        if (typeof active.blur === 'function') active.blur();
+        // Somewhere sensible, not nowhere. The control that opens the bar
+        // is the standard destination for focus leaving a dismissed
+        // panel; on the switch path App.focusTerminal() hands it on to
+        // the terminal a moment later, which is what the user wants.
+        if (this.toggleBtn && typeof this.toggleBtn.focus === 'function') {
+            this.toggleBtn.focus();
+        }
+    }
+
+    /**
+     * Description: make the panel genuinely reachable, or genuinely not.
+     *   Paired with the CSS visibility state so a closed panel is out of
+     *   the tab order in every browser, not only the ones with `inert`.
+     * Inputs: on (boolean) - true when the panel is open.
+     * Output: void.
+     */
+    _setInteractive(on) {
+        if (!this.panel) return;
+        if (!SessionSidebarController.SUPPORTS_INERT) return;
+        this.panel.inert = !on;
     }
 
     /**

@@ -12,6 +12,24 @@ So the version/health surface re-probes. The probe is one connect plus
 one SELECT against a two-row table, which is cheap enough to run per
 request on a single-user local server.
 
+WHAT THIS PROBE DELIBERATELY DOES NOT DO ANY MORE. It used to run
+``PRAGMA integrity_check`` as well, on every request, inside the
+coroutine. That pragma re-verifies every page of every B-tree, so on a
+4.5 GB cloude.db it cost seconds - and the Electron tray polls
+``GET /api/v1/version`` every 20 seconds, which left the event loop
+blocked for most of every 20-second window on an idle machine, growing
+with the file. A FULL INTEGRITY CHECK IS A MAINTENANCE OPERATION, NOT A
+LIVENESS PROBE. It now runs daily in a worker thread and caches its
+verdict; see ``src/core/db_integrity.py``.
+
+The verdict still reaches this function, and a cached FAILURE still
+degrades the reported status exactly as the live pragma did. What does
+NOT degrade it is a verdict that has never been taken or has gone stale:
+those are not evidence of a fault, they are the absence of evidence, and
+they are published as their own named state in the ``data.integrity``
+block rather than being smuggled into ``data.status`` in either
+direction.
+
 THE PROBE NEVER CREATES THE FILE. ``connect(create=False)`` is not an
 optimisation, it is the entire point: opening with create=True would
 silently manufacture an empty database, which then reports schema
@@ -30,8 +48,8 @@ from src.core.db import (
     connect,
     db_path_for,
     get_schema_version,
-    integrity_check,
 )
+from src.core.db_integrity_status import cached_failure_detail
 from src.core.db_state import (
     CANNOT_DETERMINE,
     STATUS_DEGRADED_DB_UNREADABLE,
@@ -77,6 +95,13 @@ def live_state(startup_state: Optional[DatastoreState], state_dir: Path,
       toward a worse verdict - a live probe can prove the database is
       gone, but it cannot clear a paused trail or a schema-ahead refusal,
       both of which were decided from evidence this probe does not read.
+
+      THE COST IS ONE CONNECT PLUS ONE SMALL SELECT, plus one read of a
+      small JSON file. No pragma walks the database here - see this
+      module's docstring. A cached integrity FAILURE degrades the verdict
+      the same way the old per-request pragma did; a verdict that was
+      never taken or has gone stale does NOT, because absence of evidence
+      is not a fault, and it is published separately.
     Inputs: startup_state (DatastoreState | None) - what
       ensure_db_migrated returned at boot, or None if it never ran.
       state_dir (Path) - the state directory. code_schema_version (int).
@@ -91,16 +116,6 @@ def live_state(startup_state: Optional[DatastoreState], state_dir: Path,
     db_path = db_path_for(state_dir)
     try:
         with closing(connect(db_path, create=False)) as conn:
-            verdict = integrity_check(conn)
-            if verdict != "ok":
-                return _unreachable(
-                    startup_state,
-                    db_path,
-                    f"PRAGMA integrity_check: {verdict}",
-                    "cloude.db failed its integrity check. Nothing it would "
-                    "report can be trusted, so nothing is being reported as "
-                    "healthy.",
-                )
             found = get_schema_version(conn)
     except DatastoreUnreadableError as exc:
         return _unreachable(
@@ -115,6 +130,16 @@ def live_state(startup_state: Optional[DatastoreState], state_dir: Path,
         return _unreachable(
             startup_state, db_path, f"{type(exc).__name__}: {exc}",
             "cloude.db could not be probed.",
+        )
+
+    failure = cached_failure_detail(state_dir)
+    if failure is not None:
+        return _unreachable(
+            startup_state,
+            db_path,
+            f"PRAGMA integrity_check: {failure}",
+            "cloude.db failed its integrity check. Nothing it would report "
+            "can be trusted, so nothing is being reported as healthy.",
         )
 
     if isinstance(startup_state.schema_version, int) or startup_state.healthy:

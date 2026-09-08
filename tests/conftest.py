@@ -49,6 +49,23 @@ os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_test_state
 # write, so this line is not the safety mechanism; it is what keeps the
 # ordinary startup path working instead of merely failing safe.
 os.environ.setdefault("CLOUDE_TEST_MODE", "1")
+
+# feat/message-archive-flag - the message archive is OFF BY DEFAULT for real
+# users (src/core/message_archive_flag.py). The suite predates the switch and
+# several hundred of its assertions exercise the archive's schema, routes and
+# ingest, so it declares the feature ON here rather than each of those files
+# learning about a flag they are not testing.
+#
+# THIS DOES NOT WEAKEN THE DEFAULT-OFF GUARANTEE, and that is worth being
+# explicit about, because a suite-wide "turn it on" is exactly the shape that
+# could hide a flipped default. tests/test_message_archive_flag.py deletes
+# this variable with monkeypatch before every assertion about the default, and
+# asserts the default three separate ways that this line cannot reach: the
+# pydantic field default on MessageArchiveConfig, the DEFAULT_ENABLED constant,
+# and the resolver's answer for a config.json with no message_archive block.
+# tests/test_message_archive_gating.py likewise deletes it and builds its own
+# app instances with the flag off.
+os.environ.setdefault("CLOUDE_MESSAGE_ARCHIVE", "1")
 os.environ.setdefault(
     "CLOUDE_CLAUDE_SETTINGS_PATH",
     os.path.join(
@@ -234,3 +251,46 @@ def real_claude_settings_unchanged() -> Iterator[None]:
             "directory. Find the writer and give it an explicit temp "
             "destination; see src/core/test_write_guard.py."
         )
+
+
+# ---- the could-not-evaluate ledger, printed on EVERY run ---------------
+#
+# WHY THIS HOOK EXISTS. The JSONL shape suite proves byte-for-byte export
+# fidelity against a 15 GB corpus that exists on one machine. In CI, and
+# on anyone else's laptop, those tests skip. A skip renders as a quiet 's'
+# that a green summary swallows, so the run would report success while the
+# single most important guarantee in the archive went entirely unchecked -
+# a test that cannot fail because its data is absent, sitting in a green
+# suite, which is the exact false green this repo's hazard list is about.
+#
+# So the third outcome is PRINTED, unconditionally, at the end of every
+# run: named, in plain words, saying what was not verified and how to
+# verify it. The skip still happens. It just cannot happen silently.
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Print every guarantee this run could not evaluate.
+
+    Description: reads the ledger that ``tests/jsonl_shape_support``
+      fills in whenever a corpus-dependent check has to stand down. Runs
+      under ``-q`` as well as verbose output, so the default invocation
+      tells the truth about what it did and did not check.
+    Inputs: terminalreporter (pytest's reporter), exitstatus (int),
+      config (pytest Config).
+    Output: None - writes to the terminal.
+    Example: pytest_terminal_summary(reporter, 0, config) -> None
+    """
+    try:
+        from tests.jsonl_shape_support import not_evaluated_entries
+    except ImportError:
+        return
+    entries = not_evaluated_entries()
+    if not entries:
+        return
+    terminalreporter.write_sep("=", "COULD NOT EVALUATE", red=True, bold=True)
+    terminalreporter.write_line(
+        f"{len(entries)} guarantee(s) were NOT verified by this run. A pass "
+        "above does not cover them."
+    )
+    for guarantee, reason in entries:
+        terminalreporter.write_line(f"  NOT VERIFIED: {guarantee}")
+        terminalreporter.write_line(f"    because: {reason}")

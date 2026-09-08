@@ -398,15 +398,16 @@ window.__sidebarMeasure = function () {
         }),
         rowBands: rows.map((r) => {
             const owner = r.closest('.session-sidebar-group[data-group]');
-            const chip = r.querySelector('[data-group-pick]');
-            const chipBox = chip ? chip.getBoundingClientRect() : null;
             return {
                 name: r.dataset.name,
                 band: owner ? owner.getAttribute('data-group') : null,
                 pinned: r.getAttribute('data-pinned'),
-                chipText: chip ? chip.textContent.trim() : null,
-                chipWidth: chipBox ? chipBox.width : 0,
-                chipHeight: chipBox ? chipBox.height : 0,
+                // The row's group chip is gone - "no i dont need to see
+                // the group name in the item". Its action lives in the
+                // row's kebab menu now ([data-group-pick] inside
+                // #session-row-menu-panel once the kebab is opened), not
+                // on the row itself, so there is nothing to measure here
+                // any more.
             };
         }),
         density: panel.getAttribute('data-density'),

@@ -19,8 +19,16 @@ title = "cloude-code secret scan"
 [extend]
 useDefault = true
 
-[allowlist]
+# NOTE: this is spelled [[allowlists]] (the array form), not the legacy
+# [allowlist] table. gitleaks 8.30.1 REFUSES to load a config that uses both
+# forms at once ("[allowlist] is deprecated, it cannot be used alongside
+# [[allowlists]]"), and the fixture block further down needs the array form to
+# carry its own condition. condition is OR here, which is the legacy default
+# and preserves this block's original meaning exactly: an allowlisted PATH is
+# skipped, and an allowlisted VALUE is skipped, independently of each other.
+[[allowlists]]
 description = "Non-secrets that the default ruleset flags in this repository"
+condition = "OR"
 
 # Documentation and example files whose whole purpose is to show the SHAPE of
 # a credential. Everything here must contain placeholders only. If a real
@@ -53,4 +61,125 @@ regexes = [
     '''your-?subdomain\.yourdomain\.com''',
     '''(?i)change[-_]?me''',
     '''(?i)replace[-_]?me''',
+]
+
+# ---------------------------------------------------------------------------
+# Synthetic credential fixtures owned by the test suite.
+#
+# WHY THIS BLOCK EXISTS. The suite that proves the secret detectors work needs
+# credential-shaped material to detect. Those fixtures are high-entropy by
+# construction, so the default ruleset flags them and CI fails on the very
+# files that demonstrate the scanner works.
+#
+# SCOPED BY VALUE, NOT BY PATH - AND THAT IS DELIBERATE. An allowlist `paths`
+# entry does NOT mean "only these values in these files". Measured against
+# gitleaks 8.30.1, the version CI pins: a `paths` entry suppresses the ENTIRE
+# FILE, and `condition = "AND"` does not narrow that. A path-scoped rule here
+# would have silently blinded the scanner to a REAL credential pasted into any
+# of these five test files, which is precisely the accident it exists to catch.
+# So these are matched by VALUE only, which is also what the block above says
+# it does for its own placeholders.
+#
+# WHAT THIS COVERS: exactly these nine byte strings, anywhere in the tree.
+# WHAT IT DOES NOT COVER: anything else. Verified by planting a fresh 40-char
+# high-entropy credential inside tests/test_secret_detectors.py, an
+# already-allowlisted file, and confirming gitleaks still reports it.
+#
+# FAIL-CLOSED ON DRIFT, ON PURPOSE. The literals are pinned by value, not by
+# variable name or glob. Change a fixture and CI goes red until someone updates
+# this list, which forces a human to re-confirm the new value is synthetic
+# rather than inheriting a blanket exemption.
+#
+# EVIDENCE these are synthetic, established 2026-08-31 without printing any
+# value: every literal was sha256'd and checked against the live corpus
+# (2,447,028 message bodies at 100% coverage, plus the 739 distinct
+# value_sha256 in message_secret_findings). The two archive fixtures appear
+# ZERO times. The older seven appear only inside the 8-minute window on
+# 2026-08-30 in which an agent invented them, minutes before committing them;
+# that table is detector output over chat transcripts, not a registry of
+# issued credentials. The ghp_ fixture additionally FAILS GitHub's own CRC32
+# checksum, which every issued GitHub token passes.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Synthetic credential fixtures in the secret-scanner test suite"
+
+regexes = [
+    # test_archive_offset_units.py:SECRET
+    '''Q7xLm2Wp9RtVzB4kNc6JhY8dFgA3sEuT''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_archive_search_snippet_gate.py:FIXTURE_CREDENTIAL
+    '''mm5GsDRfCJXY0R6KVA1WOf5Zx1WU8RXuGoWAqOGj''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_message_model_secrets.py:FAKE_API_KEY
+    '''sk9QvR2mXt7ZbL4nHw8KdJ3aYcE6fUgP''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_AWS_ID
+    '''AKIAZ3QN7XW2VLTR6BCF''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_AWS_SECRET
+    '''hV8pQm2LzR4TnXw9CbKdY6JfAe3UgSoP1MiNrEuZ''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_GITHUB, test_secret_scan_files.py:FAKE_GITHUB
+    '''ghp_R7kQ2mVx9TbnLcJ6wZaHy8FdSpU3gEoNrKq1''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_GOOGLE
+    '''AIzaSyD7kQ2mVx9TbnLcJ6wZaHy8FdSpU3gEoNr''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_PEM
+    '''MIIEowIBAAKCAQEAy8Kq3nJd7VtWpZrXbLmQfHgN4TcUeSoA2iRvYxDkB9Fj''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_secret_detectors.py:FAKE_SLACK
+    '''xoxb-2847193056321-2847193056789-Kd7QmZx9TbnLcJ6wZaHy8Fd''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_archive_mask.node.mjs, test_archive_mask_refusal.node.mjs,
+    # test_archive_line_render.node.mjs: SECRET. Same 40-char literal in all
+    # three, deliberately: it is the masking test suite's shared credential
+    # fixture, uppercase A-Z0-9 only "so that no substring of it can occur
+    # by accident in the lowercase filler" around it, per each file's own
+    # comment. Never a real secret; added 2026-08-31.
+    '''AKIA7Q2W9E4R6T8Y0U1I3O5P7A9S1D3F5G7H9J1K''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+    # test_message_block_preview_gate.py:SECRET. A 40-char credential with NO
+    # vendor marker, chosen so that only the contextual high-entropy detector
+    # can see it - a body carrying it without an assignment context scans
+    # clean, which is exactly the case the block-preview gate exists to catch.
+    # EVIDENCE it is synthetic, measured 2026-09-01 without printing it, to the
+    # same standard as the nine above: sha256
+    # 037b7f521fe56d14e6ca9f4e6ad0f87e64805a5b36e03ea4b739dea3e4b9792b appears
+    # 0 times in message_secret_findings (739 distinct detected values), and a
+    # direct substring scan of all 2,447,028 message_bodies returns 0 rows.
+    '''b7f3a91c04de26857fabc0193d5e6472aa81cd90''',  # secret-scan: allow mirrored synthetic fixture, see block comment above
+]
+
+# ---------------------------------------------------------------------------
+# JSONL shape-manifest key-order digests. NOT a credential exemption for a
+# whole file - scoped to one field's line form only.
+#
+# WHAT THIS IS. tests/fixtures/jsonl_shape_manifest.json records, for every
+# distinct top-level key ordering the corpus scanner observed, a short
+# stable token: "key_order_digest": "<16 hex chars>". The default ruleset's
+# generic-api-key rule flags all 1,347 occurrences, because the field name
+# contains "key" and a hex digest is high-entropy by construction.
+#
+# WHY IT IS NOT A SECRET. The digest is sha256(canonical key-order JSON)[:16]
+# - a hash of the plaintext key-name list sitting in the SAME file, under
+# key_orders[].keys. It is derived data, not an issued credential; nothing
+# it hashes is secret to begin with.
+#
+# INDEPENDENTLY RE-VERIFIED 2026-08-31, not taken on the word of whoever
+# added it: recomputed all 447 distinct digests in key_orders[] from their
+# own "keys" list via that exact formula (447/447 match, including the one
+# null-keys row against the code's own documented NUL sentinel), then
+# cross-checked every raw occurrence of the "key_order_digest" field in the
+# file - all 1,347 of them - against that 447-entry set. Zero unexplained
+# values.
+#
+# SCOPED BY VALUE, ON THE LINE FORM, NOT BY PATH. regexTarget = "match"
+# (rather than the default "secret") so the pattern must see the field name
+# and quoting around the hex, not just a bare 16-hex-char string anywhere in
+# the tree. A `paths` exemption for this file was deliberately rejected: it
+# would suppress the ENTIRE 1.5 MB manifest, blinding the scanner to a real
+# credential landing anywhere else in it - the exact accident this file
+# exists to catch. This allowlist only ever silences the one line shape
+# above; every other field in the manifest, including its other
+# digest-shaped values (see key_orders[].digest, signature_id), is still
+# scanned normally. Proven with a positive control recorded in the commit
+# that added this block: a genuinely credential-shaped string planted
+# elsewhere in the same file, under a different key name, was still caught.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Derived key-order digests in the JSONL shape manifest fixture, not credentials"
+regexTarget = "match"
+regexes = [
+    '''key_order_digest": "[0-9a-f]{16}"''',
 ]

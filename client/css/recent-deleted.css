@@ -1,0 +1,37 @@
+/*
+ * recent-deleted.css - the DELETED marker on a RECENT session row.
+ *
+ * A row here is only on screen because the user turned "show deleted" on
+ * in the recent heading, and a deleted row drawn identically to a live
+ * one would make that toggle look like it did nothing. So the row is
+ * dimmed and carries an explicit badge.
+ *
+ * Its own file rather than more of client/css/styles.css, which is past
+ * the 500-line guideline this project holds and is not the default
+ * landing spot for new rules. Shapes and tokens are borrowed from
+ * .recent-session-lifecycle so the two badges on one row read as one
+ * family instead of two designs.
+ *
+ * Loaded from client/index.html, after styles.css, so the opacity rule
+ * lands on top of the base .recent-session-row.
+ */
+
+.recent-session-row--deleted {
+    /* Legible, not hidden. This row is the recovery path for a session
+     * the user deleted by mistake, so it has to be readable enough to
+     * find and click; the dim only says "this one is not in your normal
+     * list". */
+    opacity: 0.72;
+}
+
+.recent-session-deleted {
+    flex: 0 0 auto;
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border: 1px solid var(--color-danger, currentColor);
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--color-danger, inherit);
+    background: transparent;
+}

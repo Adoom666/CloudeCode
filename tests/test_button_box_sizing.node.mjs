@@ -150,7 +150,7 @@ test('.btn-icon pins the round header icon controls to a control-size square', (
     assert.equal(decl(reset[0].body, 'height'), 'var(--control-size)');
 });
 
-test('.btn-icon is applied to exactly the two static buttons that need it', () => {
+test('.btn-icon is applied to exactly the three static buttons that need it', () => {
     // header-menu-toggle is built at runtime by header-menu.js, not
     // present in index.html, so it is not part of this static check.
     assert.match(indexHtml, /id="configEditorBtn"[^>]*class="btn-icon hidden"/,
@@ -165,16 +165,24 @@ test('.btn-icon is applied to exactly the two static buttons that need it', () =
     // Adding the class is what makes it match its siblings again.
     assert.match(indexHtml, /id="launchpad-help-btn"[^>]*class="btn-icon"/,
         '#launchpad-help-btn should carry the btn-icon class');
+    // #archiveBtn JOINED THIS SET when it moved out of the header
+    // overflow and became an inline icon beside #configEditorBtn. It
+    // takes the class for the same reason the help button did: it now
+    // sits in the inline row next to a sibling that carries it, and a
+    // header control that opts into nothing falls through to the
+    // user-agent stylesheet as an unstyled square. Count 2 -> 3.
+    assert.match(indexHtml, /id="archiveBtn"[^>]*class="btn-icon"/,
+        '#archiveBtn should carry the btn-icon class');
     // Nothing ELSE in the static markup should carry it - every other
     // button already owns its full box via its own class. This is still an
-    // exact-set assertion, not a floor: a third one appearing means
+    // exact-set assertion, not a floor: a fourth one appearing means
     // somebody styled a button by borrowing the header treatment instead
     // of giving it its own, and that should be a deliberate edit here.
     const withClass = [...indexHtml.matchAll(/<button[^>]*class="([^"]*)"[^>]*>/g)]
         .filter((m) => m[1].split(/\s+/).includes('btn-icon'));
-    assert.equal(withClass.length, 2,
-        'btn-icon should be on exactly two static <button>s '
-        + '(#configEditorBtn and #launchpad-help-btn)');
+    assert.equal(withClass.length, 3,
+        'btn-icon should be on exactly three static <button>s '
+        + '(#archiveBtn, #configEditorBtn and #launchpad-help-btn)');
 });
 
 test('box-sizing is border-box, which is why the reset eats padding', () => {

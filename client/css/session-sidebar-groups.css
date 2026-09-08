@@ -310,83 +310,16 @@
     word-break: break-word;
 }
 
-/* ---- The group chip on a row, and the "new group" button -------------
+/* ---- The "new group" button -------------------------------------------
  *
- * THE CHIP IS ONE CONTROL DOING TWO JOBS. It names the group a row is
- * filed in - which is the only way a PINNED row can show its filing,
- * since a pinned row is drawn in the pinned band rather than under its
- * group's header - and it is also the button that opens the picker. That
- * makes the non-drag route permanently visible instead of hidden behind
- * a hover, which is what makes it usable on a phone, where hover does
- * not exist.
- *
- * IT PAINTS NO EDGE. scripts/verify_sidebar_row_edges.py asserts that
- * the three pixels in from a row's LEFT edge match the three in from its
- * RIGHT, and it fails on a left bar from any stylesheet. This chip sits
- * inline in the row's main flex line, well inside both edges, with no
- * ::before and no inset box-shadow - so that property is untouched.
+ * The row's own group chip is GONE, this round: "no i dont need to see
+ * the group name in the item. its in the group i can see the group on
+ * the sidebar." Its action half (opening the picker) rides in the row's
+ * kebab menu now - see client/js/session-sidebar-group-actions.js
+ * `rowMenuItemHtml` and client/css/session-row-menu.css, which styles
+ * every folded control including this one. Nothing chip-shaped is left
+ * on the row itself.
  */
-.session-sidebar-row-group {
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 88px;
-    display: inline-flex;
-    align-items: center;
-    margin: 0 2px;
-    padding: 1px 6px;
-    background: var(--color-accent-bg-soft);
-    border: 1px solid var(--color-accent-border);
-    border-radius: var(--radius-pill, 999px);
-    color: var(--color-accent);
-    font-family: inherit;
-    font-size: 0.66em;
-    line-height: 1.5;
-    cursor: pointer;
-    box-sizing: border-box;
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
-}
-
-/* An UNGROUPED row still shows the control, muted, reading "+ group".
- * A control that only appears once you have used it cannot be
- * discovered - and discovery is the entire job of the non-drag route. */
-.session-sidebar-row-group--none {
-    background: transparent;
-    border-color: var(--color-border-subtle);
-    color: var(--color-fg-subtle);
-}
-
-.session-sidebar-row-group__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.session-sidebar-row-group:hover,
-.session-sidebar-row-group:focus-visible {
-    background: var(--color-accent-bg-soft);
-    border-color: var(--color-accent);
-    color: var(--color-accent);
-    outline: none;
-}
-
-.session-sidebar-row-group:focus-visible {
-    outline: 1px solid var(--color-accent-border);
-    outline-offset: 1px;
-}
-
-/* The compact density drops the chip's TEXT but keeps its box, so the
- * row still carries the control and still lines up with its neighbours.
- * Dropping the control entirely at compact would make the non-drag route
- * disappear at exactly the density a small screen defaults to. */
-.session-sidebar-list[data-density="compact"] .session-sidebar-row-group {
-    max-width: 20px;
-    padding: 1px 4px;
-}
-
-.session-sidebar-list[data-density="compact"] .session-sidebar-row-group__label {
-    max-width: 12px;
-}
-
 .session-sidebar-group-add {
     display: inline-flex;
     align-items: center;
@@ -419,9 +352,17 @@
  * A real menu of real buttons, positioned fixed so it escapes the list's
  * own overflow clipping - a menu that opened inside a scrolling list
  * would be cut off by it at exactly the rows nearest the bottom.
+ *
+ * z-index MUST clear .session-sidebar-panel's 1100 (session-sidebar.css)
+ * - this menu is appended to document.body as a sibling of the panel,
+ * not a descendant of it, so a lower z-index here painted the menu
+ * UNDER the sidebar instead of over it. 1200 matches
+ * .session-row-menu (session-row-menu.css), the row-level kebab this
+ * menu is the group-level equivalent of; the two are never open at the
+ * same time (openMenu is a single slot), so sharing a value is safe.
  */
 .session-sidebar-group-menu {
-    z-index: 1000;
+    z-index: 1200;
     min-width: 160px;
     max-width: 240px;
     padding: 4px;
@@ -461,4 +402,20 @@
 .session-sidebar-group-menu__item--current::before {
     content: "\2713\00a0";
     color: var(--color-accent);
+}
+
+/* The header's summary LED and unread badge.
+ *
+ * Sits between the fold button and the group menu, so it is visible while
+ * the section is COLLAPSED - which is the only time it is load-bearing.
+ * `pointer-events: none` because it is a readout, not a control: a click
+ * anywhere along the header row must reach the fold button behind it
+ * rather than dying on the light. Its meaning is in the LED's own title
+ * and aria-label. */
+.session-sidebar-group__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15em;
+    margin: 0 0.35em 0 0.15em;
+    pointer-events: none;
 }

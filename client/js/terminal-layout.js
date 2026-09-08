@@ -131,6 +131,33 @@ console.log('[TerminalLayout Module] Loading...');
         }
 
         retries = 0;
+
+        // A pty_resize is not cheap: tmux answers it with SIGWINCH and
+        // claude answers that with ESC[2J + a full redraw, which on the
+        // alternate screen erases the whole visible conversation. So an
+        // UNANNOUNCED change that settled back to the geometry the pane
+        // already has is dropped here rather than costing the user their
+        // screen. Announced changes (window resize, rotation, sidebar
+        // pin, the handshake) are never suppressed.
+        const settle = window.TerminalResizeSettle;
+        if (settle && settle.decideResize({
+            source: reason,
+            cols: controller.term.cols,
+            rows: controller.term.rows,
+            lastCols: controller.lastSentCols,
+            lastRows: controller.lastSentRows,
+        }) === 'skip_transient') {
+            console.log(
+                `[TERM-RESIZE] transient ignored ${controller.term.cols}x`
+                + `${controller.term.rows} source=${reason} `
+                + `${window.TerminalMetrics && window.TerminalMetrics.describeCellMetrics
+                    ? ' ' + window.TerminalMetrics.describeCellMetrics(controller) : ''} `
+                + `shown=${settle.describeCulprit(
+                    document.getElementById('terminal')
+                    && document.getElementById('terminal').parentElement)}`);
+            return;
+        }
+
         // sendResize is the ONLY path to tmux. A client-side fit that is
         // not followed by this leaves xterm and the pty disagreeing about
         // the grid, which is what "tmux does not resize" looks like.
@@ -175,7 +202,15 @@ console.log('[TerminalLayout Module] Loading...');
             return;
         }
         if (timer) clearTimeout(timer);
-        timer = setTimeout(() => flush(reason), DEBOUNCE_MS);
+        // An unannounced (observer) change is measured LATE on purpose:
+        // a show/hide flap that resolves inside the settle window is then
+        // never sampled mid-flap, and the one measurement taken is the
+        // settled geometry. See terminal-resize-settle.js.
+        const settle = window.TerminalResizeSettle;
+        const waitMs = settle
+            ? settle.settleMsFor(reason, DEBOUNCE_MS)
+            : DEBOUNCE_MS;
+        timer = setTimeout(() => flush(reason), waitMs);
     }
 
     /**
@@ -287,6 +322,51 @@ console.log('[TerminalLayout Module] Loading...');
             } catch (err) {
                 console.warn('TerminalLayout: ResizeObserver setup failed', err);
             }
+        }
+        // Diagnostic only, and deliberately last: it must never be able to
+        // stop the real listeners above from being wired.
+        try {
+            watchBottomBar();
+        } catch (err) {
+            console.warn('TerminalLayout: bottom-bar watch failed', err);
+        }
+    }
+
+    /**
+     * Report, once per change, when the bottom bar's height moves.
+     *
+     * PURELY DIAGNOSTIC - it never fits and never resizes. `.info` is the
+     * last in-flow sibling of `.terminal-container`, so every pixel it
+     * takes comes out of the terminal, and its contents (the session id,
+     * the status label, the status dot App._placeStatusLight re-parents
+     * into it) all arrive after connect. Its height is reserved in CSS
+     * now; this is what proves the reservation is holding rather than
+     * assuming it. A silent bar and a bar that never moved look identical
+     * without it, which is the whole reason the last two rounds each cost
+     * a deploy.
+     *
+     * @returns {void}
+     */
+    function watchBottomBar() {
+        if (typeof ResizeObserver === 'undefined' || typeof document === 'undefined') return;
+        if (typeof document.querySelector !== 'function') return;
+        const bar = document.querySelector('.info');
+        if (!bar || typeof bar.offsetHeight !== 'number') return;
+        let last = null;
+        try {
+            new ResizeObserver(() => {
+                const h = bar.offsetHeight;
+                if (h === last) return;
+                const was = last;
+                last = h;
+                if (was === null) return;
+                console.warn(
+                    `[TERM-BAR] .info height ${was} -> ${h} `
+                    + `(this steals rows from the terminal; its height is `
+                    + `meant to be reserved in styles.css)`);
+            }).observe(bar);
+        } catch (err) {
+            console.warn('TerminalLayout: bottom-bar watch failed', err);
         }
     }
 

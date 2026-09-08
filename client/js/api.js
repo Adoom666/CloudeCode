@@ -32,6 +32,26 @@ class API {
         // the Promise IS the primitive - storing it atomically captures
         // both the "in flight" and "eventual result" states.
         this._refreshPromise = null;
+
+        // Archive read deadlines, milliseconds, by request class. Every
+        // archive request carries one: a loading state with no terminal
+        // condition can never fail, and a spinner that spins forever is
+        // indistinguishable from a healthy slow answer.
+        //
+        // Each number is a measured server timing with headroom, not a
+        // round guess. Hierarchy reads are indexed and measured
+        // sub-millisecond. A full 30,805-row spine measured 0.132 s
+        // server-side. A single body in this corpus measured 54,376,879
+        // bytes, a legitimately slow transfer. A budget-exhausted search
+        // measured 1.70 s and 2.25 s on two runs; 45 s allows for a cold
+        // page cache on a loaded host. Export preflight reads headers only.
+        this.ARCHIVE_TIMEOUTS = {
+            hierarchy: 10000,
+            transcript: 15000,
+            body: 30000,
+            search: 45000,
+            exportPreflight: 20000
+        };
     }
 
     /**
@@ -358,8 +378,47 @@ class API {
      * Projects: Get project list
      * @returns {Promise<Array>}
      */
-    async getProjects() {
-        return await this.call('/projects');
+    async getProjects(includeArchived = false) {
+        return await this.call(
+            includeArchived ? '/projects?include_archived=true' : '/projects'
+        );
+    }
+
+    /**
+     * Projects: ARCHIVE a project - retire it from the default list
+     * without deleting it and WITHOUT touching any of its sessions.
+     *
+     * Distinct from the server's `DELETE /projects/{name}` route, which
+     * removes the row for good and writes a tombstone - the client no
+     * longer calls it (owner's instruction, 2026-09-08: "sessions and
+     * projects can be archived not deleted"). This one is reversible
+     * with unarchiveProject().
+     * Idempotent server-side: archiving an already-archived project is a
+     * 200 carrying the ORIGINAL archived_at, not a 409.
+     *
+     * @param {string} name - project display name
+     * @returns {Promise<object>} the project post-mutation, with
+     *   ``archived_at`` set - read the state off the row, never assume it
+     */
+    async archiveProject(name) {
+        return await this.call(
+            `/projects/${encodeURIComponent(name)}/archive`,
+            { method: 'POST' }
+        );
+    }
+
+    /**
+     * Projects: UNARCHIVE a project - put it back in the default list.
+     *
+     * @param {string} name - project display name
+     * @returns {Promise<object>} the project post-mutation, with
+     *   ``archived_at`` null
+     */
+    async unarchiveProject(name) {
+        return await this.call(
+            `/projects/${encodeURIComponent(name)}/unarchive`,
+            { method: 'POST' }
+        );
     }
 
     /**
@@ -442,17 +501,6 @@ class API {
         return await this.call('/projects', {
             method: 'POST',
             body: params
-        });
-    }
-
-    /**
-     * Projects: Delete project
-     * @param {string} projectName - Name of the project to delete
-     * @returns {Promise<object>}
-     */
-    async deleteProject(projectName) {
-        return await this.call(`/projects/${encodeURIComponent(projectName)}`, {
-            method: 'DELETE'
         });
     }
 
@@ -912,7 +960,47 @@ class API {
      *   detail: string, command: (string|null)}>}
      * @throws on 400 (name tmux would misread as a target), 500.
      */
-    async respawnSession(sessionName) {
+    async restartPreview(sessionName) {
+        /**
+         * Sessions: ask what a restart WOULD do, without doing it.
+         *
+         * GET /api/v1/sessions/restart/preview. READ ONLY - it probes the
+         * pane and runs the respawn ladder, and spawns nothing. This is
+         * the only way to learn which rung a session lands on before
+         * committing, and it exists because the shell rung is silent:
+         * a pane with an empty `#{pane_start_command}` comes back as a
+         * LOGIN SHELL, not as the agent.
+         *
+         * Read `wrappers_status` before reading `options`. 'unavailable'
+         * means the wrapper list could not be read; rendering that as
+         * "no wrappers configured" states something nobody measured.
+         *
+         * @param {string} sessionName - literal tmux session name.
+         * @returns {Promise<{name: string, current_agent_type: ?string,
+         *   unchanged: {kind: string, detail: string, actionable: boolean},
+         *   options: Array<object>, wrappers_status: string}>}
+         */
+        const qs = encodeURIComponent(sessionName);
+        return await this.call(`/sessions/restart/preview?session_name=${qs}`);
+    }
+
+    /**
+     * Sessions: restart one in place.
+     *
+     * POST /api/v1/sessions/respawn. `confirmRestartLive` is the ONLY
+     * way to restart a session whose pane is still ALIVE: it kills the
+     * pane's process and starts a new one in the same pane, keeping the
+     * tmux name, the row and therefore attribution, theme, unread state,
+     * group filing and position. DESTRUCTIVE, so it is never inferred -
+     * pass it only after the user has explicitly confirmed. Omitted, a
+     * live session answers `kind: 'not_dead'` and nothing is destroyed.
+     *
+     * @param {string} sessionName - literal tmux session name.
+     * @param {?string} agentType - configured wrapper id, or null.
+     * @param {boolean} [confirmRestartLive] - replace what is running.
+     * @returns {Promise<object>} the RespawnSessionResponse body.
+     */
+    async respawnSession(sessionName, agentType, confirmRestartLive) {
         // A PLAIN OBJECT, not JSON.stringify. `call()` sets
         // `Content-Type: application/json` only when `body` is an object,
         // and stringifies it itself. Handing it a pre-stringified string
@@ -920,9 +1008,22 @@ class API {
         // parse the body and the request comes back 400 - which reads as
         // "the server rejected this session name" and is nothing of the
         // kind. Every other POST here passes an object; match them.
+        // `agent_type` is an ID, never a command. The server checks it
+        // against the wrappers this machine actually has configured and
+        // returns 400 for one it does not know, rather than quietly
+        // launching the default wrapper under the name the user picked.
+        // Omitted entirely when absent, so the request is byte-identical
+        // to the old one when nobody picked anything.
+        const body = { session_name: sessionName };
+        if (agentType) body.agent_type = agentType;
+        // Sent only when TRUE, so a request that does not mean to kill
+        // anything is byte-identical to the one this method has always
+        // made. A falsy value is not a weaker yes; it is the absence of
+        // a request, and the server's default is the refusal.
+        if (confirmRestartLive === true) body.confirm_restart_live = true;
         return await this.call('/sessions/respawn', {
             method: 'POST',
-            body: { session_name: sessionName },
+            body,
         });
     }
 
@@ -1045,8 +1146,12 @@ class API {
      * @returns {Promise<{state: string, sessions: Array<object>,
      *   notice: string|null}>}
      */
-    async listRecentSessions() {
-        return await this.call('/sessions/recent');
+    async listRecentSessions(includeArchived = false) {
+        return await this.call(
+            includeArchived
+                ? '/sessions/recent?include_archived=true'
+                : '/sessions/recent'
+        );
     }
 
     /**
@@ -1135,10 +1240,55 @@ class API {
         );
     }
 
+    /**
+     * Sessions: RESTART a stopped session, carrying its stored identity.
+     *
+     * The uuid is the whole request. The server reads the stored row and
+     * is the only thing that CAN decide whether there is a Claude
+     * conversation to resume - ``SessionRecord`` on the wire deliberately
+     * carries no ``claude_session_uuid``, so a client that tried to
+     * decide this itself would be asserting something it never measured.
+     *
+     * @param {string} sessionUuid - the stopped row's durable identity
+     *   (``data-uuid`` on the restart control), NOT the tmux name: tmux
+     *   names are reusable and a live session may have taken it since.
+     * @returns {Promise<{success: boolean, session: object,
+     *   conversation: string, replaced_session_id: ?number,
+     *   row_reused: boolean, title_carried: ?string,
+     *   detail: ?string}>} - ``conversation`` is 'resumed' |
+     *   'none_recorded' | 'unknown' and those are three different things.
+     *   ``row_reused`` says whether the session kept its OWN record - the
+     *   normal outcome, and what stops a restart leaving a duplicate
+     *   behind. False means it works but may show as a second entry.
+     */
+    async restartSession(sessionUuid) {
+        return await this.call(
+            `/sessions/${encodeURIComponent(sessionUuid)}/restart`,
+            { method: 'POST' }
+        );
+    }
+
     async deleteSessionRecord(sessionUuid) {
         return await this.call(
             `/sessions/records/${encodeURIComponent(sessionUuid)}`,
             { method: 'DELETE' }
+        );
+    }
+
+    /**
+     * Sessions: UNARCHIVE a session record - the reverse of
+     * deleteSessionRecord(). Restarting an archived row already clears
+     * archived_at as a side effect, which is why no launchpad control
+     * calls this yet; it exists for parity with unarchiveProject() and
+     * so a restore does not require a live tmux to restart into.
+     *
+     * @param {string} sessionUuid - the archived row's session_uuid.
+     * @returns {Promise<object>} - {message}
+     */
+    async unarchiveSessionRecord(sessionUuid) {
+        return await this.call(
+            `/sessions/records/${encodeURIComponent(sessionUuid)}/unarchive`,
+            { method: 'POST' }
         );
     }
 

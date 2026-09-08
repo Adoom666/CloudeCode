@@ -15,7 +15,7 @@ import pyotp
 import qrcode
 import structlog
 from cachetools import TTLCache
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from slowapi import Limiter
@@ -710,7 +710,20 @@ async def get_totp_qr():
 
 
 @router.get("/projects", response_model=list[ProjectResponse], dependencies=[Depends(require_auth)])
-async def get_projects():
+async def get_projects(
+    include_archived: bool = Query(
+        False,
+        description=(
+            "Include ARCHIVED projects alongside the live ones. Defaults "
+            "false, so a client that predates archiving sees exactly the "
+            "list it saw before. Archived rows are not a separate list "
+            "and there is no separate endpoint for them: they arrive "
+            "mixed in, each carrying its own archived_at, so the client "
+            "distinguishes them per row rather than by remembering which "
+            "request it made."
+        ),
+    ),
+):
     """
     Get the project list from the AUTHORITATIVE source.
 
@@ -744,7 +757,9 @@ async def get_projects():
     Returns:
         list[ProjectResponse] - never raises for a datastore fault.
     """
-    view = projects_service.current_view(settings)
+    view = projects_service.current_view(
+        settings, include_archived=include_archived
+    )
 
     if view.degraded:
         logger.warning(
@@ -958,6 +973,149 @@ async def update_project(project_name: str, body: UpdateProjectRequest):
         description=row["description"],
         root=row["root"],
     )
+
+
+def _project_archive_response(row: dict) -> ProjectResponse:
+    """Render a post-archive/unarchive project row for the wire.
+
+    Description: carries ``archived_at`` so the caller reads the
+      RESULTING STATE off the row rather than assuming the state it
+      asked for. An endpoint that returned 200 and nothing else would
+      make "archived just now" and "was already archived" identical to
+      the client, which is the collapse this codebase spends its whole
+      project surface avoiding.
+    Inputs: row (dict) - a ``projects`` table row, post-mutation.
+    Output: ProjectResponse.
+    Example: _project_archive_response(row).archived_at
+    """
+    return ProjectResponse(
+        id=row["id"],
+        name=row["display_name"],
+        path=row["raw_path"],
+        description=row["description"],
+        root=row["root"],
+        archived_at=row["archived_at"],
+    )
+
+
+@router.post(
+    "/projects/{project_name}/archive",
+    response_model=ProjectResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def archive_project_route(project_name: str):
+    """Retire a project from the default list, keeping it and its work.
+
+    THIS IS NOT DELETE. ``DELETE /projects/{name}`` removes the row and
+    writes a tombstone so the reconcile cannot re-import it. This sets
+    ``archived_at`` and nothing else: the project stays in the database,
+    stays addressable by this exact name (``resolve_by_name`` does not
+    filter on archived state, deliberately, or an archived project would
+    be unreachable by the endpoint that restores it), and comes back with
+    one call to ``/unarchive``.
+
+    IT DOES NOT TOUCH THE PROJECT'S SESSIONS. A session carries its own
+    ``archived_at``, written only by the session delete path, and this
+    writes none of them. A dormant project with a live session stays
+    fully usable and that session keeps appearing in RUNNING and RECENT.
+    See ``src/core/project_archive.py`` for why cascading was rejected.
+
+    IDEMPOTENT. Archiving an already-archived project is a 200, not a
+    409 - the user asked for a state and that state holds. The response's
+    ``archived_at`` is the original stamp, because the first stamp wins;
+    the log line says which of the two happened.
+
+    Args:
+        project_name: Display name of the project to archive.
+
+    Returns:
+        The project post-mutation, carrying ``archived_at``.
+
+    Raises:
+        HTTPException 404: no project carries that display name.
+        HTTPException 409: more than one does.
+        HTTPException 503: cloude.db is unreachable, so the change is
+            refused rather than applied to a second store (there is none).
+    """
+    from contextlib import closing
+
+    from src.core.project_archive import archive_project as db_archive_project
+
+    projects_service.guard_writable(settings)
+
+    with closing(projects_service.open_db_or_503(settings)) as conn:
+        target = projects_service.resolve_target(conn, project_name)
+        changed = db_archive_project(conn, target["id"])
+        row = dict(
+            conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (target["id"],)
+            ).fetchone()
+        )
+
+    logger.info(
+        "project_archive_requested",
+        name=project_name,
+        root=row["root"],
+        changed=changed,
+        archived_at=row["archived_at"],
+    )
+
+    return _project_archive_response(row)
+
+
+@router.post(
+    "/projects/{project_name}/unarchive",
+    response_model=ProjectResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def unarchive_project_route(project_name: str):
+    """Bring an archived project back into the default list.
+
+    The reverse of ``/archive``, and it exists because an archive without
+    one is a delete wearing a softer word. Clears ``archived_at``; writes
+    nothing else, and unarchives no sessions, because archiving archived
+    none.
+
+    IDEMPOTENT in the same shape: unarchiving a live project is a 200
+    whose ``archived_at`` is null, which is the state the caller asked
+    for.
+
+    Args:
+        project_name: Display name of the project to restore.
+
+    Returns:
+        The project post-mutation, with ``archived_at`` null.
+
+    Raises:
+        HTTPException 404: no project carries that display name.
+        HTTPException 409: more than one does.
+        HTTPException 503: cloude.db is unreachable.
+    """
+    from contextlib import closing
+
+    from src.core.project_archive import (
+        unarchive_project as db_unarchive_project,
+    )
+
+    projects_service.guard_writable(settings)
+
+    with closing(projects_service.open_db_or_503(settings)) as conn:
+        target = projects_service.resolve_target(conn, project_name)
+        changed = db_unarchive_project(conn, target["id"])
+        row = dict(
+            conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (target["id"],)
+            ).fetchone()
+        )
+
+    logger.info(
+        "project_unarchive_requested",
+        name=project_name,
+        root=row["root"],
+        changed=changed,
+    )
+
+    return _project_archive_response(row)
 
 
 @router.post(

@@ -100,13 +100,23 @@ console.log('[SessionSidebarGroups Module] Loading...');
      *   the fold is operable by keyboard and reachable by tab, and it
      *   carries `aria-expanded` plus `aria-controls` pointing at the body
      *   it opens.
+     *
+     *   THE HEADER CARRIES A SUMMARY LED, which is the only thing that
+     *   answers "is there anything in here I need to deal with" while the
+     *   section is FOLDED. It is a fold over the section's own rows via
+     *   SessionStatusSummary, so it cannot disagree with the lights
+     *   underneath it - both resolve through the same mapping rather than
+     *   through two copies of the rules. The unread count rides along as
+     *   a badge, and is omitted entirely at zero.
      * Inputs: key (string) - one of KEYS. count (number) - rows in the
      *   section, shown so a folded section still says how much it hides.
-     *   collapsed (boolean).
+     *   collapsed (boolean). rows (Array<object>|undefined) - the
+     *   section's rows, for the summary LED. Optional: a caller that
+     *   passes nothing gets a header with no LED rather than a broken one.
      * Output: string - HTML.
-     * Example: headerHtml('pinned', 2, false)
+     * Example: headerHtml('pinned', 2, false, rows)
      */
-    function headerHtml(key, count, collapsed) {
+    function headerHtml(key, count, collapsed, rows) {
         const esc = window.SessionSidebarRows.esc;
         const label = labelFor(key);
         const bodyId = `session-sidebar-group-body-${esc(key)}`;
@@ -122,10 +132,18 @@ console.log('[SessionSidebarGroups Module] Loading...');
         const menu = uuid
             ? (`<button type="button" class="session-sidebar-group__menu" `
                 + `data-group-menu="${esc(uuid)}" `
-                + `title="${esc(`Rename, reorder or delete the ${label} group`)}" `
-                + `aria-label="${esc(`Rename, reorder or delete the ${label} group`)}" `
+                + `title="${esc(`Rename, reorder or remove the ${label} group`)}" `
+                + `aria-label="${esc(`Rename, reorder or remove the ${label} group`)}" `
                 + `aria-haspopup="menu">`
                 + '<span aria-hidden="true">&#8943;</span></button>')
+            : '';
+        // Absent only if the module failed to load; the header still
+        // renders, just without the roll-up. A missing summary is better
+        // than a missing header.
+        const summary = (rows && window.SessionStatusSummary)
+            ? (`<span class="session-sidebar-group__summary">`
+                + window.SessionStatusSummary.summaryHtml(rows)
+                + '</span>')
             : '';
         return (
             '<div class="session-sidebar-group__headerrow">'
@@ -138,6 +156,7 @@ console.log('[SessionSidebarGroups Module] Loading...');
             + `<span class="session-sidebar-group__label">${esc(label)}</span>`
             + `<span class="session-sidebar-group__count">${count}</span>`
             + '</button>'
+            + summary
             + menu
             + '</div>'
         );
@@ -199,7 +218,7 @@ console.log('[SessionSidebarGroups Module] Loading...');
         return (
             `<div class="session-sidebar-group" role="group" data-group="${esc(key)}" `
             + `data-collapsed="${collapsed ? '1' : '0'}" data-count="${rows.length}">`
-            + headerHtml(key, rows.length, collapsed)
+            + headerHtml(key, rows.length, collapsed, rows)
             + `<div class="session-sidebar-group__body" id="${bodyId}">${body}</div>`
             + '</div>'
         );

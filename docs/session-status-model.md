@@ -76,7 +76,8 @@ flowchart TD
 
     R -->|"tmux_status == STATUS_DEAD"| dead
     R -->|"no signal, or hook_seen False"| FB["map_tmux_fallback<br/>(chart 3)"]
-    R -->|"hook_seen, question_open"| question
+    R -->|"hook_seen, permission_open"| question
+    R -->|"hook_seen, notice_open"| notice
     R -->|"hook_seen, heartbeat fresh, subagent_depth > 0"| wsub
     R -->|"hook_seen, heartbeat fresh, depth 0"| working
     R -->|"heartbeat stale, unread"| fin
@@ -85,6 +86,7 @@ flowchart TD
 
     dead["dead"]
     question["question"]
+    notice["notice"]
     wsub["working_subagent"]
     working["working"]
     fin["finished_unread"]
@@ -95,9 +97,15 @@ flowchart TD
 "Heartbeat fresh" is `now - last_tool_event_ts <=
 WORKING_HEARTBEAT_TIMEOUT_SECONDS` (120s, `session_activity.py:100`).
 
-These seven are `ALL_ACTIVITY_STATUSES` (`session_status.py:103`).
-`ACTIVITY_STATUS_PRIORITY` (`session_status.py:120`) lists the same seven in
-urgency order and is documented as consulted by no resolver in this codebase.
+These eight are `ALL_ACTIVITY_STATUSES`. `ACTIVITY_STATUS_PRIORITY` lists the
+same eight in urgency order and is documented as consulted by no resolver in
+this codebase.
+
+`question` and `notice` were ONE state until 2026-09-08. `question` is now a
+`PermissionRequest` alone - the agent is STOPPED until a human answers a
+yes/no - and `notice` is a `Notification` - claude wants attention and is not
+blocked. `permission_open` is read before `notice_open`, so a session holding
+both resolves to `question`. See `docs/session-status.md`.
 
 **`running` is in `ALL_STATUSES` and NOT in `ALL_ACTIVITY_STATUSES`.** That is
 deliberate and documented at `session_status.py:98-102`: a raw tmux `running`
@@ -110,13 +118,14 @@ event constants `session_activity.py:60-67`, membership `KNOWN_EVENTS:73`.
 
 ```mermaid
 flowchart LR
-    N["Notification /<br/>PermissionRequest"] -->|"question_open = True"| S(("signal"))
-    U["UserPromptSubmit"] -->|"question_open = False"| S
-    PRE["PreToolUse"] -->|"question_open = False<br/>last_tool_event_ts = now"| S
+    P["PermissionRequest"] -->|"permission_open = True"| S(("signal"))
+    N["Notification"] -->|"notice_open = True"| S
+    U["UserPromptSubmit"] -->|"permission_open = False<br/>notice_open = False"| S
+    PRE["PreToolUse"] -->|"permission_open = False<br/>notice_open = False<br/>last_tool_event_ts = now"| S
     POST["PostToolUse"] -->|"last_tool_event_ts = now"| S
     SS["SubagentStart"] -->|"depth += 1, ts = now"| S
     SE["SubagentStop"] -->|"depth = max(0, depth-1), ts = now"| S
-    ST["Stop"] -->|"question False, depth 0,<br/>ts = None, last_stop_ts = now"| S
+    ST["Stop"] -->|"permission False, notice False,<br/>depth 0, ts = None, last_stop_ts = now"| S
     X["any unknown kind"] -->|"ignored, no-op"| S
 ```
 
@@ -135,14 +144,14 @@ has never fired a hook.
 ```mermaid
 flowchart LR
     d["tmux dead"] --> D["dead"]
-    r["tmux running"] --> W["working"]
+    r["tmux running"] --> U2["unknown"]
     i1["tmux idle + unread"] --> F["finished_unread"]
     i2["tmux idle, not unread"] --> I["idle"]
     u["tmux unknown"] --> U["unknown"]
 ```
 
-This function never fabricates `question` or `working_subagent` - there is no
-signal to base them on (`session_activity.py:110-113`).
+This function never fabricates `question`, `notice` or `working_subagent` -
+there is no signal to base them on.
 
 ---
 
@@ -210,11 +219,22 @@ flowchart TD
     O["observed<br/>seen on our socket, never claimed<br/>the ONLY value that badges EXTERNAL"]
     C["created<br/>the app ran tmux new-session<br/>in SESSION_OWNED_ORIGINS"]
     A["adopted<br/>the user claimed a session the app did not start<br/>in SESSION_OWNED_ORIGINS"]
+    I["imported<br/>rebuilt from a transcript by scripts/import_transcript_sessions.py<br/>NO tmux session ever existed - not in SESSION_OWNED_ORIGINS"]
     O -->|"claim_instance, session_identity.py:545<br/>origin='adopted', adopted_at=COALESCE, written ONCE"| A
     C -->|"no transition - a created session is never re-badged"| C
+    I -->|"no transition - a restart CREATES a session onto this row<br/>(reuse_session_id) and never re-badges it"| I
 ```
 
 `observed` is the only value that renders as external (`db_models.py:144`).
+
+`imported` is a FOURTH kind, not a flavour of `observed`. `observed` means a
+live pane was seen on our socket and not claimed - a measurement of a process.
+An imported row has no pane, no socket presence and no epoch, and never had
+one; it carries a `claude_session_uuid` and nothing else that could identify a
+process. It is deliberately absent from `SESSION_OWNED_ORIGINS`, which
+`session_store.owned_names`/`owned_instances` read to answer "which tmux
+sessions on this socket are ours" - there is no tmux session to own. Restarting
+one goes through `src/core/session_imported_restart.py`, not the pane path.
 `claim_instance` refuses a row whose `lifecycle = 'stopped'` (the SQL's
 `AND lifecycle != ?` guard) - you cannot adopt a corpse.
 
@@ -319,20 +339,42 @@ session (`:588`) and on adopt (`:875`). It is the reason `dead` is reachable at
 all: without it the session would simply vanish and the user would only ever
 see `stopped`.
 
-**Respawn's five outcomes** (`src/core/session_respawn.py:78-92`), gated on
+**Respawn's six outcomes** (`src/core/session_respawn.py`), gated on
 `pane_start_command` rather than on `sessions.agent_type` - that column is
 written on every create whether an agent was started or not, so trusting it
 would launch an agent into a console the user believes is his own shell:
 
 ```mermaid
 flowchart TD
-    RP["resolve_respawn_plan(probe, agent_type)"]
+    RP["resolve_respawn_plan(probe, agent_type, chosen_agent_command)"]
     RP -->|"pane is alive"| ND["not_dead<br/>tmux itself refuses respawn-pane without -k,<br/>and this module never passes -k"]
     RP -->|"probe did not answer"| CD["cannot_determine<br/>refuses rather than guessing"]
+    RP -->|"a wrapper was PICKED in this request"| AG
     RP -->|"start command recorded AND agent_type known"| AG["agent<br/>re-derive via Settings.get_agent_command"]
     RP -->|"start command recorded, no agent_type"| RL["replay<br/>no argument, tmux replays its own record"]
+    RL -->|"that record carries --resume and<br/>the transcript is DEFINITELY absent"| TM["transcript_missing<br/>refuse_if_transcript_missing;<br/>'unchecked' never refuses"]
     RP -->|"probe SUCCEEDED and start command empty"| SH["shell<br/>positive evidence of a bare login shell"]
 ```
+
+`transcript_missing` is applied AFTER the ladder, by the caller, once
+`session_transcript_presence` has come back with a definite absence. It exists
+because a replay hands tmux back its own start command and 3 of the 19 live
+sessions on the owner's box carry an explicit `--resume <uuid>` in theirs; a
+resume against a deleted transcript exits at once and leaves a dead pane the row
+still calls running.
+
+**A PICKED WRAPPER OUTRANKS THE GATE.** An `agent_type` supplied in the restart
+request (the picker, `client/js/session-restart-picker.js`) is consulted BEFORE
+`pane_start_command` and reaches `agent` even from an empty one. The gate exists
+because a STORED `agent_type` is not evidence of intent; a wrapper the user just
+picked is. It does not outrank `not_dead` or an unanswered probe.
+
+**The rung can also be PREDICTED without acting.** `project_restart_rung` is the
+same ladder tail reached without the liveness gate, so
+`GET /sessions/restart/preview` can say what a LIVE session would come back AS.
+It never returns `not_dead`, and it is a prediction, never a permission -
+`pane_state_from_probe` (`dead` / `alive` / `unknown`) carries liveness as its
+own fact and is what a button must obey.
 
 `shell` and `cannot_determine` are kept apart on purpose. A respawn matches the
 SAME row and never writes a new one - the tmux `session_created` value is a property of the
@@ -363,6 +405,7 @@ idle | activity | src/core/session_status.py::STATUS_IDLE
 dead | activity | src/core/session_status.py::STATUS_DEAD
 unknown | activity | src/core/session_status.py::STATUS_UNKNOWN
 question | activity | src/core/session_status.py::STATUS_QUESTION
+notice | activity | src/core/session_status.py::STATUS_NOTICE
 working | activity | src/core/session_status.py::STATUS_WORKING
 working_subagent | activity | src/core/session_status.py::STATUS_WORKING_SUBAGENT
 finished_unread | activity | src/core/session_status.py::STATUS_FINISHED_UNREAD
@@ -372,6 +415,7 @@ unknown | lifecycle | src/core/db_models.py::SESSION_LIFECYCLE_UNKNOWN
 created | origin | src/core/db_models.py::SESSION_ORIGIN_CREATED
 adopted | origin | src/core/db_models.py::SESSION_ORIGIN_ADOPTED
 observed | origin | src/core/db_models.py::SESSION_ORIGIN_OBSERVED
+imported | origin | src/core/db_models.py::SESSION_ORIGIN_IMPORTED
 evaluated | reconcile | src/core/session_lifecycle.py::RECONCILE_EVALUATED
 probe_unavailable | reconcile | src/core/session_lifecycle.py::RECONCILE_PROBE_UNAVAILABLE
 listing_incomplete | reconcile | src/core/session_lifecycle.py::RECONCILE_LISTING_INCOMPLETE
@@ -381,6 +425,7 @@ replay | respawn | src/core/session_respawn.py::RESPAWN_REPLAY
 shell | respawn | src/core/session_respawn.py::RESPAWN_SHELL
 not_dead | respawn | src/core/session_respawn.py::RESPAWN_NOT_DEAD
 cannot_determine | respawn | src/core/session_respawn.py::RESPAWN_CANNOT_DETERMINE
+transcript_missing | respawn | src/core/session_respawn.py::RESPAWN_TRANSCRIPT_MISSING
 crashed | tray | macOS/tray-status.js::TRAY_STATES
 attention | tray | macOS/tray-status.js::TRAY_STATES
 unknown | tray | macOS/tray-status.js::TRAY_STATES

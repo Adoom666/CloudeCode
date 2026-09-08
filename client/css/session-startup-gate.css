@@ -1,0 +1,72 @@
+/*
+ * The "needs a keypress" badge - punchlist item 19.
+ *
+ * Drawn by client/js/session-startup-gate.js on a session that is parked
+ * on an unanswered startup prompt (folder trust, login) and has therefore
+ * fired no lifecycle hook. It appears on exactly one row at a time in
+ * practice and only when something is wrong, so it is allowed to be the
+ * loudest thing in the list - which is why it is a filled pill rather
+ * than the outline treatment .badge and .family-pill use.
+ *
+ * NOT COLOR-ALONE. The element carries its own text plus a title and an
+ * aria-label with the full sentence, so the meaning survives a
+ * monochrome display and a screen reader. The colour is reinforcement.
+ *
+ * Loaded after styles.css so --color-* resolve; it defines no variables
+ * of its own and inherits every theme.
+ */
+
+.session-startup-gate {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    /* Lowercase in the markup already; this stops a theme's
+       text-transform from shouting it. */
+    text-transform: none;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    padding: 0.18rem 0.42rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    /* Amber, not red: red in this app means dead (see the status dot),
+       and a session waiting for a keypress is entirely healthy - it just
+       needs a human. Using the dead colour here would make a fixable
+       thing look like a broken one. */
+    color: #1c1207;
+    background: #f0b429;
+    border: 1px solid #c8940f;
+    cursor: default;
+}
+
+/* The sidebar row is tight and its name column already flexes; keep the
+   badge from being squeezed to nothing at compact density. */
+.session-sidebar-row .session-startup-gate {
+    margin-left: 0.3rem;
+    font-size: 0.62rem;
+    padding: 0.14rem 0.36rem;
+}
+
+.running-session-top .session-startup-gate {
+    margin-left: 0.35rem;
+}
+
+/* A prompt nobody has answered is not going anywhere, so this pulses
+   slowly rather than blinking - enough to catch the eye on a phone
+   without turning the list into an alarm. Disabled outright for a user
+   who has asked for less motion. */
+@keyframes session-startup-gate-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.62; }
+}
+
+.session-startup-gate {
+    animation: session-startup-gate-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .session-startup-gate {
+        animation: none;
+    }
+}

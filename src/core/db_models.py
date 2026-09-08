@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 11
+CURRENT_SCHEMA_VERSION: int = 25
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -74,13 +74,24 @@ META_IMPORTED_FROM_JSON_RESULT = "imported_from_json_result"
 # once, at first run, by src/core/project_store.py's import step.
 # 'adoption' is reserved for the client/js/launchpad.js:953-973 side
 # effect (design section 3.2); not written by anything in this step.
+#
+# 'transcript_import' is written by scripts/import_transcript_sessions.py
+# for a directory that a real Claude Code conversation ran in and that no
+# existing project contains. It is NOT 'config_import' (that names the
+# one-shot first-run read of config.json) and NOT 'adoption' (that names
+# the launcher side effect); saying either would be a claim about where
+# the row came from that is simply false, and `source` exists to answer
+# exactly that question. Such a project is created ARCHIVED - see the
+# importer - so it stays off the user's screens until he asks for it.
 PROJECT_SOURCE_CONFIG_IMPORT = "config_import"
 PROJECT_SOURCE_USER = "user"
 PROJECT_SOURCE_ADOPTION = "adoption"
+PROJECT_SOURCE_TRANSCRIPT_IMPORT = "transcript_import"
 PROJECT_SOURCES: Tuple[str, ...] = (
     PROJECT_SOURCE_CONFIG_IMPORT,
     PROJECT_SOURCE_USER,
     PROJECT_SOURCE_ADOPTION,
+    PROJECT_SOURCE_TRANSCRIPT_IMPORT,
 )
 
 # projects.presence - the four-state model, design section 4.1. 'missing'
@@ -142,19 +153,41 @@ TRAIL_CLOSING_STATUSES: Tuple[str, ...] = (
 #             one would be inventing a fact.
 #   observed  a session on our socket we have seen and never claimed.
 #             The ONLY value that renders as external on a row.
+#   imported  NO TMUX SESSION EVER EXISTED FOR THIS ROW as far as this
+#             app is concerned. The row was reconstructed from a Claude
+#             Code transcript on disk by
+#             scripts/import_transcript_sessions.py: a conversation the
+#             owner really had, in a real directory, that this install
+#             never watched. It is a FOURTH kind and not a flavour of
+#             `observed` - observed means we saw a live pane on our
+#             socket and did not claim it, which is a measurement of a
+#             process. An imported row has no pane, no socket presence
+#             and no epoch, and never had one; it carries a
+#             claude_session_uuid and nothing else that could identify a
+#             process. Folding it into `observed` would put a row in the
+#             "sessions on this socket we have not claimed" bucket that
+#             is not on the socket at all.
 SESSION_ORIGIN_CREATED = "created"
 SESSION_ORIGIN_ADOPTED = "adopted"
 SESSION_ORIGIN_OBSERVED = "observed"
+SESSION_ORIGIN_IMPORTED = "imported"
 SESSION_ORIGINS: Tuple[str, ...] = (
     SESSION_ORIGIN_CREATED,
     SESSION_ORIGIN_ADOPTED,
     SESSION_ORIGIN_OBSERVED,
+    SESSION_ORIGIN_IMPORTED,
 )
 
-# The origins that badge as OURS. Both, per 4.6 - an adopted session
-# becomes ours for good. Kept as a tuple so no call site re-spells the
-# membership test and drifts from the others; the badge was already
-# hand-repaired across three sites once.
+# The origins that badge as OURS. Both of the first two, per 4.6 - an
+# adopted session becomes ours for good. Kept as a tuple so no call site
+# re-spells the membership test and drifts from the others; the badge was
+# already hand-repaired across three sites once.
+#
+# `imported` IS DELIBERATELY NOT HERE, and the reason is what this tuple
+# is read for: session_store.owned_names/owned_instances use it to answer
+# "which tmux sessions on this socket are ours", and an imported row has
+# no tmux session to own. Adding it would put a nameless row into a list
+# of names.
 SESSION_OWNED_ORIGINS: Tuple[str, ...] = (
     SESSION_ORIGIN_CREATED,
     SESSION_ORIGIN_ADOPTED,
@@ -221,6 +254,45 @@ SESSION_FAMILY_SOURCE_NOT_LAUNCHED = "not_launched"
 #: COULD NOT DETERMINE. Reserved for a session the app never started, so
 #: it has no launch choice to read. Never write this from a create path.
 SESSION_FAMILY_SOURCE_UNKNOWN = "unknown"
+
+# sessions.claude_session_uuid_source - how the uuid on THIS row was
+# learned, mirroring the agent_family_source pattern above: the fact and
+# its provenance are different questions, and a caller rendering a
+# "restart this conversation" control needs to know which kind of
+# evidence it is trusting.
+#
+# THREE STRENGTHS, NOT TWO. A uuid told to us directly by Claude Code
+# (the SessionStart hook, via src/core/session_lineage.py) is a FACT: the
+# CLI reported its own session id on a structured, versioned payload.
+# Nothing correlated can outrank that.
+#
+# Below the hook, the two correlated sources are NOT equally strong, and
+# collapsing them into one label would hide that. A uuid read from the
+# pane's own process argv (`claude --resume <uuid>`, see
+# src/core/claude_resume_argv.py and
+# src/core/claude_session_correlate_ladder.py) is a DIRECT READ of what
+# the process was actually told to open - the same kind of fact the hook
+# reports, just read from `ps` instead of a hook POST, and materially
+# stronger than any timestamp-based inference: it is what closes the gap
+# for a RESUMED or RECOVERED session, which is the primary case this
+# whole feature exists for (measured against the owner's live fleet
+# 2026-08-29 - a resumed conversation predates the pane hosting it by
+# construction, so no timing rule can ever find it).
+#
+# A uuid resolved by src/core/claude_transcript_correlate.py from
+# filesystem TIMING evidence - working directory plus tmux creation time,
+# matched against ~/.claude/projects/<slug>/*.jsonl, with no argv
+# available - is the weakest of the three: an inference, strong enough to
+# act on only when the candidate set was decisive (see that module), but
+# never as strong as a direct read of either kind above.
+SESSION_CLAUDE_UUID_SOURCE_HOOK = "hook"
+SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV = "correlated_argv"
+SESSION_CLAUDE_UUID_SOURCE_CORRELATED = "correlated"
+SESSION_CLAUDE_UUID_SOURCES: Tuple[str, ...] = (
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV,
+    SESSION_CLAUDE_UUID_SOURCE_CORRELATED,
+)
 
 # The socket every session row defaults to. Stored per row rather than
 # assumed globally because the instance identity triple starts with it.
@@ -352,6 +424,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   model                 TEXT,
 
   claude_session_uuid   TEXT,
+  -- HOW claude_session_uuid WAS LEARNED. 'hook' (Claude Code told us,
+  -- via SessionStart), 'correlated_argv' (read from the pane's own
+  -- process argv - --resume <uuid> - at adopt time, a direct read) or
+  -- 'correlated' (inferred from filesystem transcript timing at adopt
+  -- time when no argv was available - the weakest of the three). NULL
+  -- alongside a NULL uuid means none of the three has ever run for this
+  -- row. See db_models.py's SESSION_CLAUDE_UUID_SOURCE_* block.
+  claude_session_uuid_source TEXT,
   parent_session_id     INTEGER REFERENCES sessions(id),
   fork_kind             TEXT,
 
@@ -389,6 +469,30 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- stale one, and a stale `working` is a lie about right now.
   activity_state        TEXT,
   activity_state_at     TEXT,
+  -- WHEN WORK LAST HAPPENED IN THIS SESSION. Stamped ONLY from a Claude
+  -- Code hook event that represents the conversation doing something
+  -- (see claude_hooks.WORK_EVENTS): a prompt submitted, a tool called, a
+  -- subagent run, a turn stopped, a permission asked for.
+  --
+  -- IT IS NOT AN "OPENED" TIME AND MUST NEVER BECOME ONE. Attaching to a
+  -- session, selecting it in the sidebar, deep-linking to it or
+  -- re-binding it after a server restart all leave this column alone.
+  -- That is the entire reason it exists: the session list is read as a
+  -- TIMELINE of what has been worked on, and a list that reshuffles when
+  -- you merely look at a row destroys the recall it is read for.
+  --
+  -- IT IS NOT `updated_at` AND NOT `activity_state_at`. `updated_at` is
+  -- written by unrelated bookkeeping, including a restart's rebind, so a
+  -- restart would read as work. `activity_state_at` is written by the
+  -- LISTING path too, whenever a settled state changes - including the
+  -- working -> idle expiry, which is a session going quiet, not a
+  -- session working.
+  --
+  -- NULL means NO WORK HAS BEEN RECORDED, which is a third outcome and
+  -- not a zero: such a row sorts BELOW every row that has a value,
+  -- in its own stable order, and is labelled as such in the UI rather
+  -- than blended in at the bottom of the worked rows.
+  last_work_at          TEXT,
 
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
@@ -891,3 +995,594 @@ REVERSAL_DESTROYS: dict = {
         "session_group_members (whole table)",
     ),
 }
+
+
+# ---- schema v11 -> v12: one conversation, one row, ENFORCED -------------
+#
+# THE OWNER'S REQUIREMENT, VERBATIM: "everything should be stored and
+# parented by id... if we do 1 for 1, this should never be an issue." Up
+# to v11 that was a CONVENTION the code hoped for: ix_sessions_claude_uuid
+# (v7, above) is a PLAIN index, so nothing in SQLite stops a second row
+# from claiming a claude_session_uuid another row already holds. The only
+# thing enforcing 1:1 was src/core/session_lineage.py checking
+# row_for_claude_uuid() before every write - correct today, but a
+# convention a future write path can violate by simply forgetting to
+# check, with no error and no test failure until someone notices the
+# data is wrong. This step turns that convention into a constraint the
+# database itself refuses to violate.
+#
+# WHY v7's "NOT UNIQUE, DELIBERATELY" WAS RIGHT THEN AND IS SUPERSEDED
+# HERE. That comment's fear was real: a UNIQUE index would turn a
+# duplicate hook delivery into an IntegrityError out of a telemetry
+# write. It is superseded because record_claude_session's idempotence
+# check (row_for_claude_uuid, inside the SAME transaction as the write)
+# already makes a duplicate delivery a no-op BEFORE any INSERT is
+# attempted - the uuid is never re-offered to the database at all, so
+# the constraint below has nothing to collide with on that path. See
+# tests/test_claude_session_uuid_unique.py for the empirical proof this
+# holds across every reachable lineage transition, not just the argument.
+#
+# FAIL-SOFT, LIKE EVERY STEP IN THIS CHAIN, BUT WITH A TWIST: this step
+# must not raise, because the caller (db_steps.run_chain, driven from
+# src/core/db_migration.py) commits every step from `current` to
+# CURRENT_SCHEMA_VERSION as ONE transaction - an exception here would
+# roll back not just this step but every step before it in the same
+# migration run, and leave the whole app in DEGRADED_MIGRATION_FAILED /
+# read-only. A DUPLICATE FOUND ON A LIVE DATABASE IS NOT A REASON TO DO
+# THAT. src/core/db_steps.py detects duplicates BEFORE issuing the
+# CREATE UNIQUE INDEX, and when it finds any, it leaves
+# ix_sessions_claude_uuid (the v7 plain index) in place, does not attempt
+# to create ux_sessions_claude_uuid at all, and records the exact
+# uuid/row-id groups it found under META_SESSIONS_CLAUDE_UUID_DUPLICATES
+# - a named COULD NOT EVALUATE, per the three-outcome rule, never a
+# silently-picked winner and never a crash.
+DDL_SESSIONS_CLAUDE_UUID_UNIQUE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_claude_uuid "
+    "ON sessions (claude_session_uuid) "
+    "WHERE claude_session_uuid IS NOT NULL"
+)
+
+#: The v7 plain index this step replaces once the UNIQUE index above is
+#: successfully created. Dropped rather than kept alongside, because a
+#: plain index and a unique index over the same column answer the same
+#: query and keeping both would just be a second index to maintain on
+#: every lineage write for no reader that needs it.
+DDL_SESSIONS_CLAUDE_UUID_PLAIN_INDEX_DROP = (
+    "DROP INDEX IF EXISTS ix_sessions_claude_uuid"
+)
+
+#: Present only when this step has RUN at least once; absent means "this
+#: install has never reached v12's duplicate check" (same absent-vs-empty
+#: convention as META_SESSION_IMPORT_UNATTRIBUTED, above). Value is a
+#: JSON list: ``[]`` means the check ran and found nothing, so
+#: ux_sessions_claude_uuid is live and enforcing; a non-empty list is the
+#: COULD-NOT-EVALUATE outcome, one ``{"claude_session_uuid", "row_ids",
+#: "count"}`` entry per uuid the check found on more than one row, and on
+#: that install the v7 plain index is still what is doing the work.
+META_SESSIONS_CLAUDE_UUID_DUPLICATES = "sessions_claude_uuid_duplicates_v12"
+
+
+# ---- schema v13 -> v14: transcript archive, byte-exact fidelity store ----
+#
+# THE OWNER'S REQUIREMENT, VERBATIM: "once we can confirm all my history is
+# preserved, even without the web interface i can consider it 100% backed
+# up... id like the ability to export a conversation from the database and
+# its byte for byte intact for the ingested session". Measured against the
+# real corpus (~/.claude/projects on mac-mini-m4, 1477 files, 111,061 JSONL
+# lines, 2026-08-29): re-serializing a parsed line with json.dumps() came
+# back byte-identical on 0 of 111,061 lines - every single one differs, all
+# from json.dumps's default `", "` / `": "` separators versus the source's
+# unspaced `","` / `":"`. Storing only parsed fields is therefore not an
+# approximation of byte-exact, it is a guarantee that NO line round-trips.
+#
+# THE RESOLUTION: one copy, not two. ``content_gzip`` on
+# ``transcript_archives`` holds the ENTIRE source file's ORIGINAL BYTES,
+# zlib-compressed - export is a decompress, nothing is re-serialized, so
+# CRLF, a missing trailing newline, a trailing blank line and a line that
+# is not valid JSON all survive automatically, because none of them are
+# interpreted to reconstruct the file. ``transcript_records`` holds no
+# second copy of any line's content - only scalar fields DERIVED by
+# parsing at ingest time (type, uuid, parentUuid, timestamp, byte range
+# into the decompressed blob) so the database can be queried and searched
+# without ever re-parsing the blob for a list view. Real-corpus
+# measurement of zlib level 9 against the whole corpus: ratio ~3.3x
+# (303 MB raw -> ~90 MB compressed). See
+# src/core/transcript_archive.py for the ingest/export/verify code and
+# scripts/transcript-archive/corpus_roundtrip_harness.py for the
+# real-corpus proof run.
+#
+# ROOTING. A transcript file is not always attributable the moment it is
+# read - it may name a Claude session uuid this database has never seen,
+# or (for a subagent transcript) a parent this database cannot yet find.
+# ``root_state`` is never a boolean: 'unrooted' (default at ingest,
+# pending human attribution), 'rooted' (attribution recorded - a session
+# transcript points at ``root_session_id``, a subagent transcript points
+# at ``parent_archive_id``), or 'orphaned' (a human looked and found no
+# root - terminal, so it stops appearing in the pending queue, but the
+# row and its bytes are untouched; per this project's own rule, a check
+# that never clears is furniture, and an unrootable item that keeps
+# nagging forever is the same defect). transcript_root_decisions is an
+# APPEND-ONLY audit trail of every attribution decision a human makes -
+# never overwritten, so a later re-root is a new row, not an edit.
+#
+# NOTHING IS GUESSED. No step here, and no function in
+# transcript_archive.py, ever assigns root_session_id or
+# parent_archive_id without an explicit caller-supplied value - there is
+# no heuristic that silently picks a "most likely" parent. That is the
+# owner's stop-case, verbatim: "if a message or session cannot be rooted
+# we stop and i can do an inspection and i can point to where it
+# belongs."
+DDL_TRANSCRIPT_ARCHIVES = """
+CREATE TABLE IF NOT EXISTS transcript_archives (
+  id                         INTEGER PRIMARY KEY,
+  archive_uuid               TEXT NOT NULL UNIQUE,
+  kind                       TEXT NOT NULL
+                              CHECK (kind IN ('session', 'subagent')),
+  source_path                TEXT NOT NULL,
+  content_gzip                BLOB NOT NULL,
+  content_sha256             TEXT NOT NULL,
+  raw_byte_length            INTEGER NOT NULL,
+  compressed_byte_length     INTEGER NOT NULL,
+  line_ending                TEXT NOT NULL
+                              CHECK (line_ending IN
+                                     ('LF', 'CRLF', 'MIXED', 'NONE')),
+  has_trailing_newline       INTEGER NOT NULL
+                              CHECK (has_trailing_newline IN (0, 1)),
+  trailing_blank_line_count  INTEGER NOT NULL DEFAULT 0,
+  record_count               INTEGER NOT NULL DEFAULT 0,
+  invalid_json_line_count    INTEGER NOT NULL DEFAULT 0,
+  claude_session_uuid        TEXT,
+  root_state                 TEXT NOT NULL DEFAULT 'unrooted'
+                              CHECK (root_state IN
+                                     ('unrooted', 'rooted', 'orphaned')),
+  root_session_id            INTEGER
+                              REFERENCES sessions(id),
+  parent_archive_id          INTEGER
+                              REFERENCES transcript_archives(id),
+  ingested_at                TEXT NOT NULL,
+  ingest_source_mtime        TEXT,
+  rooted_at                  TEXT,
+  rooted_by                  TEXT
+)
+"""
+
+#: One row per JSONL line of a transcript, but only DERIVED scalar
+#: fields - never a second copy of the line's own bytes. ``byte_offset``
+#: / ``byte_length`` locate the line inside the DECOMPRESSED
+#: ``transcript_archives.content_gzip`` blob, so a reader that wants the
+#: raw bytes of one specific line can seek into the decompressed blob
+#: rather than re-splitting the whole file.
+DDL_TRANSCRIPT_RECORDS = """
+CREATE TABLE IF NOT EXISTS transcript_records (
+  id               INTEGER PRIMARY KEY,
+  archive_id        INTEGER NOT NULL
+                    REFERENCES transcript_archives(id) ON DELETE CASCADE,
+  line_no          INTEGER NOT NULL,
+  byte_offset      INTEGER NOT NULL,
+  byte_length      INTEGER NOT NULL,
+  status           TEXT NOT NULL
+                    CHECK (status IN ('ok', 'invalid_json', 'blank')),
+  record_type      TEXT,
+  record_uuid      TEXT,
+  parent_uuid      TEXT,
+  ts               TEXT,
+  UNIQUE (archive_id, line_no)
+)
+"""
+
+#: APPEND-ONLY. Every attribution decision a human makes, kept forever -
+#: a re-root is a new row, never an UPDATE over the previous decision.
+DDL_TRANSCRIPT_ROOT_DECISIONS = """
+CREATE TABLE IF NOT EXISTS transcript_root_decisions (
+  id                  INTEGER PRIMARY KEY,
+  archive_id           INTEGER NOT NULL
+                       REFERENCES transcript_archives(id),
+  decided_at          TEXT NOT NULL,
+  decided_by          TEXT NOT NULL,
+  action              TEXT NOT NULL
+                       CHECK (action IN ('rooted', 'orphaned', 'reopened')),
+  root_session_id     INTEGER,
+  parent_archive_id   INTEGER,
+  note                TEXT
+)
+"""
+
+DDL_TRANSCRIPT_ARCHIVES_ROOT_STATE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_root_state "
+    "ON transcript_archives (root_state)"
+)
+
+DDL_TRANSCRIPT_ARCHIVES_CLAUDE_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_claude_uuid "
+    "ON transcript_archives (claude_session_uuid)"
+)
+
+DDL_TRANSCRIPT_ARCHIVES_PARENT_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_parent "
+    "ON transcript_archives (parent_archive_id)"
+)
+
+DDL_TRANSCRIPT_RECORDS_UUID_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_records_uuid "
+    "ON transcript_records (record_uuid)"
+)
+
+DDL_TRANSCRIPT_ROOT_DECISIONS_ARCHIVE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_root_decisions_archive "
+    "ON transcript_root_decisions (archive_id)"
+)
+
+#: Ordered DDL for a v13 -> v14 database. Three new tables and five new
+#: indexes, nothing altered on any existing table and no column added to
+#: one - like v7/v8, every statement carries its own IF NOT EXISTS and
+#: the step needs no PRAGMA inspection to be safe on a retry.
+DDL_V14: Tuple[str, ...] = (
+    DDL_TRANSCRIPT_ARCHIVES,
+    DDL_TRANSCRIPT_RECORDS,
+    DDL_TRANSCRIPT_ROOT_DECISIONS,
+    DDL_TRANSCRIPT_ARCHIVES_ROOT_STATE_INDEX,
+    DDL_TRANSCRIPT_ARCHIVES_CLAUDE_UUID_INDEX,
+    DDL_TRANSCRIPT_ARCHIVES_PARENT_INDEX,
+    DDL_TRANSCRIPT_RECORDS_UUID_INDEX,
+    DDL_TRANSCRIPT_ROOT_DECISIONS_ARCHIVE_INDEX,
+)
+
+
+# ---- schema v14 -> v15: prefix dedupe for growing files, project rooting ----
+#
+# TWO INDEPENDENT ADDITIONS, both additive-only (ALTER TABLE ADD COLUMN plus
+# new indexes; no existing column altered, no table rebuilt), because this
+# project's own migration rule is that every step must be additive - see
+# db_steps.py's module docstring.
+#
+# PART A - PREFIX DEDUPE. A growing JSONL transcript is APPENDED to, so an
+# older ingested version's bytes are frequently a strict byte PREFIX of a
+# later version's bytes. Before v15 every re-ingest of a changed file wrote
+# a second full ``content_gzip`` copy, which is the dominant storage cost
+# for a live, daily-growing transcript (measured: the corpus's largest
+# single file is 72.7 MB). ``superseded_by_archive_id`` lets an OLD row's
+# ``content_gzip`` be replaced with a near-empty sentinel once a NEWER row
+# for the same ``source_path`` is proven (by an explicit byte comparison at
+# ingest time, never assumed from size or mtime) to hold the old row's
+# bytes as its own prefix - export walks this pointer forward to whichever
+# row still holds real content, decompresses ONCE, and slices to the
+# ORIGINAL row's own ``raw_byte_length`` (already stored, needed no new
+# column). See src/core/transcript_archive.py's updated ``export_archive``
+# and src/core/transcript_prefix_dedupe.py for the ingest-time comparison
+# and the supersede write. ``growth_kind`` records the explicit finding
+# rather than leaving it inferred: 'initial' (first version of this
+# source_path - the correct default for every pre-v15 row, since each one
+# WAS the only version at the time it was written), 'append' (proven
+# prefix relationship, old row now superseded), or 'non_append_rewrite'
+# (content changed but was NOT a byte-prefix extension - a truncation, a
+# mid-file edit, or a rewriting tool; both full copies are kept, and this
+# is a surfaced finding, never a silent fallback per the three-outcome
+# rule).
+#
+# PART B - PROJECT-LEVEL ROOTING. A weaker, DISTINCT root than session-level
+# rooting (``root_state`` / ``root_session_id`` / ``parent_archive_id``,
+# unchanged by this migration). ``project_id`` on transcript_archives is
+# populated only when a transcript's corpus-slug maps, unambiguously, to
+# exactly one ``projects.root`` row (see
+# src/core/transcript_project_root.py) - ``root_state`` keeps meaning
+# EXACTLY what it always meant (session/subagent attribution truth), so a
+# project-rooted-but-not-session-rooted archive still correctly shows
+# root_state='unrooted' (session-level attribution is still genuinely
+# pending) while also carrying a project_id (a real, weaker hint a human
+# does not have to rediscover). The two axes cannot be confused because
+# they live in different columns with different meanings, never
+# overloading one flag to mean both. transcript_root_decisions gains its
+# own nullable ``project_id`` so a project-level decision is recorded
+# alongside session/subagent decisions using the SAME 'rooted' action
+# value already used for both those kinds - disambiguated the same way
+# session vs subagent already are, by which FK column is populated
+# (root_session_id vs parent_archive_id vs this new project_id), not by
+# a new action string (adding one would require rewriting the action
+# CHECK constraint, which SQLite cannot do via ALTER TABLE ADD COLUMN
+# without rebuilding the table - forbidden by this migration's
+# additive-only rule). A later session-level rooting decision on an
+# already project-rooted archive is a plain call to the existing
+# root_archive() (moves root_state to 'rooted', writes a NEW
+# transcript_root_decisions row) - the project_id column and its earlier
+# decision row are left untouched, so the upgrade never loses the audit
+# trail that got it there.
+DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY = (
+    "ALTER TABLE transcript_archives ADD COLUMN superseded_by_archive_id "
+    "INTEGER REFERENCES transcript_archives(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND = (
+    "ALTER TABLE transcript_archives ADD COLUMN growth_kind TEXT NOT NULL "
+    "DEFAULT 'initial' CHECK (growth_kind IN "
+    "('initial', 'append', 'non_append_rewrite'))"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_id "
+    "INTEGER REFERENCES projects(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_rooted_at TEXT"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY = (
+    "ALTER TABLE transcript_archives ADD COLUMN project_rooted_by TEXT"
+)
+
+DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID = (
+    "ALTER TABLE transcript_root_decisions ADD COLUMN project_id "
+    "INTEGER REFERENCES projects(id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_superseded_by "
+    "ON transcript_archives (superseded_by_archive_id)"
+)
+
+DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_project "
+    "ON transcript_archives (project_id)"
+)
+
+#: Ordered DDL for a v14 -> v15 database. Six ALTER TABLE ADD COLUMN
+#: statements plus two new indexes, nothing altered on any existing
+#: column and no table rebuilt. Unlike v14's CREATE TABLE IF NOT EXISTS
+#: idiom, ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite, so the
+#: step function guards each one with PRAGMA table_info before running
+#: it - same idiom v3/v10/v11/v13 already use for the same reason.
+DDL_V15: Tuple[str, ...] = (
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY,
+    DDL_V15_TRANSCRIPT_ARCHIVES_GROWTH_KIND,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_AT,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_ROOTED_BY,
+    DDL_V15_TRANSCRIPT_ROOT_DECISIONS_PROJECT_ID,
+    DDL_V15_TRANSCRIPT_ARCHIVES_SUPERSEDED_BY_INDEX,
+    DDL_V15_TRANSCRIPT_ARCHIVES_PROJECT_INDEX,
+)
+
+
+# ---------------------------------------------------------------------------
+# v21 -> v22 - CONTENT-ADDRESSED INGEST IDEMPOTENCY
+# ---------------------------------------------------------------------------
+#
+# THE INCIDENT THIS EXISTS FOR, MEASURED. transcript_corpus_ingest's
+# idempotency key was ``(source_path, content_sha256)`` evaluated in that
+# order: the path lookup came FIRST, and the hash was only ever compared
+# when that lookup hit. So a file whose bytes this database already held,
+# arriving under a source_path it had never seen, produced
+# ``existing = None`` and fell straight through to a full second copy
+# recorded as ``growth_kind='initial'``. When ``~/Development`` became a
+# symlink every corpus slug directory under ``~/.claude/projects`` was
+# renamed, every ``source_path`` changed, and 19,294 files whose
+# ``content_sha256`` was ALREADY stored were archived a second time -
+# 3.78 GB, the whole corpus held twice under two path encodings, with no
+# error, no warning and no finding anywhere.
+#
+# WHY PATH CANONICALISATION IS NOT THE FIX, stated here so the next
+# reader does not reach for it. The two encodings are two different
+# DIRECTORY NAMES inside ~/.claude/projects (Claude Code derives a slug
+# from the cwd, and the symlinked cwd produces a different slug), not two
+# paths to one file. ``Path.resolve()`` has nothing to resolve: both
+# directories exist, independently, side by side. Content addressing is
+# the only key that recognises them as the same transcript.
+#
+# THE INDEX. ``content_sha256`` has been on transcript_archives since
+# v14 and was never indexed, because until now nothing ever looked a row
+# up by it - the only reads were by id or by source_path. The
+# content-addressed check queries it on EVERY file of every pass, so
+# without this index each pass is one full table scan per file.
+DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_transcript_archives_content_sha "
+    "ON transcript_archives (content_sha256)"
+)
+
+# WHY A NEW COLUMN AND NOT A NEW growth_kind VALUE. ``growth_kind`` carries
+# a CHECK constraint listing exactly ('initial', 'append',
+# 'non_append_rewrite'). SQLite cannot widen a CHECK with ALTER TABLE ADD
+# COLUMN, and rebuilding transcript_archives is forbidden by this
+# migration chain's additive-only rule (and would be reckless against a
+# table holding the owner's whole history). A content-duplicate row is
+# genuinely the FIRST archive for its source_path, so 'initial' is the
+# honest growth_kind for it; what needed saying separately is WHY its
+# ``content_gzip`` is a sentinel, and that is what this column says.
+#
+# NULL on every row that predates this and on every ordinary ingest. A
+# non-null value means: this row stores no bytes of its own, its content
+# lives at ``superseded_by_archive_id``, and the reason is named here
+# rather than inferred from the shape of two other columns.
+DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND = (
+    "ALTER TABLE transcript_archives ADD COLUMN dedupe_kind TEXT"
+)
+
+#: The one value this codebase writes into ``dedupe_kind``: the row's
+#: bytes were already stored, verbatim, under a different source_path.
+DEDUPE_KIND_CONTENT_DUPLICATE = "content_duplicate"
+
+#: Ordered DDL for a v21 -> v22 database. One index (idempotent by its
+#: own IF NOT EXISTS) and one ALTER TABLE ADD COLUMN (guarded by
+#: PRAGMA table_info in the step, same idiom as v3/v10/v11/v13/v15).
+DDL_V22: Tuple[str, ...] = (
+    DDL_V22_TRANSCRIPT_ARCHIVES_CONTENT_SHA_INDEX,
+    DDL_V22_TRANSCRIPT_ARCHIVES_DEDUPE_KIND,
+)
+
+
+# --- v22 -> v23: sessions.last_work_at ------------------------------------
+#
+# THE ORDERING KEY FOR THE SESSION AND PROJECT LISTS, and the reason it is
+# a new column rather than a reuse of one already present.
+#
+# The lists are read as a TIMELINE - "what have I been working on, most
+# recent first" - and every existing candidate answers a DIFFERENT
+# question:
+#
+#   projects.last_opened_at   is written by POST /sessions, i.e. by
+#                             CLICKING a project. Ordering by it means the
+#                             list reshuffles when you merely look at it.
+#   sessions.updated_at       is unrelated bookkeeping. A restart's rebind
+#                             writes it, so a restart would read as work.
+#   sessions.activity_state_at is written by the listing path as well as
+#                             the hook path, including the working -> idle
+#                             expiry. Going quiet is not working.
+#   sessions.last_seen_running_at is a tmux LIVENESS probe. It advances on
+#                             a session nobody has touched in a week.
+#
+# So there was no column that meant "work happened here", and inferring
+# one from a column that means something else is how an ordering silently
+# stops describing what its label claims.
+#
+# NULLABLE, AND NULL IS A THIRD OUTCOME. It means no work has been
+# recorded for this session yet - not "worked on at the epoch" and not
+# "worked on now". Rows carrying NULL sort below every row that has a
+# value, keep a stable order among themselves, and are LABELLED as
+# unrecorded in the UI rather than being blended into the tail of the
+# worked rows. Every row predating this migration carries NULL, which is
+# the honest answer for all of them: nothing was measuring this before.
+#
+# NO INDEX. The sessions table is tens of rows on a real install (8 on the
+# machine this was written against); an index would cost a write on every
+# tool call to speed up a scan that never becomes expensive.
+DDL_V23_SESSIONS_LAST_WORK_AT = (
+    "ALTER TABLE sessions ADD COLUMN last_work_at TEXT"
+)
+
+#: Ordered DDL for a v22 -> v23 database. One ALTER TABLE ADD COLUMN,
+#: guarded by PRAGMA table_info in the step because SQLite's ALTER TABLE
+#: ADD COLUMN has no IF NOT EXISTS - same idiom as v3/v10/v11/v13/v15/v22.
+DDL_V23: Tuple[str, ...] = (DDL_V23_SESSIONS_LAST_WORK_AT,)
+
+#: Same reasoning as REVERSAL_SQL_V3 and V4: additive-only forward,
+#: RESTORE backward. Stated so the absence is a decision, not a gap.
+REVERSAL_SQL_V23: Tuple[str, ...] = ()
+
+
+# ---- schema v23 -> v24: group membership keyed on DURABLE identity ------
+#
+# THE DEFECT THIS CLOSES. ``session_group_members`` (v8, above) declares
+# ``tmux_name TEXT PRIMARY KEY`` - a SCHEMA asserting that an ephemeral
+# tmux name IS a durable identity. tmux recycles a name the moment a
+# session is recreated after its pane dies, so two rows with two
+# histories legitimately share one name, and the primary key forces one
+# of them to win. It is an ENFORCED INCORRECT contract, which is worse
+# than no contract: every INSERT has to already have picked a winner.
+# Measured on the owner's live database 2026-09-08 the collision is not
+# hypothetical - ``cloude_Mac`` and ``cloude_Fantasy Football 2026`` each
+# carry TWO sessions rows and each is a filed group member.
+#
+# It also makes a whole class of row UNFILEABLE. A session imported from
+# a transcript has no tmux name at all, so under a name-keyed primary key
+# it cannot be put in a group even in principle.
+#
+# THE NEW TABLE KEYS ON ``sessions.session_uuid``, which is NOT NULL
+# UNIQUE and is one of the three durable keys this schema recognises (the
+# other two being the instance triple and claude_session_uuid). One group
+# per session is still enforced by the primary key, exactly as before -
+# the rule did not change, only what identifies the session.
+#
+# ``position`` IS DURABLE ORDER WITHIN A GROUP, and it is new. Order
+# within a group used to live in localStorage, which means it was
+# per-device and was lost with the browser profile. It is stored here for
+# the same reason membership is: it is a fact about the conversation the
+# user arranged, not a property of the screen they arranged it on.
+# DEFAULT 0 is deliberate - a tie is broken by ``session_uuid`` in the
+# read, so a backfilled or hand-inserted row still has a TOTAL order
+# rather than whatever sqlite returns.
+#
+# ADDITIVE, LIKE EVERY OTHER STEP. The v8 table is NOT dropped, renamed
+# or retyped. It is left exactly as it is, read once by the backfill and
+# never again, so a rollback is a RESTORE and never a hand-written
+# reversal - see this module's DDL block for v3/v4 and db_steps.py's
+# docstring for the whole argument.
+DDL_SESSION_GROUP_MEMBERSHIP = """
+CREATE TABLE IF NOT EXISTS session_group_membership (
+  session_uuid TEXT PRIMARY KEY,
+  group_id     INTEGER NOT NULL REFERENCES session_groups(id) ON DELETE CASCADE,
+  position     INTEGER NOT NULL DEFAULT 0,
+  added_at     TEXT NOT NULL
+)
+"""
+
+#: The one index the read needs. ``list_groups`` buckets every membership
+#: by group and orders within the bucket, so the composite covers both
+#: halves of that query and a per-group count needs no table scan.
+DDL_SESSION_GROUP_MEMBERSHIP_ORDER_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_session_group_membership_order "
+    "ON session_group_membership (group_id, position)"
+)
+
+#: Ordered DDL for a v23 -> v24 database. One CREATE TABLE and one CREATE
+#: INDEX, each carrying its own IF NOT EXISTS, so the step is idempotent
+#: BY THE STATEMENT and needs no PRAGMA inspection - same shape as
+#: v7/v8/v14/v16/v18/v19. The row backfill that follows them in the step
+#: is idempotent separately, by INSERT ... WHERE NOT EXISTS.
+DDL_V24: Tuple[str, ...] = (
+    DDL_SESSION_GROUP_MEMBERSHIP,
+    DDL_SESSION_GROUP_MEMBERSHIP_ORDER_INDEX,
+)
+
+#: A REVERSE of v23 -> v24 drops the new table, which is the exact
+#: inverse of creating it. It destroys the memberships and the in-group
+#: order recorded since the migration, and destroys no conversation - the
+#: table holds no reference to one. The v8 table is untouched by both
+#: directions, so a reversed install falls back to the membership
+#: snapshot the migration read, which is stale but never wrong about a
+#: session that has not moved.
+REVERSAL_SQL_V24: Tuple[str, ...] = (
+    "DROP TABLE IF EXISTS session_group_membership",
+)
+
+REVERSAL_DESTROYS[24] = ("session_group_membership (whole table)",)
+
+
+# ---------------------------------------------------------------------------
+# v24 -> v25: sessions.kind, so a list can be the OWNER'S work only
+# ---------------------------------------------------------------------------
+#
+# THE OWNER'S RULE, VERBATIM (2026-09-08): "lists should always just be
+# mine. the rest can be found in the archive explorer." After the
+# transcript import gave every conversation on this machine a row, 895 of
+# them, the lists carried work nobody sat at a keyboard for: 259
+# scheduler runs and 11 headless `claude -p` probes, measured.
+#
+# THE VOCABULARY IS THREE WORDS AND A FOURTH IS A BUG: 'interactive',
+# 'automated', 'unknown'. src/core/session_kind.py owns the ladder that
+# produces them and the argument for each rung.
+#
+# NULLABLE, WITH NO SQL DEFAULT, AND THAT IS THE SAFETY PROPERTY. SQLite
+# fills every existing row with a column default when one is given, which
+# would have stamped 'interactive' on all 895 imported rows and left the
+# backfill unable to tell "classified as the owner's" from "never
+# looked at". NULL means exactly "not classified", and every reader
+# excludes on `kind = 'automated'` ALONE - so NULL, 'unknown' and
+# 'interactive' all keep their place in the lists. An unwritten value can
+# never hide a session.
+#
+# NO INDEX, same reasoning as v23's last_work_at: the sessions table is
+# under a thousand rows on the largest install measured, and the filter
+# rides along on scans the lists already pay for.
+DDL_V25_SESSIONS_KIND = "ALTER TABLE sessions ADD COLUMN kind TEXT"
+
+#: Stamp the rows this app created or adopted ITSELF. Every one of them
+#: was launched or attached by the owner at a keyboard, so 'interactive'
+#: is a measurement about them rather than a guess - the app has no other
+#: way to make a session. Imported rows are deliberately left NULL for
+#: scripts/classify_session_kind.py, which reads the transcript.
+DDL_V25_SESSIONS_KIND_BACKFILL = (
+    "UPDATE sessions SET kind = 'interactive' "
+    "WHERE kind IS NULL AND origin IN ('created', 'adopted')"
+)
+
+#: Ordered DDL for a v24 -> v25 database. One ALTER TABLE ADD COLUMN
+#: guarded by PRAGMA table_info in the step (SQLite has no IF NOT EXISTS
+#: for it - same idiom as v3/v10/v11/v13/v15/v22/v23), then one UPDATE
+#: whose `kind IS NULL` clause makes it idempotent by itself.
+DDL_V25: Tuple[str, ...] = (
+    DDL_V25_SESSIONS_KIND,
+    DDL_V25_SESSIONS_KIND_BACKFILL,
+)
+
+#: Additive-only forward, RESTORE backward - same as V3, V4 and V23.
+#: Stated so the absence is a decision rather than a gap.
+REVERSAL_SQL_V25: Tuple[str, ...] = ()

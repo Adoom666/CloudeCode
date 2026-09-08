@@ -261,7 +261,11 @@ class TestResolveProjectsOutcomes:
         degrading, which is the loudest possible way to lose a launcher.
         """
 
-        def boom(_conn):
+        # Mirrors list_projects_ordered's real signature rather than
+        # swallowing everything with **kwargs: this stub stands in for a
+        # specific function, and a stub that accepts any call cannot
+        # notice when the call it is impersonating has changed shape.
+        def boom(_conn, *, include_archived: bool = False):
             raise sqlite3.DatabaseError("database disk image is malformed")
 
         monkeypatch.setattr(

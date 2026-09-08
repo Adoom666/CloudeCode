@@ -1,0 +1,398 @@
+/* =====================================================================
+ * ARCHIVE PANES - the two resizer handles, and the rule that every
+ * label in the browse panes TRUNCATES rather than wraps.
+ *
+ * Load LAST, after archive-tlist.css and archive-align.css. Several
+ * rules here deliberately replace a wrap with a clip, and the ordering
+ * is the whole mechanism - every selector below is no more specific
+ * than the rule it replaces, so there is no specificity arms race to
+ * lose track of later.
+ *
+ * WHY TRUNCATION AND NOT WRAPPING, MEASURED. The transcript list is a
+ * fixed-width column holding UUID session refs 36 characters long and
+ * titles that are frequently a whole sentence. Wrapped, one row was 4
+ * lines tall and the next was 2, so the eye had no ruler to scan down
+ * and a 50-row page ran to three screens. Every clipped label in this
+ * file carries its full text in a `title` attribute, written by
+ * `archive-tlist-row.js::fillLabel` and by
+ * `archive-deeplink.js::renderCrumb` - the two functions that write
+ * label text, so a field cannot be added without one. TRUNCATION
+ * WITHOUT A TOOLTIP WOULD BE STRICTLY WORSE THAN WRAPPING; the pair is
+ * the answer, not the clip on its own.
+ *
+ * THE OUTCOME BLOCKS ARE EXEMPT AND MUST STAY EXEMPT. Design doc C.5 is
+ * normative that `.archive-outcome` never truncates at any width: a
+ * COULD NOT EVALUATE whose reason is cut off is indistinguishable from
+ * one with nothing to say, which is the precise confusion the whole
+ * three-outcome design exists to prevent. Nothing here selects it, and
+ * nothing added here ever should. The same goes for the two honesty
+ * notes: `__split-note` and `__fuzzy-note` wrap freely, because they
+ * are prose about what is NOT on screen and a clipped caveat is a
+ * removed caveat.
+ *
+ * Every colour is an existing theme token, and no state depends on
+ * border-radius or on colour alone - `terminal`, `gameboy` and
+ * `legacy_apple` zero every radius token deliberately.
+ * ===================================================================== */
+
+/* =====================================================================
+ * THE RESIZER HANDLES
+ * ===================================================================== */
+
+/* Out of flow, so the grid stays three columns. `left` is written by
+ * archive-pane-resize.js from the same two variables the template is
+ * built from, so the handle cannot drift away from the edge it names. */
+.archive-screen__resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* A 9px target centred on a 1px border. Smaller than about 8px and
+     * the handle is genuinely hard to hit with a trackpad; wider and it
+     * starts swallowing clicks meant for the row beside it. */
+    width: 9px;
+    margin-left: -4px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: col-resize;
+    /* Above both panes so the pointer finds it, below any modal. */
+    z-index: 2;
+    /* The pointer events are the whole point of the element. */
+    touch-action: none;
+}
+
+/* THE VISIBLE LINE IS A CHILD PSEUDO, NOT THE HANDLE'S OWN BACKGROUND,
+ * so the hit area can be 9px while the thing you see stays 1px and
+ * lines up with the pane border underneath it. */
+.archive-screen__resizer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 4px;
+    width: 1px;
+    background: var(--color-border);
+    transition: background 0.3s ease, width 0.3s ease;
+}
+
+.archive-screen__resizer:hover::before,
+.archive-screen__resizer[data-dragging="true"]::before {
+    background: var(--color-accent);
+    width: 3px;
+    left: 3px;
+}
+
+/* Keyboard reach. The handle is a real `role="separator"` with a
+ * tabindex, so it needs a focus treatment as visible as any control's -
+ * and it is GEOMETRY plus colour, because three themes have no radius
+ * and one has two colours. */
+.archive-screen__resizer:focus-visible {
+    outline: none;
+}
+
+.archive-screen__resizer:focus-visible::before {
+    background: var(--color-accent);
+    width: 3px;
+    left: 3px;
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+/* =====================================================================
+ * THE FILTER HEADER - a compact chooser and three fuzzy inputs.
+ * ===================================================================== */
+
+.archive-tlist__filters {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.archive-tlist__scheme-box {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+/* THE SCHEME CHOOSER IS A NATIVE <select>. It was a hand-built trigger
+ * plus a floating menu of buttons; the owner's verdict was "i dont like
+ * the dropdown its fake and doesnt match", and the fix is to stop
+ * imitating a control and use one. Everything below is the same token
+ * set the fuzzy inputs use, so the two halves of this header now match
+ * by construction rather than by two stylesheets agreeing.
+ *
+ * appearance IS NOT RESET. The platform's own disclosure arrow, keyboard
+ * behaviour and popup are the entire reason for the change; overriding
+ * them with a custom arrow would rebuild the thing being removed. Only
+ * colour, border, radius and type are themed, which is what makes it
+ * match without making it fake. */
+.archive-tlist__scheme-label {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--color-fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 6px;
+}
+
+.archive-tlist__scheme {
+    font: inherit;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 5px 8px;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+
+.archive-tlist__scheme:hover {
+    border-color: var(--color-accent);
+}
+
+.archive-tlist__scheme:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* --- the three fuzzy inputs ----------------------------------------- */
+
+.archive-tlist__fuzzy {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    min-width: 0;
+}
+
+.archive-tlist__fuzzy-input {
+    font: inherit;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    /* Equal thirds that all shrink together, so no column disappears
+     * first when the pane is dragged narrow. */
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 4px 6px;
+    color: var(--color-fg);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.archive-tlist__fuzzy-input:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* PROSE ABOUT WHAT IS NOT ON SCREEN. It wraps, deliberately - see the
+ * file header. It also carries the warning rail, because every sentence
+ * it can render is a statement about rows this filter could not reach. */
+.archive-tlist__fuzzy-note {
+    margin: 0;
+    padding: 6px 8px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+    box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.archive-tlist__fuzzy-note:empty {
+    display: none;
+    padding: 0;
+    box-shadow: none;
+}
+
+/* The matched characters. `mark`'s UA default is black-on-yellow, which
+ * is unreadable in every dark theme here and belongs to nobody's
+ * palette. */
+.archive-tlist__hit {
+    color: var(--color-accent);
+    background: var(--color-accent-bg);
+    /* Weight as well as colour: a monochrome theme has to be able to
+     * show a match too. */
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+}
+
+/* =====================================================================
+ * THE ROW - a name that leads, and a source that is not the name.
+ * ===================================================================== */
+
+/* THE NAME. It takes the treatment `.archive-tlist__ref` used to have
+ * (1rem, bold, accent - .project-name's) because it is now the primary
+ * label. One line, clipped, with the full text in its `title`. */
+.archive-tlist__title {
+    flex: 1 1 100%;
+    min-width: 0;
+    font-size: 1rem;
+    font-weight: bold;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A REFERENCE STANDING IN FOR A NAME MUST NOT LOOK LIKE ONE. When the
+ * row has no title it leads with the session_ref, and `data-is-title`
+ * is false: it drops to the muted colour and normal weight, so an
+ * unnamed session is visibly unnamed rather than looking as though
+ * somebody named it after its own UUID. */
+.archive-tlist__title[data-is-title="false"] {
+    color: var(--color-fg-muted);
+    font-weight: normal;
+}
+
+/* --- the title source ------------------------------------------------ */
+
+/* FOUR STATES AND THEY DO NOT LOOK ALIKE. A chosen name, a machine
+ * guess, no name at all, and a name whose origin could not be
+ * determined. Each carries a bracketed TEXT marker as well as a colour,
+ * so none of the four depends on a palette surviving. */
+.archive-tlist__source {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-top: 2px;
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    line-height: 1.4;
+    letter-spacing: 0.5px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+
+/* A name a person chose. The only one that reads as an assertion. */
+.archive-tlist__source--human {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-bg);
+}
+
+.archive-tlist__source--human::before {
+    content: "[=] ";
+}
+
+/* GENERATED, and it says so. `ai-title` and `summary` both describe the
+ * session as a whole and are stable, so they are quieter than a warning -
+ * but they are not a name a person chose, and the marker says which. */
+.archive-tlist__source--derived {
+    color: var(--color-info);
+    border-color: var(--color-info-border);
+    background: var(--color-info-bg);
+}
+
+.archive-tlist__source--derived::before {
+    content: "[~] ";
+}
+
+/* THE WEAK FALLBACK, AND IT GETS THE WARNING TOKENS. `last-prompt` is
+ * not a title at all: it is the text of the last thing typed, and the
+ * server's own note records measured values of "yes" and "exirt". It is
+ * rendered only because a bad name beats a UUID, so it has to be the
+ * loudest of the four about what it is. */
+.archive-tlist__source--weak {
+    color: var(--color-warning);
+    border-color: var(--color-warning-border);
+    background: var(--color-warning-bg);
+}
+
+.archive-tlist__source--weak::before {
+    content: "[!] ";
+}
+
+/* A weak source is not a NAME, so the text it supplies does not get the
+ * name treatment either - same rule as the ref fallback above. */
+.archive-tlist__row:has(.archive-tlist__source--weak) .archive-tlist__title {
+    color: var(--color-fg-muted);
+    font-weight: normal;
+}
+
+/* No name from any source. A measurement, so it is quiet - not a
+ * warning, and not dressed up as one. */
+.archive-tlist__source--none {
+    color: var(--color-fg-faint);
+    border-color: var(--color-border);
+    background: transparent;
+}
+
+.archive-tlist__source--none::before {
+    content: "[ ] ";
+}
+
+/* COULD NOT DETERMINE, and it is neither of the other three. */
+.archive-tlist__source--cannot-determine {
+    color: var(--color-info);
+    border-color: var(--color-info-border);
+    background: var(--color-info-bg);
+}
+
+.archive-tlist__source--cannot-determine::before {
+    content: "[?] ";
+}
+
+/* --- the demoted ref and the metadata line --------------------------- */
+
+/* The ref is no longer the headline. It keeps the mono face and the
+ * full-line claim so a 36-character UUID does not squeeze the four
+ * numeric fields, but it drops to metadata size and it CLIPS - the
+ * `overflow-wrap: anywhere` it used to carry is what let one row grow to
+ * three lines. */
+.archive-tlist__ref {
+    flex: 1 1 100%;
+    min-width: 0;
+    font-size: 0.8rem;
+    font-weight: normal;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-tlist__id,
+.archive-tlist__lines,
+.archive-tlist__bytes,
+.archive-tlist__ingested {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* THE BADGES STILL WRAP, AND THAT IS NOT AN OVERSIGHT. Each carries a
+ * whole sentence stating one of two attribution conditions that are
+ * never merged, and a clipped `HOST NOT ESTABLISHED: host_attribution
+ * is...` loses the half that says what was actually found. Same
+ * reasoning as the outcome blocks in the file header. */
+.archive-tlist__badge {
+    white-space: normal;
+}
+
+/* =====================================================================
+ * NARROW. 700px is the archive's existing second breakpoint; no new
+ * number is introduced.
+ * ===================================================================== */
+
+@media (max-width: 700px) {
+    /* At phone width the pane is the whole screen, so the three inputs
+     * get a line each rather than three unusable 8-character boxes. */
+    .archive-tlist__fuzzy {
+        flex-wrap: wrap;
+    }
+
+    .archive-tlist__fuzzy-input {
+        flex: 1 1 100%;
+    }
+
+    .archive-tlist__source {
+        flex: 0 0 auto;
+        align-self: flex-start;
+    }
+}

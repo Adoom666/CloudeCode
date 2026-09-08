@@ -1,0 +1,44 @@
+/* The launch-wrapper pill on a running-session row.
+ *
+ * Its own file because client/css/styles.css is long past the repo's
+ * 500-line guideline and must not grow; wired into client/index.html
+ * after styles.css the same way session-row-menu.css is, so it inherits
+ * the theme tokens declared there and its own rules win on a tie.
+ *
+ * WHAT IT HAS TO SIT NEXT TO. `.running-session-badges` is a 6px flex
+ * strip carrying, in order: the TMUX/EXTERNAL ownership badge, the
+ * family pill, this, the age and the session id. Four of those already
+ * carry colour meaning - green/amber for ownership, teal for a family
+ * FACT, magenta for a family GUESS, dotted grey for unknown - so this
+ * pill deliberately takes NONE of them. It is the row's quiet chip: the
+ * page's own border and faint-foreground tokens, no fill.
+ *
+ * That is the correct weight for what it says. The wrapper is never a
+ * warning and never an outcome; it is a name. The pill beside it is the
+ * one carrying the three-outcome colour language, and giving this one a
+ * second saturated fill would put two competing claims in one strip and
+ * make the family pill's own states harder to read, which is the thing
+ * that language exists to prevent.
+ *
+ * GEOMETRY IS COPIED FROM `.family-pill`, INCLUDING THE BORDER. Same
+ * font-size, padding and radius, and a 1px SOLID border rather than
+ * `1px solid transparent`: a pill with a transparent border and one with
+ * a visible border occupy the same box, so the strip stays on one
+ * baseline. `.badge` learned this the hard way - see its comment in
+ * styles.css about two pills with identical font and padding rendering
+ * 16px and 18px tall.
+ */
+
+.wrapper-pill {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm, 3px);
+    letter-spacing: 0.3px;
+    border: 1px solid var(--color-border, #3e3e42);
+    background: transparent;
+    color: var(--color-fg-faint, #888);
+    /* A wrapper label is user-authored free text and can be long. Keep it
+     * on one line and let the flex strip wrap the whole pill rather than
+     * breaking the name across two rows mid-word. */
+    white-space: nowrap;
+}

@@ -67,6 +67,35 @@ def _names(body):
     return [g["name"] for g in body["groups"]]
 
 
+def _store(state_dir, *names):
+    """Give each tmux name a real ``sessions`` row.
+
+    Description: SCHEMA v24 KEYS MEMBERSHIP ON ``sessions.session_uuid``,
+      so ``POST /session-groups/assign`` answers 409 for a name this
+      datastore holds no row for - see
+      ``test_assigning_a_name_with_no_stored_session_is_a_409``. Every
+      test here that files a session therefore seeds one first.
+    Inputs: state_dir (Path) - where cloude.db lives. names (str) - tmux
+      names to create rows for.
+    Output: list[str] - the session_uuid of each row, in order.
+    """
+    out = []
+    with closing(connect(db_path_for(state_dir), create=False)) as conn:
+        with conn:
+            for name in names:
+                session_uuid = f"uuid-{name}"
+                conn.execute(
+                    "INSERT INTO sessions "
+                    "(session_uuid, tmux_socket, tmux_name, origin, lifecycle, "
+                    " created_at, updated_at) "
+                    "VALUES (?, 'cloude', ?, 'created', 'running', "
+                    "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    (session_uuid, name),
+                )
+                out.append(session_uuid)
+    return out
+
+
 # --- the read's three outcomes ---------------------------------------------
 
 
@@ -148,7 +177,8 @@ def test_the_group_limit_is_a_409(app_env):
 
 
 def test_assign_moves_a_session_and_never_duplicates_it(app_env):
-    client, _ = app_env
+    client, state_dir = app_env
+    _store(state_dir, "cloude_x")
     a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
     b = client.post("/api/v1/session-groups", json={"name": "b"}).json()["groups"][1]
 
@@ -167,7 +197,8 @@ def test_assign_moves_a_session_and_never_duplicates_it(app_env):
 
 
 def test_assign_null_returns_a_session_to_ungrouped(app_env):
-    client, _ = app_env
+    client, state_dir = app_env
+    _store(state_dir, "cloude_x")
     a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
     client.post(
         "/api/v1/session-groups/assign",
@@ -183,7 +214,8 @@ def test_assign_null_returns_a_session_to_ungrouped(app_env):
 
 
 def test_assign_to_a_missing_group_is_a_404(app_env):
-    client, _ = app_env
+    client, state_dir = app_env
+    _store(state_dir, "cloude_x")
     r = client.post(
         "/api/v1/session-groups/assign",
         json={"tmux_name": "cloude_x", "group_uuid": "nope"},
@@ -191,8 +223,46 @@ def test_assign_to_a_missing_group_is_a_404(app_env):
     assert r.status_code == 404
 
 
-def test_rename_keeps_membership(app_env):
+def test_assigning_a_name_with_no_stored_session_is_a_409(app_env):
+    """A write that CANNOT happen must not answer 200.
+
+    Since schema v24 the membership keys on ``sessions.session_uuid``, so
+    a tmux name this datastore holds no row for has no durable identity
+    to be filed under. Answering 200 would show the user a group he made
+    that is gone after a reload - the same failure a 503 exists to stop
+    one line up, arriving by a different route.
+    """
     client, _ = app_env
+    a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
+    r = client.post(
+        "/api/v1/session-groups/assign",
+        json={"tmux_name": "cloude_never_seen", "group_uuid": a["group_uuid"]},
+    )
+    assert r.status_code == 409
+    assert "cloude_never_seen" in r.json()["detail"]
+
+
+def test_member_order_round_trips_over_http(app_env):
+    """Order within a group is stored server-side and comes back."""
+    client, state_dir = app_env
+    keys = _store(state_dir, "cloude_1", "cloude_2", "cloude_3")
+    a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
+    for name in ("cloude_1", "cloude_2", "cloude_3"):
+        client.post(
+            "/api/v1/session-groups/assign",
+            json={"tmux_name": name, "group_uuid": a["group_uuid"]},
+        )
+    body = client.post(
+        f"/api/v1/session-groups/{a['group_uuid']}/order",
+        json={"session_uuids": [keys[2], keys[0], keys[1]]},
+    ).json()
+    assert body["groups"][0]["members"] == ["cloude_3", "cloude_1", "cloude_2"]
+    assert body["groups"][0]["member_session_uuids"] == [keys[2], keys[0], keys[1]]
+
+
+def test_rename_keeps_membership(app_env):
+    client, state_dir = app_env
+    _store(state_dir, "cloude_x")
     a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
     client.post(
         "/api/v1/session-groups/assign",
@@ -227,7 +297,8 @@ def test_reorder_rewrites_the_whole_order(app_env):
 
 def test_delete_frees_its_sessions_and_reports_how_many(app_env):
     """THE CLAIM: the conversations survive, and the count is quotable."""
-    client, _ = app_env
+    client, state_dir = app_env
+    _store(state_dir, "cloude_1", "cloude_2", "cloude_3")
     a = client.post("/api/v1/session-groups", json={"name": "a"}).json()["groups"][0]
     for name in ("cloude_1", "cloude_2", "cloude_3"):
         client.post(

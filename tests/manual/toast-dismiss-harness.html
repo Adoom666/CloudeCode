@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>toast dismiss harness</title>
+<!--
+  A TOAST MUST GET OUT OF THE WAY ONCE THE USER HAS DEALT WITH IT, AND
+  MUST NOT GET OUT OF THE WAY WHEN HE HAS DEALT WITH SOMETHING ELSE.
+
+  Two paths, scoped differently on purpose:
+    IMPLICIT  input to a session clears THAT session's toasts (and only
+              that session's), driven from client/js/terminal.js.
+    EXPLICIT  the "Dismiss all" control clears everything, everywhere.
+
+  WHY THIS PAGE RATHER THAN A DOM ASSERTION. tests/
+  test_toast_dismiss.node.mjs already reads the element tree, and that is
+  a different claim. This repo has shipped visibly broken features
+  through green suites that read markup - an unstyled button whose "the
+  button exists" assertion passed, a feature with 282 passing assertions
+  that drew zero pixels. So every verdict driven from
+  scripts/verify_toast_dismiss.py is a BOUNDING RECT in a real Chromium
+  that loaded the real stylesheets in the shipped order. "Dismissed"
+  here means the box is gone, not that a Map shrank.
+
+  WHAT THIS PAGE OWNS, AND WHAT IT DOES NOT. Cards here are built by the
+  real client/js/toast.js from synthetic server-shape payloads, and this
+  page measures WHAT A HUMAN SEES when each dismissal path runs. It does
+  NOT load client/js/terminal.js: that file ends by constructing a live
+  xterm against a pty, and the only ways to load it without that - eval
+  or an injected script string - are both blocked by the production CSP
+  this harness deliberately serves under. Relaxing the CSP would mean
+  measuring a page the app does not run as. The terminal side of the
+  wiring (`_noteUserInputToSession` reaching ToastManager with the right
+  session id, from the real shipped source) is therefore executed and
+  asserted in tests/test_toast_dismiss.node.mjs instead, where there is
+  no CSP; this page proves the pixels, that file proves the wiring.
+
+  POSITIVE CONTROL. Every verdict below has the shape "these boxes are
+  gone". A harness in which the module painted NOTHING would satisfy all
+  of them while measuring nothing - a false green manufactured inside
+  the verification step. window.__control() paints one card and the
+  driver requires a real non-zero box from it before believing any
+  disappearance; failing that is CANNOT DETERMINE for the whole run.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/toast-dismiss-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__ready before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/toast.css" />
+<style>body { margin: 0; padding: 0; min-height: 100vh; }</style>
+</head>
+<body>
+
+<!-- The SHIPPED container markup, id and all. -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="../../client/js/toast.js"></script>
+
+<script>
+window.__ready = false;
+
+/**
+ * Apply one shipped theme by writing its manifest's cssVars onto :root -
+ * the same substitution the app performs at runtime.
+ * @param {string} id - a directory name under client/css/themes/.
+ * @returns {Promise<object>} the manifest's cssVars.
+ */
+window.__setTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    for (const [k, v] of Object.entries(vars)) {
+        document.documentElement.style.setProperty(k, v);
+    }
+    return vars;
+};
+
+let seq = 0;
+/**
+ * Add one synthetic server-shape toast.
+ * @param {string} kind @param {string} title @param {string} session
+ * @returns {string} the toast id.
+ */
+window.__add = function (kind, title, session, body) {
+    seq += 1;
+    const id = 't' + seq;
+    window.ToastManager.add({
+        id, session_id: session, kind, title, body: body || null,
+        color: '#ff8800', created_at: new Date().toISOString(), acknowledged: false,
+    });
+    return id;
+};
+
+/** Clear all module + DOM state between cases. @returns {void} */
+window.__reset = function () {
+    window.ToastManager.clearAll();
+    const c = document.getElementById('toast-container');
+    while (c.firstChild) c.removeChild(c.firstChild);
+    window.ToastManager._byId.clear();
+    window.ToastManager._expanded = false;
+};
+
+/** POSITIVE CONTROL - one toast, which must paint. @returns {void} */
+window.__control = function () {
+    window.__reset();
+    window.__add('Stop', 'Your turn', 'A');
+};
+
+/**
+ * The effect of the user sending input to a session - the single call
+ * terminal.js's `_noteUserInputToSession()` makes, with the session id
+ * that method resolves. What is asserted here is the PIXEL consequence;
+ * that terminal.js really makes this call, with the attached session's
+ * id and only on real user input, is asserted against the shipped
+ * terminal.js source in tests/test_toast_dismiss.node.mjs.
+ * @param {string} sessionId @returns {number} toasts dismissed.
+ */
+window.__typeInto = function (sessionId) {
+    return window.ToastManager.dismissForSessionActivity(sessionId);
+};
+
+/** Click the Dismiss all control. @returns {boolean} whether it existed. */
+window.__clickDismissAll = function () {
+    const el = document.querySelector('.toast-dismiss-all');
+    if (!el) return false;
+    el.click();
+    return true;
+};
+
+/**
+ * Wait until the page has stopped moving, then report whether it did.
+ *
+ * TWO CONDITIONS, and the second one is not padding. A dismissal here is
+ * a 200ms CSS fade followed by a 220ms timer that removes the node, so a
+ * read taken after two agreeing frames (about 32ms) lands INSIDE the
+ * fade, sees the card still in the DOM at an opacity that has barely
+ * moved, and reports it as painted. Every disappearance claim would then
+ * fail against perfectly correct code - the false-FAIL direction of a
+ * verification step measuring the wrong instant. So: agreement across
+ * consecutive frames AND at least one full removal window elapsed.
+ *
+ * @returns {Promise<boolean>} false when paint never stopped changing.
+ */
+window.__settle = function () {
+    const REMOVAL_MS = 260; // 200ms fade + the 220ms timer, with margin
+    return new Promise((resolve) => {
+        const t0 = performance.now();
+        let last = null, same = 0, frames = 0;
+        const tick = () => {
+            frames += 1;
+            const sig = JSON.stringify(window.__measure().boxes);
+            if (sig === last) { same += 1; } else { same = 0; last = sig; }
+            if (same >= 2 && performance.now() - t0 >= REMOVAL_MS) return resolve(true);
+            if (frames > 300) return resolve(false);
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    });
+};
+
+/**
+ * Every painted box on the page, plus the environment facts a verdict is
+ * only meaningful against.
+ * @returns {object}
+ */
+window.__measure = function () {
+    const box = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const painted = r.width > 0 && r.height > 0
+            && cs.visibility !== 'hidden' && cs.display !== 'none'
+            && parseFloat(cs.opacity) > 0.01;
+        return { w: Math.round(r.width), h: Math.round(r.height), painted };
+    };
+    const cards = [...document.querySelectorAll('.toast')].map((el) => ({
+        session: (el.querySelector('.toast__session') || {}).textContent || '',
+        title: (el.querySelector('.toast__title-text') || {}).textContent || '',
+        kind: el.dataset.kind,
+        box: box(el),
+    }));
+    const da = document.querySelector('.toast-dismiss-all');
+    return {
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+        innerWidth: window.innerWidth,
+        cards,
+        boxes: cards.map((c) => c.box),
+        dismissAll: da ? {
+            text: da.textContent,
+            blocking: da.dataset.blocking,
+            ariaLabel: da.getAttribute('aria-label'),
+            box: box(da),
+        } : null,
+    };
+};
+
+(async () => {
+    await window.__setTheme('claude');
+    window.__ready = true;
+})();
+</script>
+</body>
+</html>

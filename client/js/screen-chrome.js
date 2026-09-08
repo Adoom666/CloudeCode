@@ -40,7 +40,7 @@ console.log('[ScreenChrome Module] Loading...');
  * chrome rather than showing it.
  * @type {string[]}
  */
-const AUTHENTICATED_SCREENS = ['launchpad', 'terminal'];
+const AUTHENTICATED_SCREENS = ['launchpad', 'terminal', 'archive'];
 
 const ScreenChrome = {
     /**

@@ -55,6 +55,16 @@ DEFAULT_SCAN_DIRS=("client" "macOS")
 
 # node_modules and vendor paths are pruned inside the find below. Both are
 # third-party bundled code this project does not author or edit.
+#
+# node_modules.nosync is pruned separately, not covered by the plain
+# node_modules pattern above. iCloud Drive checkouts on this fleet keep a
+# real node_modules.nosync directory plus a node_modules symlink pointing at
+# it (to keep node_modules out of iCloud sync); find does not follow that
+# symlink by default, so it walks into node_modules.nosync directly and its
+# path never matches "*/node_modules/*". Without this line the scan silently
+# parsed third-party packages there, including one containing Flow syntax
+# (global-agent), which read as a false SYNTAX ERROR in this project's own
+# code (found 2026-08-31).
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -108,6 +118,7 @@ for target in "${targets[@]}"; do
     done < <(
         find "${target}" -type f -name '*.js' \
             -not -path '*/node_modules/*' \
+            -not -path '*/node_modules.nosync/*' \
             -not -path '*/vendor/*' -print0 | sort -z
     )
 done

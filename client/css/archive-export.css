@@ -1,0 +1,272 @@
+/* =====================================================================
+ * ARCHIVE EXPORT MODAL - three integrity outcomes and one blocker.
+ *
+ * Load AFTER the app's own modal rules (styles.css) and after
+ * archive-outcomes.css. The overlay and content reuse `.modal-overlay`
+ * and `.modal-content`; only the body treatment is defined here.
+ *
+ * THE ONE RULE THAT MATTERS. `unverifiable` is NEVER styled as success.
+ * A streamed export carries no hash of what was actually sent - uvicorn
+ * implements no HTTP trailers and the server says so in its own
+ * X-Archive-Trailer-Unavailable header - so its integrity is a COULD NOT
+ * EVALUATE, not a pass. It gets the same heavy treatment as a
+ * cannot-determine outcome block: no success colour, no checkmark, and
+ * the shasum command a person can run to do the measurement the server
+ * could not. Verified is the ONLY state in this file allowed a success
+ * token.
+ *
+ * A 503 IS NOT A FAILURE. Nothing was downloaded and nothing broke; the
+ * server declined to start because two exports are already in flight.
+ * It is styled as a WAIT, with warning tokens rather than danger ones,
+ * so the person retries instead of investigating.
+ *
+ * No border-radius carries meaning. Every colour is a theme token.
+ * ===================================================================== */
+
+.archive-export__content {
+    max-width: 40rem;
+    width: 100%;
+}
+
+.archive-export__header {
+    font-weight: 700;
+}
+
+.archive-export__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.archive-export__label {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+}
+
+.archive-export__reason {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.archive-export__filename,
+.archive-export__bytes,
+.archive-export__sha-expected,
+.archive-export__sha-actual {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    word-break: break-all;
+    color: var(--color-fg-muted);
+}
+
+/* ---- VERIFIED ------------------------------------------------------
+ * The only state in this file that may carry a success token, because
+ * it is the only one where a measurement was actually taken: the server
+ * hashed the bytes it is about to send and they matched. */
+/* ITEM 37 (styles.css): rails are inset shadows, never a border-left
+ * beside a radius. The widths are unchanged, because width IS the
+ * severity signal in a theme with two colours. */
+.archive-export__body[data-export-state="verified"] {
+    box-shadow: inset 4px 0 0 var(--color-success);
+    padding-left: 20px;
+}
+
+.archive-export__body[data-export-state="verified"] .archive-export__label {
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--color-success);
+}
+
+.archive-export__body[data-export-state="verified"] .archive-export__label::before {
+    content: "[OK] ";
+}
+
+/* ---- UNVERIFIABLE --------------------------------------------------
+ * A COULD NOT EVALUATE, styled as one. Same weight, same spacing and the
+ * same danger tokens the cannot-determine outcome block uses, so the two
+ * are recognisably the same kind of finding. */
+.archive-export__body[data-export-state="unverifiable"] {
+    border: 1px solid var(--color-danger-border);
+    box-shadow: inset 6px 0 0 var(--color-danger);
+    padding-left: 22px;
+    background: var(--color-danger-bg);
+}
+
+.archive-export__body[data-export-state="unverifiable"] .archive-export__label {
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: var(--color-danger);
+}
+
+.archive-export__body[data-export-state="unverifiable"] .archive-export__label::before {
+    content: "[X] ";
+}
+
+/* The shasum block is the substitute measurement. It is not dismissible
+ * and there is no rule anywhere that can hide it: no display:none, no
+ * max-height collapse, no [hidden] override. That is deliberate. */
+.archive-export__shasum {
+    margin: 0;
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    border-radius: var(--radius-md);
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px dashed var(--color-danger-border);
+}
+
+/* ---- BUSY ----------------------------------------------------------
+ * A wait, not a failure. Warning tokens, thick rail, and it is the only
+ * state that renders a Retry. */
+.archive-export__body[data-export-state="busy"] {
+    box-shadow: inset 4px 0 0 var(--color-warning);
+    padding-left: 20px;
+    background: var(--color-warning-bg);
+}
+
+.archive-export__body[data-export-state="busy"] .archive-export__label {
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    color: var(--color-warning);
+}
+
+.archive-export__body[data-export-state="busy"] .archive-export__label::before {
+    content: "[..] ";
+}
+
+/* ---- NOT FOUND and CANNOT DETERMINE -------------------------------- */
+.archive-export__body[data-export-state="not-found"] {
+    border: 1px dashed var(--color-border);
+    background: transparent;
+}
+
+.archive-export__body[data-export-state="not-found"] .archive-export__label::before {
+    content: "[?] ";
+}
+
+.archive-export__body[data-export-state="cannot-determine"] {
+    box-shadow: inset 6px 0 0 var(--color-danger);
+    padding-left: 22px;
+    background: var(--color-danger-bg);
+}
+
+.archive-export__body[data-export-state="cannot-determine"] .archive-export__label {
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: var(--color-danger);
+}
+
+.archive-export__body[data-export-state="cannot-determine"] .archive-export__label::before {
+    content: "[X] ";
+}
+
+.archive-export__body[data-export-state="preflight"] .archive-export__label {
+    font-style: italic;
+    color: var(--color-fg-muted);
+}
+
+/* ---- The download blocker ------------------------------------------
+ * Rendered alongside an integrity finding, never instead of it: the
+ * integrity result is true and useful whether or not the bytes can be
+ * fetched. Double border, which nothing else in this file uses, because
+ * it is a different KIND of problem - not "we could not check the file"
+ * but "we cannot ask for the file at all". */
+.archive-export__blocked {
+    padding: 12px 14px;
+    border: 3px double var(--color-danger-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-elevated);
+}
+
+.archive-export__blocked-label {
+    margin: 0 0 6px 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--color-danger-strong);
+}
+
+.archive-export__blocked-label::before {
+    content: "[--] ";
+}
+
+.archive-export__blocked-reason {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--color-fg);
+}
+
+/* ---- Collision warning ---------------------------------------------
+ * Its own treatment: the file may be perfectly verified AND still land
+ * on top of another one, so this cannot inherit the integrity state's
+ * styling. */
+/* Dashed rail: a clipped background layer, not a border - see the note
+ * in archive-nav.css for why a dashed rail cannot be a box-shadow. */
+.archive-export__collision {
+    margin: 0;
+    padding: 10px 12px;
+    padding-left: 15px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--color-fg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-warning-bg);
+    background-image: repeating-linear-gradient(
+        to bottom,
+        var(--color-warning) 0 4px,
+        transparent 4px 8px);
+    background-repeat: no-repeat;
+    background-size: 3px 100%;
+    background-position: left top;
+}
+
+.archive-export__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.archive-export__retry,
+.archive-export__cancel {
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-export__retry:hover,
+.archive-export__cancel:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+@media (max-width: 700px) {
+    .archive-export__body {
+        padding: 12px 12px;
+    }
+
+    .archive-export__actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

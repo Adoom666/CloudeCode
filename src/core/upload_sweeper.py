@@ -128,12 +128,20 @@ def datastore_project_paths(view) -> list[str] | None:
     legitimately no projects, carry on with the default dir". Those two
     are very different statements and only one of them is evidence.
 
-    A view whose ``read_only`` flag is set could not read the datastore
-    at all, so its empty ``projects`` list is an absence of evidence and
-    is reported as ``None``.
+    A view that is not ``writable`` (``mode`` is one of
+    ``project_authority.READONLY_MODES``, e.g. the datastore was
+    unreachable) could not read the datastore at all, so its empty
+    ``projects`` list is an absence of evidence and is reported as
+    ``None``. ``ProjectsView`` has no ``read_only`` attribute - it is
+    ``writable`` (inverted) - and reading that name off it raised
+    ``AttributeError`` on every single call, which this function then
+    caught and logged rather than crashing on. That made the guard fail
+    closed unconditionally: every startup sweep saw "could not determine
+    project paths" and skipped provenance-checked pruning, twice per
+    boot, regardless of whether the datastore was actually readable.
 
     Inputs:
-        view: A ``ProjectsView`` (or anything exposing ``read_only`` and
+        view: A ``ProjectsView`` (or anything exposing ``writable`` and
             ``projects``) from ``project_authority.resolve_projects``.
     Outputs:
         list[str] - one base path per project, possibly empty when the
@@ -144,10 +152,10 @@ def datastore_project_paths(view) -> list[str] | None:
         ['/Users/me/Development/thing']
     """
     try:
-        if view.read_only:
+        if not view.writable:
             logger.warning(
                 "project_list_unreadable",
-                error="datastore view is read-only, projects could not be read",
+                error="datastore view is not writable, projects could not be read",
             )
             return None
         projects = view.projects

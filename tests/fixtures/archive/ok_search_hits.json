@@ -1,0 +1,95 @@
+{
+  "result": [
+    {
+      "transcript_id": 19548,
+      "session_ref": "agent-add459f16848bb276",
+      "line_no": 0,
+      "body_id": 2433777,
+      "match_offset": 2805,
+      "match_length": 6,
+      "body_chars": 5347,
+      "body_bytes": 5347,
+      "secret_finding_count": 0,
+      "snippet": "...spun up a throwaway lab box and pointed the restic client at the sandbox mirror endpoint, then timed how long a cold synthetic...",
+      "snippet_state": "included",
+      "body_href": "/api/v1/archive/bodies/2433777",
+      "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjotMSwidiI6MX0"
+    },
+    {
+      "transcript_id": 19548,
+      "session_ref": "agent-add459f16848bb276",
+      "line_no": 2,
+      "body_id": 2433779,
+      "match_offset": 3199,
+      "match_length": 6,
+      "body_chars": 27597,
+      "body_bytes": 27597,
+      "secret_finding_count": 0,
+      "snippet": "...catalog entries read: \\\"widget-count lib\\\", \\\"[demo/queue/\\\", \\\"sample rotation check\\\", \\\"restic sandbox coverage\\\", \\\"is nod...",
+      "snippet_state": "included",
+      "body_href": "/api/v1/archive/bodies/2433779",
+      "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjoxLCJ2IjoxfQ"
+    },
+    {
+      "transcript_id": 19548,
+      "session_ref": "agent-add459f16848bb276",
+      "line_no": 14,
+      "body_id": 2433791,
+      "match_offset": 1800,
+      "match_length": 6,
+      "body_chars": 2946,
+      "body_bytes": 2946,
+      "secret_finding_count": 0,
+      "snippet": "...seven throwaway targets queued for the demo run (QUEUE_STUB idle, restic sandbox\\n> read-only, lab-zone snapshot capture, the...",
+      "snippet_state": "included",
+      "body_href": "/api/v1/archive/bodies/2433791",
+      "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjoxMywidiI6MX0"
+    }
+  ],
+  "result_status": "ok",
+  "scope_status": "resolved",
+  "unevaluated": [],
+  "meta": {
+    "query": {
+      "q": "restic",
+      "case_sensitive": false
+    },
+    "scope": {
+      "kind": "project",
+      "project_id": 12,
+      "transcripts_in_scope": 3416
+    },
+    "scan": {
+      "status": "limit_reached",
+      "transcripts_scanned": 1,
+      "transcripts_not_scanned": 3415,
+      "bytes_scanned": 609842,
+      "budget_transcripts": 2000,
+      "budget_bytes": 536870912,
+      "elapsed_seconds": 0.038842,
+      "resume_cursor": null
+    },
+    "paging": {
+      "limit": 3,
+      "returned": 3,
+      "has_more": true,
+      "next_cursor": "eyJieXRlcyI6NjA5ODQyLCJsaW5lX25vIjoxNCwic2Nhbm5lZCI6MSwidF9pZCI6MTk1NDgsInRfaW5nZXN0ZWRfYXQiOiIyMDI2LTA4LTMwVDE2OjAxOjQ1LjAyMjMzMloiLCJ2IjoxfQ"
+    },
+    "snippet_gate": {
+      "guarantee": "best_effort",
+      "layers": [
+        "body_secret_finding_count",
+        "detectors_over_window",
+        "known_credential_value_hash"
+      ],
+      "known_values_indexed": 739,
+      "limitation": "A credential never detected anywhere in this corpus is not in the known-value index and is invisible to the detectors for the same reason it was never detected. Pass snippets=false for a response that carries no preview text at all.",
+      "withholding_never_suppresses_a_hit": true
+    },
+    "offset_units": "unicode_code_points",
+    "offset_units_utf16_available": true,
+    "body_size_units": "unicode_code_points",
+    "body_bytes_units": "unicode_code_points",
+    "body_bytes_note": "body_bytes is a DEPRECATED alias for body_chars and counts UNICODE CODE POINTS, not bytes. Read body_chars."
+  }
+}

@@ -29,6 +29,7 @@ from src.core.session_status import (
     STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
+    STATUS_NOTICE,
     STATUS_QUESTION,
     STATUS_RUNNING,
     STATUS_UNKNOWN,
@@ -71,10 +72,25 @@ def test_dead_beats_every_hook_signal():
 # ---- hooks-absent fallback --------------------------------------------------
 
 
-def test_no_hook_ever_seen_falls_back_to_tmux_running():
+def test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working():
+    """A non-shell foreground process is NOT evidence the agent is working.
+
+    This test used to assert STATUS_WORKING and that assertion was wrong.
+    tmux `running` means only "the pane's foreground command is not a bare
+    shell", which is equally true of an agent mid-tool-call and one parked
+    at an empty prompt - the exact distinction this module exists because
+    tmux cannot make. With no hook signal there is no measurement of
+    activity, and the third outcome is what that gets reported as.
+
+    Measured 2026-09-08: 15 of 19 live sessions report a claude VERSION
+    STRING as pane_current_command (the binary renames its process), so
+    this branch is the common one, not the exotic one it was assumed to
+    be, and every one of those sessions was reading a permanent, never-
+    expiring `working`.
+    """
     t = _t()
     assert t.hooks_seen("never_seen") is False
-    assert t.resolve("never_seen", STATUS_RUNNING, now=T0) == STATUS_WORKING
+    assert t.resolve("never_seen", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
 
 
 def test_no_hook_ever_seen_falls_back_to_tmux_idle():
@@ -102,13 +118,20 @@ def test_map_tmux_fallback_never_returns_outside_declared_set():
             assert map_tmux_fallback(raw, unread=unread) in ALL_ACTIVITY_STATUSES
 
 
-# ---- question: set + cleared ------------------------------------------------
+# ---- question vs notice: the split, set + cleared ---------------------------
+#
+# Split 2026-09-08. `question` is a PermissionRequest and nothing else -
+# the agent is STOPPED until a human answers. `notice` is a Notification -
+# claude wants attention and is not blocked. The pair has to survive
+# duplicate, out-of-order and half-missing delivery, so every case below
+# is asserted against `resolve()` (the observable answer) rather than
+# against the private flags.
 
 
-def test_notification_opens_question():
+def test_notification_opens_notice_not_question():
     t = _t()
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
 
 
 def test_permission_request_opens_question():
@@ -117,8 +140,58 @@ def test_permission_request_opens_question():
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
 
 
-def test_user_prompt_submit_clears_question():
-    """UserPromptSubmit resolves the open question but carries no tool
+def test_notice_is_in_the_activity_vocabulary():
+    """A state the vocabulary does not contain would fail validation at
+    the API boundary, which is exactly where nobody is looking."""
+    assert STATUS_NOTICE in ALL_ACTIVITY_STATUSES
+    assert STATUS_NOTICE != STATUS_QUESTION
+
+
+def test_permission_outranks_a_notification_in_the_same_window():
+    t = _t()
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+
+
+def test_permission_outranks_a_notification_arriving_after_it():
+    """OUT OF ORDER. Hooks carry no sequence number, so the Notification
+    that accompanies a permission prompt can land on either side of it.
+    Both orders must answer the same way, or the light would flip on
+    delivery jitter alone."""
+    t = _t()
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+
+
+def test_duplicate_notification_is_idempotent():
+    t = _t()
+    for _ in range(3):
+        t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
+
+
+def test_duplicate_permission_request_is_idempotent():
+    t = _t()
+    for _ in range(3):
+        t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+
+
+def test_a_notification_does_not_survive_the_permission_it_accompanied():
+    """MISSING HALF. PreToolUse clears BOTH flags, so answering the
+    permission does not leave the notification behind as a phantom
+    `notice` nobody can clear."""
+    t = _t()
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+def test_user_prompt_submit_clears_a_notice():
+    """UserPromptSubmit resolves the open notification but carries no tool
     heartbeat of its own - the state falls through to idle until the
     agent's first PreToolUse actually starts a heartbeat."""
     t = _t()
@@ -127,13 +200,50 @@ def test_user_prompt_submit_clears_question():
     assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
 
 
+def test_user_prompt_submit_clears_an_open_permission_request():
+    t = _t()
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
+
+
 def test_pre_tool_use_clears_question():
-    """Claude Code doesn't always emit a distinct 'permission answered'
-    event - tool activity resuming is treated as implicit resolution."""
+    """THE USER ANSWERED YES. Claude Code doesn't always emit a distinct
+    'permission answered' event - tool activity resuming is treated as
+    implicit resolution."""
     t = _t()
     t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
     t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+def test_pre_tool_use_clears_a_notice():
+    t = _t()
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+def test_a_duplicate_permission_request_after_pre_tool_use_reopens_it():
+    """DUPLICATE, LATE. A second PermissionRequest is a second decision,
+    not an echo to be ignored: re-blocking is the correct answer, and it
+    is what a genuinely re-prompting agent looks like. The point of the
+    idempotence rules is that the state converges, not that late events
+    are dropped."""
+    t = _t()
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+
+
+def test_notice_outranks_a_live_heartbeat():
+    """A notification landing mid-tool-work is still about the user, and
+    the user outranks work that proceeds without them."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
 
 
 # ---- working vs working_subagent -------------------------------------------
@@ -188,11 +298,37 @@ def test_stop_with_unread_false_is_idle():
     assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
 
 
-def test_stop_clears_open_question():
+def test_stop_clears_an_open_notice():
     t = _t()
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)
     t.record_event("s1", EVENT_STOP, now=T0)
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
+
+
+def test_stop_clears_an_open_permission_request():
+    t = _t()
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
+
+
+def test_stop_clears_both_flags_at_once():
+    """BOTH HALVES. A Stop after a session held both must not leave the
+    weaker one standing - that would paint a finished turn as `notice`
+    forever, since nothing else would ever clear it."""
+    t = _t()
+    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
+
+
+def test_a_duplicate_stop_after_both_flags_is_a_no_op():
+    t = _t()
+    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
 
 
 def test_stop_clears_subagent_depth():
@@ -248,7 +384,7 @@ def test_duplicate_notification_is_a_safe_noop():
     t = _t()
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)  # duplicate
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
 
 
 def test_subagent_stop_before_any_start_floors_at_zero():
@@ -270,7 +406,7 @@ def test_out_of_order_user_prompt_submit_then_notification():
     t = _t()
     t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
 
 
 def test_missing_stop_does_not_wedge_forever_dead_still_overrides():
@@ -291,7 +427,9 @@ def test_forget_resets_to_no_hook_seen():
     assert t.hooks_seen("s1") is True
     t.forget("s1")
     assert t.hooks_seen("s1") is False
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING  # fallback path
+    # Fallback path. `unknown`, not `working` - see
+    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
 
 
 def test_forget_unknown_session_is_a_safe_noop():
@@ -306,4 +444,6 @@ def test_unrecognized_event_kind_is_ignored():
     t = _t()
     t.record_event("s1", "SomeFutureHookKind", now=T0)
     assert t.hooks_seen("s1") is False
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING  # fallback, not crashed
+    # Fallback, not crashed. `unknown` for the reason recorded in
+    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN

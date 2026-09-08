@@ -324,14 +324,17 @@ def test_guard_is_inert_when_not_under_test(tmp_path, monkeypatch):
 class _FakeView:
     """Stands in for project_authority.ProjectsView.
 
-    read_only mirrors the real property: True whenever the datastore
-    could not be read, which makes an empty projects list an absence of
+    writable mirrors the real property (ProjectsView.writable, not
+    read_only - ProjectsView has never had a read_only attribute; see
+    tests/test_upload_sweeper_project_paths.py for the regression this
+    caused against the real class). False whenever the datastore could
+    not be read, which makes an empty projects list an absence of
     evidence rather than a statement that there are no projects.
     """
 
-    def __init__(self, projects, read_only=False):
+    def __init__(self, projects, writable=True):
         self.projects = projects
-        self.read_only = read_only
+        self.writable = writable
 
 
 def test_datastore_project_paths_reads_a_good_list():
@@ -347,10 +350,10 @@ def test_datastore_project_paths_distinguishes_empty_from_unknown():
 
 
 def test_datastore_project_paths_refuses_an_unreadable_datastore():
-    """A read-only view read nothing, so its empty list is not evidence."""
-    assert datastore_project_paths(_FakeView([], read_only=True)) is None
+    """A non-writable view read nothing, so its empty list is not evidence."""
+    assert datastore_project_paths(_FakeView([], writable=False)) is None
     assert (
-        datastore_project_paths(_FakeView([{"path": "/a"}], read_only=True)) is None
+        datastore_project_paths(_FakeView([{"path": "/a"}], writable=False)) is None
     )
 
 

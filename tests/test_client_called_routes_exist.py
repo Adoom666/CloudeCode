@@ -116,7 +116,12 @@ def _client_call_sites() -> set[str]:
         src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
         src = re.sub(r"(?m)^\s*//.*$", "", src)
 
-        for m in re.finditer(r"""\bthis\.call\(\s*['"`](/[^'"`]*)['"`]""", src):
+        # `callEnvelope(` as well as `call(`: every archive endpoint goes
+        # through the envelope helper, so a pattern matching only `call(`
+        # leaves all eleven of them invisible to this contract and the
+        # suite stays green while proving nothing about them.
+        for m in re.finditer(
+                r"""\bthis\.(?:call|callEnvelope)\(\s*['"`](/[^'"`]*)['"`]""", src):
             found.add(_normalise(API_PREFIX + m.group(1)))
         for m in re.finditer(r"""['"`](/api/v1/[^'"`\s]*)['"`]""", src):
             found.add(_normalise(m.group(1)))
@@ -168,6 +173,17 @@ def test_extractor_actually_extracts() -> None:
     )
     # A known-present anchor, so a regex that matches junk still fails.
     assert "/api/v1/sessions" in sites
+    # THE `callEnvelope` HALF OF THE SAME POSITIVE CONTROL. The pattern
+    # above was widened from `this.call(` to `this.(call|callEnvelope)(`
+    # for the archive endpoints; a pattern change with no matching change
+    # to its own positive control is exactly the false green this file
+    # exists to prevent. `/archive/hosts` is reachable ONLY through
+    # callEnvelope, so this assertion fails if the widening is reverted.
+    assert "/api/v1/archive/hosts" in sites, (
+        "the extractor found no callEnvelope() call site. Every archive "
+        "endpoint goes through that helper, so the contract below is "
+        "asserting nothing about eleven routes."
+    )
 
 
 def test_server_route_table_is_readable() -> None:

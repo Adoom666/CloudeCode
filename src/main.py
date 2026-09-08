@@ -4,16 +4,23 @@ import os
 import json
 import logging
 import mimetypes
+import sqlite3
 import structlog
 import asyncio
 from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
-from fastapi import FastAPI, Request
+from typing import Optional
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -30,6 +37,12 @@ from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
+from src.core.corpus_ingest_task import CorpusIngestScheduler
+from src.core.db_integrity_task import DatabaseIntegrityScheduler
+from src.core.message_archive_flag import (
+    ENABLE_ENV as MESSAGE_ARCHIVE_ENV,
+    resolve as resolve_message_archive,
+)
 from src.core.version import resolve_version
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
@@ -43,10 +56,50 @@ from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
-from src.api.auth import router as auth_router, limiter as auth_limiter
+from src.api.auth import (
+    router as auth_router,
+    limiter as auth_limiter,
+    require_auth,
+)
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
+from src.api.imported_restart_routes import router as imported_restart_router
+from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
+from src.api.corpus_routes import router as corpus_router
+from src.api.archive_overlay_routes import router as archive_overlay_router
+from src.api.archive_routes import router as archive_router
+
+# ---------------------------------------------------------------------------
+# THE MESSAGE-ARCHIVE MASTER SWITCH (feat/message-archive-flag)
+# ---------------------------------------------------------------------------
+# Resolved ONCE, here, at module import - before the app object exists and
+# therefore before anything can be mounted onto it. Four surfaces are gated on
+# this single answer:
+#
+#   1. the message_* schema migration  (src/core/db_steps.py's three steps)
+#   2. the background ingest scheduler (lifespan below; and the scheduler's
+#      own ingest_enabled(), so a stray start() anywhere else also refuses)
+#   3. the /api/v1/archive/* and /api/v1/corpus/* routes (include_router below)
+#   4. the /archive page routes and the UI entry points that lead to them
+#
+# WHY IMPORT TIME AND NOT PER REQUEST. A route that is registered and then
+# refuses is still a route: it appears in the OpenAPI schema, it answers, and
+# every future edit has to remember to re-add the refusal. Not registering it
+# is the honest shape - the feature genuinely is not in this process - and it
+# cannot be forgotten. The cost is that flipping the switch needs a RESTART,
+# which config.example.json states and /api/v1/features reports.
+#
+# 404, NOT 403. An unmounted route answers 404 because 404 is what this server
+# says about every path it does not serve, and the feature really is not
+# there. A 403 would assert that the endpoint EXISTS and that this caller may
+# not use it - a different and false claim, and one that tells an
+# unauthenticated prober the install has an archive it could be denied. The
+# distinguishable-outcomes requirement is met somewhere honest instead:
+# GET /api/v1/features always exists and always answers, carrying the
+# three-valued state and the reason, so "off" and "on but broken" never look
+# alike.
+MESSAGE_ARCHIVE = resolve_message_archive()
 
 # feat/state-directory - resolve (and, if needed, create) the app's state
 # directory ONCE at module load, before anything that depends on it is
@@ -525,6 +578,105 @@ async def lifespan(app: FastAPI):
     app.state.update_checker = update_checker
     update_checker.start()
 
+    # THE TRANSCRIPT ARCHIVE THE APP MAINTAINS FOR ITSELF. Everything
+    # under src/core/transcript_* was built and proven as a library that
+    # nothing called, which made the archive a snapshot taken once
+    # rather than a property this install holds. This starts the loop
+    # that keeps it current: an incremental pass now, then every
+    # CorpusIngestScheduler.interval_seconds.
+    #
+    # IT IS MOUNTED HERE, LAST, DELIBERATELY. It needs the datastore to
+    # have been migrated (ensure_db_migrated, far above) and it needs
+    # nothing else in this function, so it goes after every component
+    # that a user-visible request can depend on. start() creates a task
+    # and returns; boot never waits on a pass, and a pass that fails
+    # resolves to a named status on a report rather than to an
+    # exception - the same fail-soft posture as ensure_db_migrated and
+    # claude_hooks.ensure_hook_settings above. Set CLOUDE_CORPUS_INGEST=0
+    # to switch it off; the status route then reports it as disabled
+    # rather than implying the archive is current.
+    #
+    # ALL OF IT IS BEHIND THE MASTER SWITCH. With the switch off the
+    # scheduler is not merely stopped, it is never CONSTRUCTED: no object
+    # exists for a later caller to start, and app.state carries None so a
+    # consumer reading it gets an explicit absence rather than an idle
+    # instance that looks startable. The scheduler's own ingest_enabled()
+    # refuses as well, so a stray start() from anywhere else is a second,
+    # independent no.
+    corpus_ingest_scheduler = None
+    if MESSAGE_ARCHIVE.enabled:
+        # THE OFF-TO-ON PATH. An install that migrated to the current
+        # schema version while the switch was off has no message_* tables
+        # and no remaining migration step that would create them, because
+        # the three message steps advanced the version counter without
+        # applying their DDL (see src/core/db_steps.py's gate block). This
+        # is what closes that: idempotent, additive-only, O(1) against a
+        # large corpus, and run on EVERY enabled start rather than once,
+        # so it is also the repair path for a partially-built schema.
+        # It runs BEFORE the scheduler, because the scheduler writes into
+        # exactly these tables.
+        try:
+            from src.core.db import connect, db_path_for, transaction
+            from src.core.db_steps import apply_message_model_schema
+            with closing(
+                connect(db_path_for(settings.get_state_dir()))
+            ) as conn:
+                with transaction(conn):
+                    apply_message_model_schema(conn)
+            logger.info("message_archive_schema_ready")
+        except (sqlite3.Error, OSError) as exc:
+            # Named and fail-soft, the same posture as ensure_db_migrated
+            # above: a schema that could not be materialized costs the
+            # user the archive, never their server. The scheduler and the
+            # routes will then fail loudly against the missing tables,
+            # which is the correct "on but broken" signal - it must not
+            # be quietly downgraded to look like "off".
+            logger.error(
+                "message_archive_schema_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        corpus_ingest_scheduler = CorpusIngestScheduler(
+            settings.get_state_dir()
+        )
+        try:
+            corpus_ingest_scheduler.start()
+        except Exception as exc:  # pragma: no cover - defensive, see above
+            logger.warning(
+                "corpus_ingest_scheduler_start_failed", error=str(exc)
+            )
+    else:
+        logger.info(
+            "message_archive_disabled",
+            state=MESSAGE_ARCHIVE.state,
+            source=MESSAGE_ARCHIVE.source,
+            reason=MESSAGE_ARCHIVE.reason,
+        )
+    app.state.corpus_ingest_scheduler = corpus_ingest_scheduler
+
+    # THE DAILY DATABASE INTEGRITY CHECK. GET /api/v1/version used to run
+    # PRAGMA integrity_check inside its own coroutine on every request,
+    # and the Electron tray polls that endpoint every 20 seconds, so the
+    # event loop spent most of every 20-second window walking every page
+    # of a multi-gigabyte cloude.db. The request path now does a cheap
+    # probe and reads the verdict this loop caches.
+    #
+    # MOUNTED HERE, LAST, for the same reason as the ingester above: it
+    # needs the datastore migrated and nothing else. start() creates a
+    # task and returns, boot never waits on a check, and a failed check
+    # resolves to a named status on a published artifact rather than to
+    # an exception. Set CLOUDE_DB_INTEGRITY_CHECK=0 to switch it off; the
+    # version route then reports cannot_determine with enabled=false
+    # rather than implying the database was verified.
+    db_integrity_scheduler = DatabaseIntegrityScheduler(
+        settings.get_state_dir()
+    )
+    try:
+        db_integrity_scheduler.start()
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning("db_integrity_scheduler_start_failed", error=str(exc))
+    app.state.db_integrity_scheduler = db_integrity_scheduler
+
     logger.info("application_ready")
     logger.info(
         "server_ready_local_only",
@@ -541,6 +693,28 @@ async def lifespan(app: FastAPI):
     # is politeness rather than a requirement.
     update_checker.stop()
     set_update_checker(None)
+
+    # Stop the archive ingester early: its worker thread cannot be
+    # interrupted from outside, only asked to stop between files, so the
+    # sooner it is asked the shorter the wait. aclose() sets the cancel
+    # event FIRST and only then cancels the task, and its wait is
+    # bounded - shutdown never hangs on a file read.
+    if corpus_ingest_scheduler is not None:
+        try:
+            await corpus_ingest_scheduler.aclose()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "corpus_ingest_scheduler_stop_failed", error=str(exc)
+            )
+
+    # Stop the integrity checker early for the same reason: its worker
+    # thread cannot be interrupted from outside, only asked to stop
+    # before it opens the database. aclose() sets the cancel event FIRST
+    # and its wait is bounded, so shutdown never hangs on a page scan.
+    try:
+        await db_integrity_scheduler.aclose()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("db_integrity_scheduler_stop_failed", error=str(exc))
 
     # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window
@@ -661,7 +835,19 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+if MESSAGE_ARCHIVE.enabled:
+    # THE MESSAGE ARCHIVE'S ENTIRE HTTP SURFACE. Mounted only when the
+    # master switch resolved to enabled; otherwise these paths 404 like
+    # any other path this server does not serve. The overlay router is
+    # in here too: it is /api/v1/archive/* and it reads the archive, so
+    # leaving it mounted would leave a live archive endpoint on an
+    # install that opted out.
+    app.include_router(corpus_router, prefix="/api/v1")  # Transcript archive status + manual ingest (auth required)
+    app.include_router(archive_router, prefix="/api/v1")  # Read-only message browser over the archive (auth required)
+    app.include_router(archive_overlay_router, prefix="/api/v1")  # Presentation overlay over the archive: rename/group/hide (auth required)
 app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
+app.include_router(restart_router, prefix="/api/v1")  # Read-only restart preview: which respawn rung a session would land on (auth required)
+app.include_router(imported_restart_router, prefix="/api/v1")  # Preview and restart a session with NO tmux identity, e.g. one imported from a transcript (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes
@@ -852,6 +1038,170 @@ async def session_deep_link(project: str):
     return HTMLResponse(
         content=_render_index_html(),
         headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+# Archive (message browser) SPA routes.
+#
+# Same rationale as session_deep_link() above: FastAPI matches
+# more-specific routes first, so /static/*, /ws/*, /api/*, /health and
+# /manifest.webmanifest all still resolve to their real handlers. The
+# {rest:path} form is scoped UNDER /archive/, so it cannot shadow
+# anything outside that prefix. A bare @app.get("/{rest:path}") catch-all
+# WOULD shadow them and would turn every 404 in the app into a silent
+# 200 serving the SPA - do not write one.
+#
+# TWO routes, not one: {rest:path} does not match the empty string, so
+# /archive needs its own handler or a bare /archive 404s while
+# /archive/p/12 works, which is the confusing half-broken shape.
+#
+# Path-level validation is deliberately permissive here and strict in the
+# client router: a visitor pasting /archive/t/notanumber gets the app
+# shell with a visible, named error, not a bare 404.
+#
+# WHEN THE MASTER SWITCH IS OFF, BOTH ROUTES REDIRECT TO THE LAUNCHPAD
+# INSTEAD. They are still registered, deliberately: a bookmarked
+# /archive/t/5767 has to land somewhere a human can use, and a bare 404
+# from a page route in a single-page app is the "half-broken shape" this
+# comment block already warns about. Serving the SPA shell would be
+# worse than either - the archive screen would boot, call routes that no
+# longer exist, and render a wall of failures that looks exactly like a
+# broken feature rather than an absent one. A 302 to "/" is the smallest
+# honest answer: the app opens, on the screen that exists.
+#
+# This is the ONE place the two halves differ. The API surface is not
+# registered at all (404); these page routes are always registered and
+# change behaviour. That asymmetry is on purpose - an API client reading
+# a 404 learns the endpoint is absent, and a human reading a redirect
+# learns the app still works.
+if MESSAGE_ARCHIVE.enabled:
+
+    @app.get("/archive")
+    async def archive_root() -> HTMLResponse:
+        """Serve the SPA shell for the archive screen root.
+
+        Inputs: none.
+        Output: HTMLResponse - the stamped SPA shell.
+        Example: GET /archive -> 200 text/html
+        """
+        return HTMLResponse(
+            content=_render_index_html(),
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
+    @app.get("/archive/{rest:path}")
+    async def archive_deep_link(rest: str) -> HTMLResponse:
+        """Serve the SPA shell for any archive deep link.
+
+        The ``rest`` path parameter is consumed by the client-side router
+        after the SPA boots; this handler does not inspect or validate it.
+
+        Inputs: rest (str) - the remainder of the archive path.
+        Output: HTMLResponse - the stamped SPA shell.
+        Example: GET /archive/t/5767/l/7111 -> 200 text/html
+        """
+        return HTMLResponse(
+            content=_render_index_html(),
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
+else:
+
+    @app.get("/archive")
+    async def archive_root_disabled() -> RedirectResponse:
+        """Send a visitor to the launchpad; the archive is switched off.
+
+        Inputs: none.
+        Output: RedirectResponse - 302 to "/".
+        Example: GET /archive -> 302 Location: /
+        """
+        return RedirectResponse(url="/", status_code=302)
+
+    @app.get("/archive/{rest:path}")
+    async def archive_deep_link_disabled(rest: str) -> RedirectResponse:
+        """Send a deep-link visitor to the launchpad; the archive is off.
+
+        Inputs: rest (str) - the remainder of the archive path, ignored.
+        Output: RedirectResponse - 302 to "/".
+        Example: GET /archive/t/5767 -> 302 Location: /
+        """
+        return RedirectResponse(url="/", status_code=302)
+
+
+#: The prefix that proves the archive's HTTP surface is present. One
+#: representative prefix is enough: all three gated routers are mounted
+#: together in a single `if`, so a build where one is present and another
+#: is not is not reachable through this code path.
+_ARCHIVE_ROUTE_PREFIX = "/api/v1/archive/"
+
+
+def _archive_routes_mounted() -> Optional[bool]:
+    """Measure whether this process actually serves the archive's routes.
+
+    Description: reads the OpenAPI path table, which is FastAPI's own
+      flattened view of what the application serves. It is deliberately
+      NOT a walk over ``app.routes``: FastAPI 0.141 records an included
+      router as an ``_IncludedRouter`` entry with no ``path`` attribute
+      rather than flattening it, so a naive walk finds NOTHING for any
+      included router and reports a mounted surface as absent - a
+      confident, wrong answer, and the first cut of this function did
+      exactly that. It is also not derived from ``MESSAGE_ARCHIVE``: a
+      value copied from the flag would tell the caller what the flag says
+      twice and measure nothing.
+    Inputs: none.
+    Output: True when at least one archive route is served, False when
+      none is, and None when the schema could not be built - a third
+      outcome, never folded into False, because "I could not look" is not
+      "it is not there".
+    Example: _archive_routes_mounted() -> False
+    """
+    try:
+        paths = app.openapi().get("paths", {})
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return any(str(path).startswith(_ARCHIVE_ROUTE_PREFIX) for path in paths)
+
+
+@app.get("/api/v1/features")
+async def features(_: str = Depends(require_auth)) -> JSONResponse:
+    """Report which optional subsystems this PROCESS actually has.
+
+    Description: the one endpoint that always exists whether the message
+      archive is on or off, which is what makes "off" and "on but broken"
+      distinguishable from a client. It reports THREE states, never a
+      bool: ``enabled``, ``disabled`` and ``cannot_determine``, the last
+      meaning the switch itself could not be read (unparseable config, an
+      env override set to a word this build does not recognise). A client
+      that collapses ``cannot_determine`` into ``disabled`` reintroduces
+      exactly the false green this shape exists to prevent.
+
+      ``routes_mounted`` IS MEASURED, NOT DERIVED. It reports what this
+      process did at import time by looking at the live route table, so a
+      config.json edited after boot cannot make this endpoint claim a
+      surface that is not there. When ``state`` says enabled and
+      ``routes_mounted`` is false, the answer is "restart the server",
+      and the payload says so in ``restart_required``.
+    Inputs: none (auth required, same as every other /api/v1 route).
+    Output: JSONResponse - {"message_archive": {state, source, reason,
+      routes_mounted, restart_required, env_override}}.
+    Example: GET /api/v1/features -> {"message_archive": {"state":
+      "disabled", ...}}
+    """
+    mounted = _archive_routes_mounted()
+    return JSONResponse(
+        content={
+            "message_archive": {
+                "state": MESSAGE_ARCHIVE.state,
+                "source": MESSAGE_ARCHIVE.source,
+                "reason": MESSAGE_ARCHIVE.reason,
+                "routes_mounted": mounted,
+                "restart_required": (
+                    None if mounted is None
+                    else MESSAGE_ARCHIVE.enabled != mounted
+                ),
+                "env_override": MESSAGE_ARCHIVE_ENV,
+            }
+        }
     )
 
 

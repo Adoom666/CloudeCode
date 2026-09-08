@@ -184,11 +184,33 @@ test('dotHtml escapes its interpolations too', () => {
     // found this exact raw-interpolation shape already shipped once.
     const html = StatusUI.dotHtml('question');
     assert.ok(html.includes('status-dot--question'));
-    assert.equal(rawAttr(html, 'aria-label'), 'your turn - claude is waiting on you');
+    assert.equal(
+        rawAttr(html, 'aria-label'),
+        'your turn - claude needs your permission',
+    );
     // An unknown status must not leak the caller's raw string into markup.
     const unknown = StatusUI.dotHtml('<script>');
     assert.ok(!unknown.includes('<script>'));
     assert.ok(unknown.includes('status-dot--unknown'));
+});
+
+test('question and notice are separate keys with separate labels', () => {
+    // The 2026-09-08 split. `question` is a PermissionRequest (the agent
+    // is stopped); `notice` is a Notification (it is not). A shared
+    // label would put the split back where the user cannot see it.
+    const q = StatusUI.dotHtml('question');
+    const n = StatusUI.dotHtml('notice');
+    assert.ok(n.includes('status-dot--notice'));
+    assert.equal(
+        rawAttr(n, 'aria-label'),
+        'your turn - claude wants your attention',
+    );
+    assert.notEqual(rawAttr(q, 'aria-label'), rawAttr(n, 'aria-label'));
+    // Two distinct legacy classes as well, so the fallback path this
+    // harness exercises (status-led.js absent) still tells them apart.
+    // The (inner, outer) mapping is asserted in test_status_led.node.mjs,
+    // which is the file that loads the LED module.
+    assert.ok(q.includes('status-dot--question'));
 });
 
 await runQueue();

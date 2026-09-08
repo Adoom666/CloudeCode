@@ -1,0 +1,19 @@
+{
+  "result": null,
+  "result_status": "cannot_determine",
+  "scope_status": "resolved",
+  "unevaluated": [
+    {
+      "subject": "cursor",
+      "reason": "transcripts cursor did not decode as base64url: Invalid base64-encoded string: number of data characters (9) cannot be 1 more than a multiple of 4"
+    }
+  ],
+  "meta": {
+    "paging": {
+      "limit": 5,
+      "returned": 0,
+      "has_more": null,
+      "next_cursor": null
+    }
+  }
+}

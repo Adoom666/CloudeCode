@@ -1,0 +1,14 @@
+{
+ "meta": {
+  "stream_href": "/api/v1/archive/transcripts/5767/export"
+ },
+ "result": null,
+ "result_status": "cannot_determine",
+ "scope_status": "resolved",
+ "unevaluated": [
+  {
+   "reason": "raw_byte_length 91950363 exceeds VERIFY_BEFORE_SEND_MAX_BYTES 8388608; buffering it would peak near 1052 MB. Stream it and check the expected sha256 instead.",
+   "subject": "transcript:5767"
+  }
+ ]
+}

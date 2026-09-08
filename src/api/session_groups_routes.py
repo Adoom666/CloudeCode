@@ -74,6 +74,14 @@ class SessionGroupModel(BaseModel):
     members: List[str] = Field(
         default_factory=list, description="tmux names filed in this group"
     )
+    member_session_uuids: List[str] = Field(
+        default_factory=list,
+        description=(
+            "sessions.session_uuid of every member, in the group's stored "
+            "order. THE COMPLETE MEMBERSHIP: an imported conversation has "
+            "no tmux name, so it appears here and not in `members`."
+        ),
+    )
 
 
 class SessionGroupsResponse(BaseModel):
@@ -111,6 +119,20 @@ class AssignRequest(BaseModel):
 
     tmux_name: str
     group_uuid: Optional[str] = None
+
+
+class MemberOrderRequest(BaseModel):
+    """The WHOLE desired order WITHIN one group, by durable key.
+
+    Same contract as ``ReorderRequest`` one level down, and by
+    ``session_uuid`` rather than tmux name for the reason the v24 re-key
+    exists: two sessions can share a name, and an imported one has none.
+    A uuid that is not a member of this group is IGNORED - reordering is
+    not filing, and a reorder that could also assign would let a drag
+    inside one group silently steal a row out of another.
+    """
+
+    session_uuids: List[str]
 
 
 class ReorderRequest(BaseModel):
@@ -160,6 +182,7 @@ def _to_models(groups: List[store.SessionGroup]) -> List[SessionGroupModel]:
             name=g.name,
             position=g.position,
             members=list(g.members),
+            member_session_uuids=list(g.member_session_uuids),
         )
         for g in groups
     ]
@@ -212,7 +235,8 @@ async def _write(operation, *args, **kwargs):
       args, kwargs - passed through after the connection.
     Output: whatever ``operation`` returns.
     Raises: HTTPException - 400 invalid name, 404 no such group,
-      409 group limit reached, 503 datastore unavailable.
+      409 group limit reached OR a tmux name with no stored session,
+      503 datastore unavailable.
     """
 
     def _run():
@@ -226,6 +250,8 @@ async def _write(operation, *args, **kwargs):
     except store.GroupNameInvalid as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except store.GroupLimitReached as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except store.SessionNotStored as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except (DatastoreUnreadableError, store.GroupsUnavailable) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -314,9 +340,36 @@ async def assign_session_group(body: AssignRequest) -> SessionGroupsResponse:
     Description: the single write behind ALL THREE ways to move a
       session - the pointer drag, the row menu's group picker, and the
       keyboard picker - so they cannot come to mean different things.
-    Raises: HTTPException 400 (empty tmux_name), 404 (no such group), 503.
+      A tmux name this datastore holds NO sessions row for is a 409, not
+      a silent success: since v24 the membership is keyed on
+      ``sessions.session_uuid``, so a name with no row behind it has no
+      durable identity to be filed under. Answering 200 would show the
+      user a group he made that is gone after a reload.
+    Raises: HTTPException 400 (empty tmux_name), 404 (no such group),
+      409 (the name resolves to no stored session), 503.
     """
     await _write(store.assign, body.tmux_name, body.group_uuid)
+    return await list_session_groups()
+
+
+@router.post(
+    "/{group_uuid}/order",
+    response_model=SessionGroupsResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def reorder_group_members(
+    group_uuid: str, body: MemberOrderRequest
+) -> SessionGroupsResponse:
+    """Rewrite the order of the conversations INSIDE one group.
+
+    Description: durable, shared and stored, unlike the per-device
+      fallback sort it replaces for grouped rows. Takes the whole order
+      rather than a move-one-step delta for the same reason the group
+      order does - a delta lets the client and the database disagree
+      about the result of a sequence of moves.
+    Raises: HTTPException 404 (no such group), 503.
+    """
+    await _write(store.set_member_order, group_uuid, body.session_uuids)
     return await list_session_groups()
 
 

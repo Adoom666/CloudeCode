@@ -172,14 +172,14 @@
      * Output: Promise<void>.
      */
     async function deleteWrapper(id) {
-        if (!window.confirm('delete wrapper "' + id + '"? this cannot be undone.')) return;
+        if (!window.confirm('remove wrapper "' + id + '"? this cannot be undone.')) return;
         try {
             applyResult(await window.API.deleteWrapper(id));
             await refreshFamilies();
             rerender();
         } catch (err) {
-            console.error('AgentWrappersPanel: delete failed', err);
-            window.alert('delete failed: ' + (err && err.message ? err.message : 'unknown error'));
+            console.error('AgentWrappersPanel: remove failed', err);
+            window.alert('remove failed: ' + (err && err.message ? err.message : 'unknown error'));
         }
     }
 

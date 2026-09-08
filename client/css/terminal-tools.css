@@ -61,8 +61,25 @@
  * and cleared by hideAllScreens() before any other screen is activated,
  * so this reliably scopes both buttons to live sessions. Neither one
  * names anything on a screen with no session attached. */
+/* THE ARCHIVE IS THE THIRD SCREEN WITH NO SESSION ATTACHED, so it joins
+ * the list rather than getting a workaround.
+ *
+ * MEASURED at 1440x900 before this line: .archive-screen__export-btn
+ * occupied x 1348-1430 / y 97-128 and .session-editor-fab (z-index 60)
+ * occupied x 1375-1420 / y 74-119 - a 45x22px overlap sitting on the
+ * middle of the Export label, which is why every screenshot of that
+ * toolbar read "Ex####t".
+ *
+ * The alternative was right-padding on .archive-screen__tools equal to
+ * the FAB's footprint. That was rejected: it moves the collision without
+ * removing it, and it leaves a session-scoped control - the one that
+ * configures a session's theme, music and detach - floating over a
+ * screen that has no session for it to act on. Hiding it is the same
+ * reasoning that already applies to the launchpad and the auth screen,
+ * stated once in one selector list. */
 body:has(#launchpad-screen.active) .fab-menu-btn,
-body:has(#auth-screen.active) .fab-menu-btn {
+body:has(#auth-screen.active) .fab-menu-btn,
+body:has(#archive-screen.active) .fab-menu-btn {
     display: none !important;
 }
 

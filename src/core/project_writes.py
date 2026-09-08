@@ -35,30 +35,71 @@ from src.core.db import table_exists, transaction
 from src.core.db_models import PROJECT_SOURCE_USER
 from src.core.project_store import PROJECTS_TABLE, normalize_root
 from src.core.project_tombstones import clear_tombstone, record_tombstone
+from src.core.session_project_binding import backfill_sessions_under_root
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
 
-# Most-recently-opened first.
+# MOST-RECENTLY-WORKED-IN FIRST. Not most-recently-OPENED, which is what
+# this used to be and what the user asked to have taken away.
 #
-# The leading ``(last_opened_at IS NULL) ASC`` term is REDUNDANT and is
-# kept deliberately. SQLite treats NULL as smaller than every value, so
-# under ``DESC`` it already sorts NULLs last, which is what this wants -
-# verified empirically over 300 randomised populations, not assumed. The
-# term is retained because the ordering rule "never-opened rows go to the
-# bottom" is the intent, and leaving it implicit in one engine's NULL
-# collation makes the next reader derive it from SQLite trivia. Do not
-# read its presence as a claim that SQLite would otherwise get it wrong.
+# THE DEFECT. The list is read as a TIMELINE: he scans down it to recall
+# what he has in flight. It was ordered by ``last_opened_at``, which is
+# written by POST /sessions - i.e. by CLICKING a project. So looking at a
+# project hoisted it to the top, and reading the list destroyed the thing
+# the list was being read for.
 #
-# ``id ASC`` breaks the tie for never-opened rows, which is config.json's
-# original array order.
+# THE KEY IS A ROLL-UP, because a project does no work of its own; its
+# SESSIONS do. ``work_at`` is MAX(sessions.last_work_at) over the rows
+# attributed to this project, which is exactly "work done at or below
+# this project". ``sessions.last_work_at`` is stamped only from Claude
+# Code hook events that mean the conversation DID something - see
+# src/core/session_work_stamp.py and claude_hooks.WORK_EVENTS.
 #
-# ``last_opened_at`` and NOT ``updated_at``: the presence probe writes
-# updated_at on every plain page load, so ordering by it would sort the
-# launcher by "last probed" while claiming to sort by "last opened".
-_ORDER_BY = (
-    "ORDER BY (last_opened_at IS NULL) ASC, last_opened_at DESC, id ASC"
+# ``last_opened_at`` IS DELIBERATELY LEFT IN THE SCHEMA AND STILL
+# WRITTEN. It is a genuine fact about a project and other code may want
+# it; it simply no longer decides the order. Removing the column to make
+# the point would have been a schema change with no reader asking for it.
+#
+# WHERE UNKNOWN SORTS, STATED OUT LOUD. A project with no recorded work -
+# no session has ever produced a work event under it, which is true of
+# every project on the first run after the v23 migration - has
+# ``work_at`` NULL. That is a THIRD OUTCOME, not a zero: those rows sort
+# BELOW every project that has a value, and among themselves by ``id
+# ASC``, which is the original config.json array order. They are also
+# labelled as unrecorded on screen rather than blended into the tail of
+# the worked rows (see client/js/launchpad.js).
+#
+# The leading ``(work_at IS NULL) ASC`` term is REDUNDANT under SQLite's
+# NULL collation and is kept deliberately, for the same reason the
+# ``last_opened_at`` version of this comment gave: the rule "unrecorded
+# rows go to the bottom" is the intent, and leaving it implicit in one
+# engine's trivia makes the next reader derive it.
+_ORDER_BY = "ORDER BY (work_at IS NULL) ASC, work_at DESC, id ASC"
+
+#: The roll-up itself, as a correlated subquery aliased ``work_at``.
+#:
+#: A CORRELATED SUBQUERY AND NOT A JOIN, and the reason is the recurring
+#: one in this codebase: a JOIN can only describe rows that exist. A
+#: project with no sessions at all, or whose sessions have never worked,
+#: must still appear in this list - it would simply vanish from an inner
+#: join and be indistinguishable from a project that was deleted.
+_WORK_ROLLUP = (
+    "(SELECT MAX(s.last_work_at) FROM sessions s "
+    "WHERE s.project_id = projects.id) AS work_at"
 )
+
+#: The ordering used when the roll-up CANNOT BE COMPUTED - a database old
+#: enough to have no ``sessions`` table (pre-v2) or no ``last_work_at``
+#: column (pre-v23, i.e. mid-migration or a failed one).
+#:
+#: It is ``id ASC``, the config.json array order, and NOT the old
+#: ``last_opened_at`` ordering. Falling back to that would silently
+#: restore the very behaviour the user asked to have removed, on a code
+#: path nobody looks at, and he would have no way to tell which ordering
+#: he was seeing. An unrecorded-work list rendered in a stable, explicable
+#: order is the honest answer when work cannot be read at all.
+_ORDER_BY_NO_WORK_COLUMN = "ORDER BY id ASC"
 
 
 class ProjectWriteError(RuntimeError):
@@ -128,30 +169,77 @@ class ProjectRow:
         )
 
 
+def _work_rollup_available(conn: sqlite3.Connection) -> bool:
+    """Whether MAX(sessions.last_work_at) can be computed on this database.
+
+    Description: true only when the ``sessions`` table exists AND carries
+      ``last_work_at`` (schema v23). Both halves are checked because the
+      two absences are reachable independently: a pre-v2 database has no
+      sessions table at all, and a database mid-migration (or one whose
+      migration failed and left it read-only) has the table without the
+      column. Asking the question before building the SQL is what keeps
+      the fallback a DECISION rather than an OperationalError caught
+      somewhere downstream.
+    Inputs: conn (sqlite3.Connection).
+    Output: bool.
+    Example: _work_rollup_available(conn) -> True
+    """
+    if not table_exists(conn, "sessions"):
+        return False
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    return "last_work_at" in cols
+
+
 def list_projects_ordered(
     conn: sqlite3.Connection, *, include_archived: bool = False
 ) -> List[Dict[str, Any]]:
-    """Return project rows most-recently-opened first.
+    """Return project rows most-recently-WORKED-IN first.
 
     Description: the read behind GET /projects. Distinct from
       ``project_store.list_projects``, which orders by ``id DESC`` and is
       kept unchanged because the presence route and its tests depend on
-      that contract. Two orderings for two callers is worse than one, but
-      silently changing the ordering a shipped endpoint returns is worse
-      than both.
+      that contract.
+
+      THE ORDER KEY IS WORK, NOT OPENING. Each row carries ``work_at`` =
+      MAX(``sessions.last_work_at``) over the sessions attributed to it,
+      and rows sort by that. Clicking, opening, attaching or deep-linking
+      to a project changes nothing here. See the ``_ORDER_BY`` block
+      above for the full reasoning and for where an unrecorded project
+      sorts.
+
+      ``work_at`` IS RETURNED ON EVERY ROW, including as None. The client
+      needs it to LABEL a project whose work has never been recorded, and
+      a client that cannot tell "no work yet" from "worked on long ago"
+      would render the two identically - which is the collapse the whole
+      ordering change exists to undo.
     Inputs: conn (sqlite3.Connection). include_archived (bool) - when
       False (default), rows with a non-null ``archived_at`` are omitted.
-    Output: list[dict] - empty list when the table does not exist yet,
-      never an exception, matching ``list_projects``.
+    Output: list[dict] - each row plus ``work_at`` (str | None). Empty
+      list when the table does not exist yet, never an exception,
+      matching ``list_projects``.
     Example: list_projects_ordered(conn)[0]["display_name"]
     """
     if not table_exists(conn, PROJECTS_TABLE):
         return []
-    query = "SELECT * FROM projects"
+    have_work = _work_rollup_available(conn)
+    if have_work:
+        query = "SELECT projects.*, " + _WORK_ROLLUP + " FROM projects"
+    else:
+        query = "SELECT * FROM projects"
     if not include_archived:
         query += " WHERE archived_at IS NULL"
-    query += " " + _ORDER_BY
-    return [dict(row) for row in conn.execute(query).fetchall()]
+    query += " " + (_ORDER_BY if have_work else _ORDER_BY_NO_WORK_COLUMN)
+    rows = [dict(row) for row in conn.execute(query).fetchall()]
+    if not have_work:
+        # NAMED, NOT INFERRED. Without the column there is no work
+        # history to report, and the caller must be able to tell that
+        # from "every project genuinely has none" only by asking - so
+        # every row carries the key explicitly as None rather than
+        # lacking it, which would make the client's `.get()` produce the
+        # same value for two different situations.
+        for row in rows:
+            row["work_at"] = None
+    return rows
 
 
 def resolve_by_name(
@@ -256,8 +344,25 @@ def create_project(
         # make the next reconcile treat this row's config entry as a
         # deliberate deletion and drop it again.
         clear_tombstone(conn, root)
+        # PUNCHLIST 16, THE OTHER DIRECTION. A session created moments
+        # before its own project row attributed against a projects table
+        # that did not yet contain it and landed ``project_id NULL``,
+        # and nothing ever re-probed. Ordering the two writes fixes the
+        # race one way round; adopting the project-less sessions that
+        # already sit under this new root fixes it the other, so it
+        # cannot land wrong whichever way it resolves. Purely additive:
+        # only rows with NO project are considered, so this can never
+        # move a session off a project it already has.
+        adopted = backfill_sessions_under_root(
+            conn, root=root, project_id=int(new_id), now=stamp
+        )
 
-    logger.info("project_created_in_db", project_id=new_id, root=root)
+    logger.info(
+        "project_created_in_db",
+        project_id=new_id,
+        root=root,
+        sessions_adopted=adopted,
+    )
     return dict(
         conn.execute("SELECT * FROM projects WHERE id = ?", (new_id,)).fetchone()
     )

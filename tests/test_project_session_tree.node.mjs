@@ -34,8 +34,9 @@
 //   .project-node[data-project-name="scrolltest"]  height=107.15625 childCount=0
 //   .project-node[data-project-name="ghost-project" (presence=missing)]
 //     childCount=0, presence badge "MISSING - folder not found" present,
-//     .project-edit-btn / .project-delete-btn both `disabled` (verified
-//     via el.hasAttribute('disabled') on the live DOM)
+//     .project-edit-btn `disabled` (verified via el.hasAttribute(
+//     'disabled') on the live DOM); .project-archive-btn is NEVER
+//     disabled by presence
 //   .project-node--virtual (no project)  height=89, child "cloude_c" height=31 insideParent=true
 //   .project-node--attention (NEEDS ATTENTION)  height=124, child "cloude_d" height=46 insideParent=true
 //
@@ -273,7 +274,12 @@ await test('a missing project still renders with its badge and disabled action b
     assert.ok(projectList.innerHTML.includes('» gone'), 'a missing project must still be listed, never dropped');
     assert.ok(projectList.innerHTML.includes('MISSING - folder not found'));
     assert.match(projectList.innerHTML, /project-edit-btn"[^>]*disabled/);
-    assert.match(projectList.innerHTML, /project-delete-btn"[^>]*disabled/);
+    // Archive is deliberately NEVER disabled by presence - a project
+    // whose folder has gone missing is precisely one a user wants to
+    // archive. There is no hard-delete button on the row any more
+    // (owner's instruction, 2026-09-08: "sessions and projects can be
+    // archived not deleted").
+    assert.doesNotMatch(projectList.innerHTML, /project-archive-btn"[^>]*disabled/);
 });
 
 await test('an unreachable project renders CANNOT DETERMINE with its detail, actions refused', async () => {

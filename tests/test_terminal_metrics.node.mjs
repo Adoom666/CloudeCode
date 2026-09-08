@@ -352,6 +352,95 @@ test('the app shell height uses dvh so the iOS toolbar is tracked', () => {
 });
 
 // ---------------------------------------------------------------------------
+// TerminalMetrics.describeCellMetrics
+//
+// A terminal read 45 rows on reconnect and 41 eight seconds later while
+// #terminal stayed 668px tall throughout: the box never moved, the CELL
+// did (~14.8px to ~16.3px per row). `[TERM-RESIZE]` printed only the row
+// count, so the line could not distinguish those two causes and a whole
+// debugging round was spent on the wrong one. These assertions are about
+// the line carrying enough to tell them apart, and about the diagnostic
+// never being able to break a resize.
+// ---------------------------------------------------------------------------
+
+/**
+ * Description: a controller whose xterm exposes the private render-service
+ *   dimensions describeCellMetrics reads.
+ * Inputs: cell ({width, rows}), opts (object), webgl (boolean).
+ * Output: object - a controller stand-in.
+ */
+function metricsController(cell, opts = {}, webgl = false) {
+    return {
+        _webglAddon: webgl ? {} : null,
+        term: {
+            options: Object.assign(
+                { fontSize: 14, lineHeight: 1, fontFamily: 'ui-monospace, Menlo' },
+                opts),
+            _core: { _renderService: { dimensions: { css: { cell } } } },
+        },
+    };
+}
+
+test('describeCellMetrics reports the numbers that move a row count', () => {
+    const { sandbox } = makeSandbox();
+    const out = sandbox.TerminalMetrics.describeCellMetrics(
+        metricsController({ width: 8.33, height: 14.85 }, {}, true));
+    assert.match(out, /font=14/, 'font size must be in the line');
+    assert.match(out, /lh=1/, 'line height must be in the line');
+    assert.match(out, /cell=8\.33x14\.85/, 'the renderer cell box is the whole point');
+    assert.match(out, /renderer=webgl/,
+        'the WebGL renderer floors the cell to device pixels and the DOM one '
+        + 'does not, so losing the context changes the grid on its own');
+    assert.match(out, /family=ui-monospace/);
+});
+
+test('describeCellMetrics distinguishes the two cell heights from the incident', () => {
+    const { sandbox } = makeSandbox();
+    const before = sandbox.TerminalMetrics.describeCellMetrics(
+        metricsController({ width: 8.33, height: 14.84 }, {}, true));
+    const after = sandbox.TerminalMetrics.describeCellMetrics(
+        metricsController({ width: 8.65, height: 16.29 }, {}, false));
+    assert.notEqual(before, after,
+        'two resizes with different grids must produce different lines, or '
+        + 'the log cannot name what moved');
+    assert.match(before, /renderer=webgl/);
+    assert.match(after, /renderer=dom/);
+});
+
+test('describeCellMetrics also reports the boxes, not only the cell', () => {
+    const { sandbox } = makeSandbox();
+    const out = sandbox.TerminalMetrics.describeCellMetrics(
+        metricsController({ width: 8, height: 16 }, {}, true));
+    // The incident that made this necessary: cell=8x16 on BOTH resize
+    // lines, 45 rows then 41. The cell fields proved it was the box and
+    // could not say which box. These four can.
+    for (const key of ['screen=', 'container=', 'term=', 'info=']) {
+        assert.ok(out.includes(key), `the line must carry ${key}`);
+    }
+});
+
+test('describeBoxHeights degrades rather than throwing without a DOM', () => {
+    const { sandbox } = makeSandbox();
+    const out = sandbox.TerminalMetrics.describeBoxHeights();
+    // This sandbox's document has getElementById/querySelector but no real
+    // layout, so every box reads '?'. A diagnostic must survive that.
+    assert.ok(typeof out === 'string' && out.length > 0);
+    assert.ok(!/undefined/.test(out), 'a log line must never print undefined');
+});
+
+test('describeCellMetrics never throws on an unreadable terminal', () => {
+    const { sandbox } = makeSandbox();
+    const d = sandbox.TerminalMetrics.describeCellMetrics;
+    assert.equal(d(null), 'cell=no-term');
+    assert.equal(d({}), 'cell=no-term');
+    // Private API: a version bump can move _core._renderService. The rest
+    // of the line must still print rather than the whole resize failing.
+    const out = d({ term: { options: { fontSize: 14, lineHeight: 1 } } });
+    assert.match(out, /cell=unreadable/);
+    assert.match(out, /font=14/, 'a partial read must still report what it could');
+});
+
+// ---------------------------------------------------------------------------
 
 await runQueue();
 console.log(`\n${passes} passed, ${failures} failed`);

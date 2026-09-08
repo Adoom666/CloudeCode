@@ -73,6 +73,13 @@ console.log('[Toast Module] Loading...');
  */
 const TOAST_SEVERITY = {
   PermissionRequest: 3,
+  // punchlist 19 - a session parked on an unanswered startup prompt
+  // (folder trust, login). HIGH for the same reason PermissionRequest is:
+  // it is blocking, and unlike a PermissionRequest the user cannot see it
+  // by glancing at the terminal - the whole defect is that the session
+  // looked connected. Being HIGH also makes it cap-exempt, so it can
+  // never be the thing hidden behind "+3 more".
+  StartupPrompt: 3,
   Notification: 2,
   Stop: 1,
 };
@@ -108,6 +115,13 @@ const COALESCE_KEY = {
   Stop: (t) => `${t.session_id}|Stop|${t.title || ''}`,
   Notification: (t) => `${t.session_id}|Notification|${t.title || ''}|${t.body || ''}`,
   PermissionRequest: () => null,
+  // punchlist 19 - coalesces on the SESSION alone. The server already
+  // claims this toast once per tmux instance, so a second one for the
+  // same session should be impossible; this is the belt to that braces.
+  // A session cannot be blocked at two startup prompts at once, so
+  // collapsing them loses nothing - unlike PermissionRequest, where the
+  // second card carries a different command.
+  StartupPrompt: (t) => `${t.session_id}|StartupPrompt`,
 };
 
 class ToastManager {
@@ -343,6 +357,87 @@ class ToastManager {
   }
 
   /**
+   * The user just sent real input to a session, so every toast ABOUT
+   * that session has been answered by the only act that could answer it.
+   *
+   * WHY THIS IS NOT AN AUTO-DISMISS TIMER. The header above says there
+   * is deliberately no dwell timer, and there still is not one. A timer
+   * fires on the passage of time, which is no evidence at all about
+   * whether the user handled anything. This fires on the ONE observable
+   * that is evidence: bytes the user typed into that session's pty.
+   *
+   * WHY IT ACKS RATHER THAN HIDES. Hiding without acking leaves the
+   * record unacked server-side, so the next attach backfill re-delivers
+   * it and the card returns - the "ghost" failure the header names. The
+   * ack is what makes the dismissal stick.
+   *
+   * WHY EVERY KIND, INCLUDING PermissionRequest. The three kinds differ
+   * in urgency, not in what resolves them: a `Stop` says the turn ended,
+   * a `Notification` says Claude is waiting on input, and a
+   * PermissionRequest says Claude is BLOCKED waiting for the user to
+   * answer a prompt on that session's pty. Input to that session is
+   * literally the answer to the third and the response to the other two.
+   * Keeping a blocking card up while the user types the answer into it
+   * is the exact complaint this exists to fix. Note also what is not
+   * being lost: the toast is a notification, never the decision surface
+   * - the prompt itself is in the terminal the user is typing into.
+   *
+   * SCOPED TO ONE SESSION, and that is the whole safety property. A
+   * toast about session A is evidence about session A; typing into
+   * session B says nothing about it and must leave it alone.
+   *
+   * Inputs: sessionId (string) - the session the user typed into.
+   * Output: number - how many toasts were dismissed (0 is the common
+   *   case, and is why this is cheap to call per keystroke).
+   * Example: ToastManager.dismissForSessionActivity('sess-1') -> 2
+   */
+  dismissForSessionActivity(sessionId) {
+    if (!sessionId) return 0;
+    // Snapshot before mutating: `dismiss` deletes from the same Map.
+    const ids = [];
+    for (const [id, toast] of this._byId.entries()) {
+      if (toast && toast.session_id === sessionId) ids.push(id);
+    }
+    for (const id of ids) this.dismiss(id, { syncToServer: true });
+    return ids.length;
+  }
+
+  /**
+   * Dismiss EVERY toast on screen, whatever session it belongs to.
+   *
+   * The explicit counterpart to `dismissForSessionActivity`. That one is
+   * implicit and must therefore be narrow; this one is a deliberate
+   * click on a control that says what it does, so it is deliberately
+   * broad - a stack that piled up across four sessions is exactly the
+   * case the user asked for a single control for.
+   *
+   * NOTHING IS EXEMPT, and that is a decision rather than an oversight.
+   * The cap exempts PermissionRequest because the cap is an automatic
+   * suppression the user never asked for; this is not. A button labelled
+   * "Dismiss all" that silently left cards behind would read as broken,
+   * and the user would click it twice looking for the bug. What keeps
+   * this honest instead is disclosure: `_renderDismissAll` names the
+   * blocking prompts in the control's own accessible label BEFORE the
+   * click, so nothing is cleared unannounced. And a dismissed
+   * PermissionRequest costs the notification only - the prompt itself is
+   * still sitting in that session's terminal, and the session's own
+   * status surface still shows it waiting.
+   *
+   * IT CLEARS, IT DOES NOT MUTE. There is no suppression flag anywhere
+   * in this path: the next `add()` renders normally.
+   *
+   * Output: number - how many toasts were dismissed.
+   */
+  dismissAll() {
+    const ids = Array.from(this._byId.keys());
+    for (const id of ids) this.dismiss(id, { syncToServer: true });
+    // The cap is a view state, not a toast; an emptied stack must not
+    // come back expanded.
+    this._expanded = false;
+    return ids.length;
+  }
+
+  /**
    * Drop all UI state without ack. Used on full logout / page tear-down
    * paths where the server-side ack is irrelevant.
    */
@@ -406,7 +501,12 @@ class ToastManager {
       }
     }
 
-    let prev = null;
+    // The dismiss-all control is placed FIRST and then used as the
+    // anchor every card positions itself after. Rendering it last and
+    // hoisting it to the front instead would move two nodes on every
+    // render even when nothing changed, and a moved node restarts its
+    // transition.
+    let prev = this._renderDismissAll(groups, container);
     for (const group of visible) {
       const el = this._renderCard(group, container);
       // Order matters and groups are re-sorted on every render, so place
@@ -420,6 +520,59 @@ class ToastManager {
     }
 
     this._renderOverflow(hidden, container, prev);
+  }
+
+  /**
+   * Create, update or remove the single "Dismiss all" control.
+   *
+   * SHOWN ONLY WHEN IT HELPS. With one toast on screen the card's own x
+   * is already one click, so a second control would be pure chrome. The
+   * threshold is the TOAST count, not the group count: ten coalesced
+   * `Stop`s render as one card but are ten records, and clearing them is
+   * exactly the "several have stacked up" case.
+   *
+   * PLACED FIRST, above every card. It acts on the whole stack, and a
+   * control that governs a list belongs at the head of it; putting it
+   * under the overflow row would also move it every time the stack grew.
+   *
+   * IT SAYS WHAT IT WILL CLEAR. When the stack holds blocking prompts
+   * the accessible label names them, so the one kind whose loss could
+   * matter is disclosed before the click rather than after it.
+   *
+   * Inputs: groups (array) from `_groups()`; container (HTMLElement).
+   * Output: HTMLElement|null - the control, for use as a placement
+   *   anchor by the caller. null when the stack is too small to warrant
+   *   one.
+   */
+  _renderDismissAll(groups, container) {
+    const total = groups.reduce((n, g) => n + g.count, 0);
+    let row = container.querySelector('.toast-dismiss-all');
+    if (total < 2) {
+      if (row) row.remove();
+      return null;
+    }
+    if (!row) {
+      row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'toast-dismiss-all';
+      row.addEventListener('click', () => this.dismissAll());
+    }
+    const blocking = groups
+      .filter((g) => g.severity >= CAP_EXEMPT_SEVERITY)
+      .reduce((n, g) => n + g.count, 0);
+    const label = blocking
+      ? `Dismiss all ${total} notifications, including ${blocking} `
+        + `waiting on your permission`
+      : `Dismiss all ${total} notifications`;
+    row.dataset.total = String(total);
+    row.dataset.blocking = String(blocking);
+    row.setAttribute('aria-label', label);
+    row.setAttribute('title', label);
+    row.textContent = `Dismiss all (${total})`;
+    if (container.firstChild !== row) {
+      container.insertBefore(row, container.firstChild);
+    }
+    return row;
   }
 
   /**

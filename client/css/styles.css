@@ -142,6 +142,16 @@
     /* Gap between two adjacent FABs. */
     --fab-gap: 12px;
 
+    /* The project tree's left gutter (`.project-node__row`,
+     * `.project-node__sessions`): wide enough for the collapse chevron
+     * plus a right-aligned three-digit session count, so every project
+     * card's left edge lines up whether it shows "1" session or "999",
+     * and every child session row indents to the same edge. ONE number -
+     * see the `.project-node__row` grid and `.project-node__sessions`
+     * margin below, both of which read this instead of restating a
+     * pixel value that would drift out of sync with the other. */
+    --project-gutter: 52px;
+
     /* THE BOTTOM ROW hovers over the command line. One slot is one
      * button plus one gap, so the slot tokens are the only place a
      * horizontal offset is ever written.
@@ -230,6 +240,14 @@
 }
 
 /* Base styles */
+/* Height reserved for the terminal screen's bottom bar (`.info`), so
+ * that populating it late can never resize the terminal above it. Named
+ * because the value is asserted in tests/test_terminal_resize_settle
+ * .node.mjs; see the block comment on `.info` for why it exists. */
+:root {
+    --terminal-bar-height: 43px;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -480,6 +498,28 @@ h1:hover {
 
 .header--home {
     --home-header-flank-w: calc(var(--control-size) * 2 + 8px);
+}
+
+/* THREE INLINE CONTROLS WHEN THE ARCHIVE ICON IS SHOWING, TWO WHEN IT IS
+ * NOT - and the flank has to track that, not pick one and be wrong half
+ * the time. `#archiveBtn` moved out of the header overflow into the
+ * inline row (header-menu.js, HEADER_INLINE_CONTROL_IDS), but it is
+ * still gated on the message-archive feature switch: `_wireArchive()`
+ * sets `el.hidden = true` at wire time and clears it only once the
+ * server has been measured as ENABLED. So on a server with the archive
+ * off, `.controls` really is two buttons wide and a hardcoded three-slot
+ * spacer would push the title off-centre by half a control - the same
+ * defect, in the other direction, that the two-not-three note above
+ * records.
+ *
+ * `[hidden]` is the right hook because it is what the JS actually
+ * writes, and the attribute reflects the property, so the selector
+ * re-evaluates the moment the probe resolves. Keyed on `:has()`, already
+ * used by the sidebar-toggle rule below, so this adds no new
+ * requirement. Gap is 8px (`.controls`), hence one more control plus one
+ * more gap. */
+.header--home:has(#archiveBtn:not([hidden])) {
+    --home-header-flank-w: calc(var(--control-size) * 3 + 16px);
 }
 
 .header--home .header-home-spacer {
@@ -1047,6 +1087,9 @@ body.home-header-active {
     flex: 1;
     padding: 15px;
     overflow: hidden;
+    /* Positioning context for #localServersContainer, which is an overlay
+     * so that showing it can never resize #terminal. See .local-servers. */
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1111,6 +1154,32 @@ body.home-header-active {
     border-top: 1px solid var(--color-border);
     font-size: 12px;
     color: var(--color-fg-muted);
+
+    /* RESERVED HEIGHT, AND THE REASON IT MUST BE RESERVED.
+     *
+     * This bar is the last in-flow sibling of `.terminal-container` in
+     * `#terminal-screen`, so every pixel it takes is a pixel `#terminal`
+     * does not get. Its contents arrive LATE and from three different
+     * places: `#sessionInfo` is written when the session id and pid are
+     * known, `#terminal-bar-status-text` is filled by App._syncStatusLabel
+     * from `#statusText`'s data-status, and the status dot itself is a
+     * node App._placeStatusLight RE-PARENTS into `#terminal-bar-status`
+     * on every screen transition. An unpopulated bar is shorter than a
+     * populated one, so the bar grew several seconds after connect and
+     * stole rows from the terminal.
+     *
+     * That is not a cosmetic reflow. tmux answers a row change with
+     * SIGWINCH and claude answers that with ESC[2J, which on the
+     * alternate screen erases the whole visible conversation - measured
+     * 45 rows to 41 with the cell size unchanged at 8x16 throughout, so
+     * the box moved and nothing else did.
+     *
+     * Reserving the height makes the bar the same size empty as full, so
+     * nothing it does can reach the terminal. `min-height` rather than
+     * `height` so a genuinely taller content (a wrapped long session id)
+     * still grows rather than being clipped - that is a real layout
+     * change, not a transient one. */
+    min-height: var(--terminal-bar-height);
 }
 
 #sessionInfo {
@@ -1129,9 +1198,38 @@ body.home-header-active {
 /* clickable URL on the right. No CRUD affordances - display-only.       */
 /* ---------------------------------------------------------------------- */
 .local-servers {
+    /* AN OVERLAY, NOT A ROW IN THE COLUMN. This panel is toggled between
+     * `none` and `block` by Terminal#_renderLocalServers every time the
+     * local-servers fetch resolves and on every `local_server_detected` /
+     * `local_server_lost` websocket event - so it appears and disappears
+     * seconds after a connect, on its own schedule.
+     *
+     * While it was an in-flow sibling of `.terminal-container` it stole
+     * about four rows of height from `#terminal` each time it appeared
+     * and gave them back when it went. The ResizeObserver correctly read
+     * that as a real geometry change, shipped a pty_resize, tmux raised
+     * SIGWINCH, and claude answered with `ESC[2J` + a full redraw. On the
+     * alternate screen that erases the whole visible conversation, which
+     * is exactly what a user saw a few seconds after every reconnect:
+     * `215x45 source=ResizeObserver` then `215x41` eight seconds later.
+     * A panel listing dev servers must not be able to wipe the terminal.
+     *
+     * Out of flow inside `.terminal-container` (which is `position:
+     * relative` for this), so `#terminal` keeps the full height at all
+     * times and the observer never sees it move. It still shows nothing
+     * when there are no servers, so it covers output only when it has
+     * something to say. */
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    max-height: 40%;
+    overflow-y: auto;
     background: var(--color-bg-card);
     padding: 14px 20px 16px;
     border-top: 1px solid var(--color-border);
+    box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28);
 }
 
 .local-servers h3 {
@@ -1342,6 +1440,20 @@ body.home-header-active {
     font-weight: bold;
 }
 
+/* The projects heading AND the recent-sessions heading each carry a
+ * second control (show archived), so both become a row: the toggle
+ * button hugs the left edge, the archived control hugs the right.
+ * Scoped to these two sections so no other section's heading layout
+ * moves. Recent used to be missing from this list, which is why its
+ * "show archived" control rendered on its own line below the heading
+ * instead of composing with it the way the projects one does. */
+#projects-section .launchpad-section-title,
+#recent-sessions-section .launchpad-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 /* Heading row variant: text hugs left, inline action button hugs right.
  * Used by the "running sessions" section so the + speed-dial sits beside
  * the heading instead of floating in the chrome. */
@@ -1482,7 +1594,11 @@ body.home-header-active {
      * list that accumulates). */
     border: 1px solid var(--color-border);
     box-shadow: inset 3px 0 0 var(--color-accent);
-    padding: 14px 40px 14px 16px;
+    /* Right padding clears the inline action buttons: pencil at right:8,
+     * archive at right:40 - the hard-delete trash button that used to
+     * sit at right:8 (pushing these two out to 40/72) is gone from the
+     * UI, so 72px is the width actually needed, not 104px. */
+    padding: 14px 72px 14px 16px;
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: all 0.3s ease;
@@ -1518,46 +1634,18 @@ body.home-header-active {
     line-height: 1.4;
 }
 
-/* Edit + delete are ALWAYS rendered and ALWAYS visible (no `:hover`-only
+/* Edit + archive are ALWAYS rendered and ALWAYS visible (no `:hover`-only
  * reveal anywhere in this file) so they are reachable on touch devices
  * with no hover state at all - the user drives this from a phone. See
  * the `@media (pointer: coarse)` block below for the touch-specific
- * hit-area bump. */
-.project-delete-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-fg-muted);
-    border: 1px solid transparent;
-    font-size: 24px;
-    line-height: 1;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
-
-.project-delete-btn:hover {
-    background: var(--color-danger-bg-hover);
-    color: var(--color-danger);
-    border-color: var(--color-danger);
-    box-shadow: 0 0 8px var(--color-danger-glow);
-    transform: scale(1.1);
-}
-
-/* Edit (pencil) button - sits immediately left of the delete ×. Calm
- * neutral default, amber on hover so it never competes with the
- * destructive red of delete. */
+ * hit-area bump. A hard-delete trash button used to sit at right:8; it
+ * is gone from the UI, and this rule's neighbours shifted in to fill
+ * its slot (owner's instruction, 2026-09-08: "sessions and projects can
+ * be archived not deleted"). */
 .project-edit-btn {
     position: absolute;
     top: 8px;
-    right: 40px;
+    right: 8px;
     width: 28px;
     height: 28px;
     border-radius: var(--radius-md);
@@ -1628,8 +1716,11 @@ body.home-header-active {
     box-shadow: inset 3px 0 0 var(--color-warning);
 }
 
-.project-presence-disabled .project-edit-btn,
-.project-presence-disabled .project-delete-btn {
+/* NOT `.project-archive-btn` - deliberately excluded, same reasoning as
+ * the JS comment above its markup (launchpad.js _projectListHtml()): a
+ * project whose folder has gone missing is precisely one a user wants
+ * to archive. */
+.project-presence-disabled .project-edit-btn {
     opacity: 0.35;
     cursor: not-allowed;
     pointer-events: none;
@@ -1658,6 +1749,123 @@ body.home-header-active {
     border: 1px solid var(--color-warning-border);
 }
 
+/* Archive / restore button - sits immediately left of the pencil, and is
+ * the only destructive-shaped control on the row now that the hard-
+ * delete trash button is gone (owner's instruction, 2026-09-08:
+ * "sessions and projects can be archived not deleted"). Deliberately
+ * calm: archiving is reversible and routine. */
+.project-archive-btn {
+    position: absolute;
+    top: 8px;
+    right: 40px;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-fg-muted);
+    border: 1px solid transparent;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.project-archive-btn:hover {
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--color-accent, #6cf);
+    border-color: var(--color-accent, #6cf);
+    transform: scale(1.1);
+}
+
+/* AN ARCHIVED ROW MUST NOT LOOK LIKE A LIVE ONE. Three signals, not
+ * one, because any single one of them can be defeated by a theme: a
+ * dimmed card, a dashed (not solid) border, and the literal word
+ * ARCHIVED in the badge below. Colour alone would also fail anyone who
+ * cannot distinguish it. */
+.project-item--archived {
+    opacity: 0.62;
+    border-style: dashed;
+}
+
+.project-item--archived:hover {
+    opacity: 0.85;
+}
+
+.project-archived-badge {
+    margin-top: 8px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 0.72rem;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    display: inline-block;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.06));
+    border: 1px dashed var(--color-fg-muted);
+}
+
+/* The archived dimension's status line. See
+ * launchpad.js::_renderArchivedNoticeHtml - it has three states and the
+ * "could not determine" one has to be visibly different from the plain
+ * count, or the whole point of separating them is lost on screen. */
+.project-archived-notice {
+    margin: 4px 0 10px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    color: var(--color-fg-muted);
+    border-left: 2px solid var(--color-fg-muted);
+}
+
+.project-archived-notice--unknown {
+    color: var(--color-warning);
+    background: var(--color-warning-bg);
+    border-left: 2px solid var(--color-warning);
+}
+
+/* Show-archived toggle in the projects section heading. */
+.launchpad-archived-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--color-fg-muted);
+    font-size: 0.72rem;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.launchpad-archived-toggle:hover {
+    color: var(--color-fg, #ddd);
+    border-color: var(--color-fg-muted);
+}
+
+.launchpad-archived-toggle__box {
+    width: 10px;
+    height: 10px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+.launchpad-archived-toggle.is-on {
+    color: var(--color-accent, #6cf);
+    border-color: var(--color-accent, #6cf);
+}
+
+.launchpad-archived-toggle.is-on .launchpad-archived-toggle__box {
+    background: currentColor;
+}
+
 /* Touch hit-area bump. `pointer: coarse` covers phones/tablets - no
  * `:hover` involved, since a coarse pointer generally can't hover at
  * all. 44px is the standard minimum touch target (Apple HIG / WCAG
@@ -1665,20 +1873,20 @@ body.home-header-active {
  * buttons never overlap the description text. */
 @media (pointer: coarse) {
     .project-item {
-        padding-right: 96px;
+        padding-right: 92px;
     }
 
-    .project-delete-btn,
-    .project-edit-btn {
+    .project-edit-btn,
+    .project-archive-btn {
         width: 40px;
         height: 40px;
     }
 
-    .project-delete-btn {
+    .project-edit-btn {
         right: 4px;
     }
 
-    .project-edit-btn {
+    .project-archive-btn {
         right: 48px;
     }
 }
@@ -2479,9 +2687,13 @@ body.home-header-active {
     max-width: 640px;
 }
 
-/* Editable path / address bar. Behaves like a browser address field:
-   single line, monospace, accent glow on focus, mkdir-on-Enter feedback
-   surfaced just below in .folder-picker-status. */
+/* Editable path / address bar (folder-picker-modal.js) AND the
+   read-only path display reused for project modals (launchpad.js). The
+   input carries `.modal-input` alongside this class, which already
+   supplies identical :focus and ::placeholder treatment, so this rule
+   only needs the wrap fix - a long iCloud path has no spaces for the
+   browser to break on, so without word-break it ran past the edge of
+   the box instead of wrapping. Mirrors .folder-picker-status below. */
 .folder-picker-path {
     width: 100%;
     background: var(--color-bg-elevated);
@@ -2493,17 +2705,9 @@ body.home-header-active {
     padding: 10px 12px;
     margin-bottom: 10px;
     cursor: text;
+    overflow-wrap: break-word;
+    word-break: break-all;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.folder-picker-path:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: 0 0 8px var(--color-accent-glow);
-}
-
-.folder-picker-path::placeholder {
-    color: var(--color-fg-subtle);
 }
 
 /* Inline feedback under the path bar (mkdir success / browse errors). */
@@ -4489,25 +4693,46 @@ body.home-header-active {
     flex-direction: column;
 }
 
+/* Two fixed columns, not a flex row: `--project-gutter` first, the card
+ * second. A flex row sized the gutter to its own content (chevron plus
+ * whatever width the count digits happened to need), so "1" and "100"
+ * produced two different gutter widths and every card after them
+ * started at a different x. Grid makes the first column's width a
+ * constant instead of a measurement. */
 .project-node__row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--project-gutter) 1fr;
     align-items: flex-start;
-    gap: 6px;
 }
 
 .project-node__row .project-item {
-    flex: 1;
+    min-width: 0;
+}
+
+/* Always rendered, even when the project has nothing to fold
+ * (renderProjectList() then leaves it empty). A grid row with only ONE
+ * child auto-places that child into the FIRST column, not the second -
+ * so a foldless project's card would land under the gutter instead of
+ * beside it. This element is what keeps the grid at two children, and
+ * therefore the card at column two, whether or not a toggle is inside
+ * it. */
+.project-node__gutter {
     min-width: 0;
 }
 
 /* Chevron toggle for a project's child sessions. A project with zero
  * matched running sessions never renders this button at all - there is
- * nothing to expand, so no control is drawn (see renderProjectList()). */
+ * nothing to expand, so no control is drawn (see renderProjectList()).
+ * `width: 100%` fills its fixed-width `.project-node__gutter` column so
+ * the count (see `.project-node__count` below) has a constant right
+ * edge to align against, whether the chevron stands alone or the count
+ * chip sits beside it. */
 .project-node__toggle {
     display: flex;
     align-items: center;
     gap: 4px;
-    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
     margin-top: 14px;
     padding: 4px 6px;
     background: transparent;
@@ -4526,11 +4751,24 @@ body.home-header-active {
     transform: rotate(90deg);
 }
 
+/* Pushed to the toggle's right edge rather than sitting beside the
+ * chevron, and set in tabular figures so a digit swap (1 session going
+ * to 10) never nudges its own right edge, let alone anything after it.
+ * `.project-node--virtual` overrides size/opacity only - this rule is
+ * still the one making that count's digits line up. */
+.project-node__count {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Indented by the SAME token the row above uses for its gutter column,
+ * so a child session row starts under its card's content edge, not
+ * under the chevron/count gutter. */
 .project-node__sessions {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin: 4px 0 4px 28px;
+    margin: 4px 0 4px var(--project-gutter);
 }
 
 .project-session-row {
@@ -4911,15 +5149,13 @@ body.home-header-active {
     font-style: normal;
 }
 
-/* ITEM 43 - a project node with a description but no running sessions is
- * foldable too, and its toggle carries no count chip. Without a chip the
- * button is chevron-only, so it needs its own minimum width to stay a
- * real hit target and to keep the project cards left-aligned with each
- * other whether or not they have children. */
-.project-node__toggle {
-    min-width: 24px;
-    justify-content: center;
-}
+/* ITEM 43 used to give a chevron-only toggle (a project with a
+ * description but no running sessions) its own min-width here, because
+ * a flex-sized gutter made every foldless-of-a-count toggle a different
+ * width. `.project-node__row` is a grid now (see the S8 block above) -
+ * the gutter column is `--project-gutter` regardless of what the toggle
+ * contains, so a chevron-only toggle already lines up with one that
+ * carries a count and this override has nothing left to do. */
 
 /* ---------------------------------------------------------------------
  * feat/settings-gui - the workspace tab's environment list.

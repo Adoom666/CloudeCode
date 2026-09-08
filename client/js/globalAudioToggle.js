@@ -292,14 +292,15 @@
      * App._placeStatusLight()'s re-parenting rule exactly (see the
      * top-of-file doc comment for the per-screen targets).
      *
-     * @param {'auth'|'launchpad'|'terminal'} screen
+     * @param {'auth'|'launchpad'|'terminal'|'archive'} screen
      * @returns {void}
      */
     function place(screen) {
         var btn = build();
         var targetId = screen === 'launchpad' ? 'home-bar-status'
             : screen === 'terminal' ? 'terminal-bar-status'
-                : null;
+                : screen === 'archive' ? 'archive-bar-status'
+                    : null;
         var target = targetId ? document.getElementById(targetId) : null;
         if (!target || !target.parentNode) {
             // No bar on this screen (auth) - detach so it renders nowhere

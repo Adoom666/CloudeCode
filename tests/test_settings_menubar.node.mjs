@@ -281,7 +281,14 @@ test('the deep link is honoured from showLaunchpad, which BOTH login paths reach
     // hooking the event would work for a fresh login and silently do
     // nothing for a returning one.
     const fn = appSrc.slice(appSrc.indexOf('showLaunchpad() {'));
-    assert.match(fn.slice(0, 4000), /_openSettingsIfDeepLinked\(\)/);
+    // WINDOW WIDENED 2026-08-31. A fixed byte slice over a function
+    // body is brittle: adding a comment inside showLaunchpad() pushes
+    // the thing being asserted past the end and this reports a
+    // FAILURE about the wrong subject entirely - the hook is still
+    // there, the window just stopped covering it. Widened rather than
+    // trimmed at the source, because shrinking a comment to fit a
+    // test's magic number is fitting the code to the harness.
+    assert.match(fn.slice(0, 8000), /_openSettingsIfDeepLinked\(\)/);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

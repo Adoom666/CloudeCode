@@ -35,14 +35,21 @@ logger = structlog.get_logger()
 
 
 
-def current_view(settings: Any) -> ProjectsView:
+def current_view(
+    settings: Any, *, include_archived: bool = False
+) -> ProjectsView:
     """Resolve the project list and the authority mode it came from.
 
-    Inputs: settings (Any) - the Settings singleton.
+    Inputs: settings (Any) - the Settings singleton. include_archived
+      (bool) - pass True to include archived projects alongside the live
+      ones. Defaults False, so a caller that does not know archiving
+      exists behaves exactly as it did before.
     Output: ProjectsView.
     Example: current_view(settings).mode -> "db"
     """
-    return resolve_projects(settings.get_state_dir())
+    return resolve_projects(
+        settings.get_state_dir(), include_archived=include_archived
+    )
 
 
 
@@ -132,6 +139,8 @@ def views_to_responses(view: ProjectsView, response_cls: Any) -> List[Any]:
             path=item["path"],
             description=item["description"],
             root=item["root"],
+            work_at=item.get("work_at"),
+            archived_at=item.get("archived_at"),
         )
         for item in view.projects
     ]

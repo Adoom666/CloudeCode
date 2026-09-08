@@ -285,3 +285,52 @@
     min-height: 44px;
   }
 }
+
+/* "Dismiss all" - the explicit whole-stack control.
+ *
+ * Rendered by client/js/toast.js only when two or more toasts are on
+ * screen (with one, the card's own x is already a single click). It sits
+ * at the HEAD of the container, above every card, because it governs the
+ * whole list.
+ *
+ * Shaped after .toast-overflow rather than after a card: both are
+ * full-width utility rows that act on the stack rather than carrying a
+ * message. Solid border instead of the overflow row's dashed one - this
+ * one performs an action, that one reveals hidden content, and a user
+ * must be able to tell them apart at a glance without reading. Same
+ * width/height escape from styles.css's square-button rule, for the same
+ * reason .toast-overflow needs it.
+ */
+.toast-dismiss-all {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 12px;
+  background: var(--color-bg-card, #252526);
+  color: var(--color-fg-muted, #858585);
+  border: 1px solid var(--color-border, #3e3e42);
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-modal, 0 4px 12px rgba(0, 0, 0, 0.5));
+  font-family: var(--font-mono, 'SF Mono', monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: center;
+}
+
+.toast-dismiss-all:hover {
+  background: var(--color-bg-hover, #323235);
+  color: var(--color-fg, #d4d4d4);
+}
+
+/* A stack holding a blocking permission prompt is about to be cleared of
+   it too, so the control says so with the same colour the blocking tier
+   uses elsewhere. The full sentence is in its aria-label/title. */
+.toast-dismiss-all:not([data-blocking="0"]) {
+  border-color: var(--color-error-border, rgba(239, 68, 68, 0.35));
+  color: var(--color-fg, #d4d4d4);
+}

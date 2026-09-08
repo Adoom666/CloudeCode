@@ -85,13 +85,49 @@ class Selector {
  * match the element, and each earlier compound must match some ancestor,
  * in order. Only the descendant combinator (whitespace) is supported -
  * `>`, `+` and `~` are not used by the modules under test.
+ *
+ * THE SPLIT IS BRACKET-AWARE, AND IT WAS NOT. Splitting on every run of
+ * whitespace tore `[data-field="parent uuid"]` into two compounds, both
+ * of them nonsense, and querySelector then returned NULL - which is
+ * indistinguishable from "no such element" and is exactly the silent
+ * wrong answer a test harness must never give. Found 2026-09-01 while
+ * asserting on a chat info-panel row whose label contains a space; the
+ * assertion failed loudly, but the same bug in an
+ * `assert.equal(qsa(...).length, 0)` would have PASSED for the wrong
+ * reason. Whitespace inside square brackets is now part of the compound.
  */
 class ChainSelector {
     /** Inputs: text (string) - one selector, possibly with descendants. */
     constructor(text) {
-        this.parts = String(text).trim().split(/\s+/)
+        this.parts = ChainSelector.splitCompounds(String(text).trim())
             .filter(Boolean)
             .map(p => new Selector(p));
+    }
+
+    /**
+     * Description: split a selector into compounds on whitespace that is
+     *   OUTSIDE square brackets. A hand-written scanner rather than a
+     *   regex because the nesting is what the regex cannot see.
+     * Inputs: text (string).
+     * Output: Array<string>.
+     * Example: splitCompounds('dl [data-field="a b"]')
+     *   // -> ['dl', '[data-field="a b"]']
+     */
+    static splitCompounds(text) {
+        const out = [];
+        let cur = '';
+        let depth = 0;
+        for (const ch of text) {
+            if (ch === '[') depth++;
+            else if (ch === ']') depth = depth > 0 ? depth - 1 : 0;
+            if (depth === 0 && /\s/.test(ch)) {
+                if (cur) { out.push(cur); cur = ''; }
+                continue;
+            }
+            cur += ch;
+        }
+        if (cur) out.push(cur);
+        return out;
     }
 
     /** Inputs: el (MiniElement). Output: boolean. */
@@ -153,7 +189,24 @@ class MiniElement {
         this._listeners = new Map();
         this.classList = new MiniTokenList(this);
         this.innerHTML = '';
-        this.style = {};
+        // `style` is a bare object PLUS the two custom-property methods,
+        // because CSS custom properties are NOT reachable as JS
+        // properties on a real CSSStyleDeclaration - `style['--x'] = v`
+        // silently does nothing in a browser and `setProperty` is the
+        // only way in. A stub with a plain object and no setProperty
+        // therefore does not merely lack a method: it makes the ONLY
+        // correct way to write a custom property throw, while the
+        // incorrect way appears to work. Both are provided, and
+        // setProperty writes into the same object so a test can read the
+        // value back either way.
+        this.style = {
+            setProperty(name, value) { this[name] = String(value); },
+            getPropertyValue(name) {
+                const v = this[name];
+                return v === undefined ? '' : String(v);
+            },
+            removeProperty(name) { delete this[name]; },
+        };
     }
 
     // ---- attributes ----
@@ -177,6 +230,27 @@ class MiniElement {
     set title(v) { this.setAttribute('title', v); }
     get id() { return this.getAttribute('id') || ''; }
     set id(v) { this.setAttribute('id', v); }
+
+    // ---- text ----
+    // Added for the archive outcome view, which is required to render
+    // every server-supplied string through a text node rather than
+    // innerHTML: host display names carry real non-ASCII (measured, a
+    // U+2019 in "Joseph’s Mac mini (2)") and `unevaluated` reason
+    // strings are rendered verbatim by requirement. A test that reads
+    // the words a person sees needs the aggregate, so this is a real
+    // getter over the subtree, not a stored string.
+    get textContent() {
+        let out = '';
+        for (const c of this.childNodes) out += c.textContent;
+        return out;
+    }
+
+    set textContent(v) {
+        for (const c of this.childNodes.splice(0)) c.parentNode = null;
+        if (v !== '' && v !== null && v !== undefined) {
+            this.appendChild(this.ownerDocument.createTextNode(v));
+        }
+    }
 
     // ---- tree ----
     appendChild(node) {
@@ -210,6 +284,24 @@ class MiniElement {
     }
 
     get children() { return this.childNodes.slice(); }
+
+    /**
+     * `firstChild` and `lastChild`. Added because the archive reader
+     * clears a region with the standard
+     * `while (el.firstChild) el.removeChild(el.firstChild)` idiom. Before
+     * these existed that loop silently ran ZERO times here - `undefined`
+     * is falsy - so stale nodes survived a re-render and the tests read
+     * a previous state as if it were the current one. A missing DOM
+     * property that makes a clear a no-op is exactly the shape of a
+     * harness that manufactures a false result.
+     * @returns {?object} the node, or null when there are none
+     */
+    get firstChild() { return this.childNodes[0] || null; }
+
+    /** @returns {?object} the last child node, or null */
+    get lastChild() {
+        return this.childNodes[this.childNodes.length - 1] || null;
+    }
 
     contains(node) {
         for (let n = node; n; n = n.parentNode) if (n === this) return true;
@@ -289,6 +381,22 @@ class MiniElement {
     }
 }
 
+/**
+ * A text node. Subclasses MiniElement so the tree walk, parent chain and
+ * removal paths need no special case; it carries the tagName '#text',
+ * which matches no CSS selector the modules under test use, so it is
+ * invisible to querySelectorAll exactly as a real text node is.
+ */
+class MiniText extends MiniElement {
+    /** Inputs: data (string), doc (MiniDocument). */
+    constructor(data, doc) {
+        super('#text', doc);
+        this._text = String(data);
+    }
+    get textContent() { return this._text; }
+    set textContent(v) { this._text = String(v); }
+}
+
 class MiniDocument extends MiniElement {
     constructor() {
         super('#document', null);
@@ -302,6 +410,8 @@ class MiniDocument extends MiniElement {
     }
 
     createElement(tag) { return new MiniElement(tag, this); }
+
+    createTextNode(data) { return new MiniText(data, this); }
 
     getElementById(id) {
         return this._walk([]).find(el => el.getAttribute('id') === id) || null;
@@ -347,4 +457,4 @@ export function createEnvironment(options = {}) {
     };
 }
 
-export { MiniElement, MiniDocument, Selector };
+export { MiniElement, MiniText, MiniDocument, Selector };

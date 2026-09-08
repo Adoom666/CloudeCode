@@ -400,7 +400,7 @@ def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
     assert len(stored) == 1
     assert stored[0].kind == "Notification"
     # Title is the generic fallback even with no message in body.
-    assert stored[0].title == "Claude is waiting"
+    assert stored[0].title == "wants your attention"
 
 
 def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_path):
@@ -429,7 +429,7 @@ def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_pa
     assert resp.status_code == 200
     stored = mgr.get_toasts("ses_hook")
     assert stored[0].kind == "PermissionRequest"
-    assert stored[0].title == "Permission needed"
+    assert stored[0].title == "needs your permission"
     # Body should mention the tool name and command.
     assert "Bash" in (stored[0].body or "")
     assert "rm -rf node_modules" in (stored[0].body or "")

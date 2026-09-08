@@ -1,0 +1,12 @@
+{
+ "meta": {},
+ "result": null,
+ "result_status": "not_found",
+ "scope_status": "not_found",
+ "unevaluated": [
+  {
+   "reason": "no row in message_transcripts with id 99999",
+   "subject": "transcript:99999"
+  }
+ ]
+}

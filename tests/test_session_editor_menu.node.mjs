@@ -313,9 +313,21 @@ test('the editor FAB is hidden on every screen with no session', () => {
     const css = clientFile('css', 'terminal-tools.css');
     // Both FABs share the base class, so the scoping rule covers both
     // and cannot be applied to one and forgotten on the other.
+    // THE ARCHIVE JOINED THIS LIST. It is the third screen with no
+    // session attached, and until it did, .session-editor-fab floated
+    // over the archive toolbar - measured at 1440x900, a 45x22px overlap
+    // sitting on the middle of the Export button's label, which is why
+    // every screenshot of it read "Ex####t". Asserted per screen rather
+    // than as one whole-block regex so that adding a FOURTH sessionless
+    // screen cannot silently drop one of the first three.
+    for (const screen of ['#launchpad-screen', '#auth-screen', '#archive-screen']) {
+        assert.ok(
+            css.includes(`body:has(${screen}.active) .fab-menu-btn`),
+            `a session control on ${screen} names nothing, but is not hidden there`);
+    }
     assert.match(css,
-        /body:has\(#launchpad-screen\.active\) \.fab-menu-btn,\s*\n\s*body:has\(#auth-screen\.active\) \.fab-menu-btn \{\s*\n\s*display: none !important;/,
-        'a session control on the launchpad names nothing');
+        /body:has\(#archive-screen\.active\) \.fab-menu-btn \{\s*\n\s*display: none !important;/,
+        'the sessionless-screen list does not end in a display:none rule');
     const html = clientFile('index.html');
     for (const id of ['terminalToolsBtn', 'sessionEditorBtn']) {
         const at = html.indexOf(`id="${id}"`);

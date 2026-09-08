@@ -68,6 +68,13 @@
          never its home. Its vocabulary is defined in
          client/js/session-status-ui.js. -->
     <link rel="stylesheet" href="/static/css/status-dot.css" />
+    <!-- The two-ring status LED that replaces the flat dot on every
+         surface. MUST load AFTER status-dot.css: session-status-ui.js
+         emits one element carrying both vocabularies, and this file's
+         `.status-dot.status-led` block is what stops the two stylesheets
+         from both painting it. Its own markup comes from
+         client/js/status-led.js. -->
+    <link rel="stylesheet" href="/static/css/status-led.css" />
     <!-- Row density, the per-row reorder/pin controls, and the two
          three-outcome blocks the list can render instead of rows. Its own
          file so session-sidebar.css stays under the 500-line convention;
@@ -75,6 +82,26 @@
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
+    <!-- The row's kebab and the panel it opens. MUST load after
+         session-sidebar.css and session-sidebar-density.css: those size
+         .session-sidebar-row-pin, .mark-unread-toggle and
+         .session-sidebar-row-delete as small square icon buttons for the
+         row, and this file re-styles those same elements as full-width
+         labelled menu items once they are inside the panel. -->
+    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
+    <!-- The launch-wrapper pill on a running-session row. After
+         styles.css so it inherits --color-border / --color-fg-faint and
+         sits on the same baseline as .badge and .family-pill next to it. -->
+    <link rel="stylesheet" href="/static/css/launchpad-wrapper-pill.css" />
+    <!-- The "needs a keypress" badge on a session parked at an unanswered
+         startup prompt. After styles.css so it inherits the theme
+         variables; it defines none of its own. -->
+    <link rel="stylesheet" href="/static/css/session-startup-gate.css" />
+    <!-- The restart picker's option list. Reuses .modal-overlay /
+         .modal-content from styles.css; this file only styles the three
+         predicted-outcome states, which must NOT look alike. -->
+    <link rel="stylesheet" href="/static/css/session-restart-picker.css" />
+    <link rel="stylesheet" href="/static/css/recent-deleted.css" />
     <!-- Session tools button + menu and the per-session theme picker.
          After styles.css so it inherits the theme vars, AND so its
          explicit width/height beat the bare `button` base rule there. -->
@@ -145,6 +172,47 @@
          background's status attribute; see the file for why this wins
          over styles.css's `#terminal` rule by specificity, not order). -->
     <link rel="stylesheet" href="/static/css/terminal-opacity.css" />
+
+    <!-- Archive (message browser). archive-outcomes.css goes FIRST so a
+         later archive stylesheet can override outcome presentation, and
+         so cascade order matches dependency order. -->
+    <link rel="stylesheet" href="/static/css/archive-outcomes.css" />
+    <link rel="stylesheet" href="/static/css/archive-screen.css" />
+    <link rel="stylesheet" href="/static/css/archive-nav.css" />
+    <!-- archive-nav-card.css overrides the rail's generic project row with
+         the app's own card, so it loads AFTER archive-nav.css. It also
+         styles the project info modal, which renders an outcome block, so
+         it must come after archive-outcomes.css above. -->
+    <link rel="stylesheet" href="/static/css/archive-nav-card.css" />
+    <!-- The card's info modal. Split from archive-nav-card.css at this
+         repo's 500-line cap, same seam as archive-nav-card.js /
+         archive-nav-info.js. It overrides styles.css's `.modal-overlay`,
+         which is loaded far above. -->
+    <link rel="stylesheet" href="/static/css/archive-nav-info.css" />
+    <link rel="stylesheet" href="/static/css/archive-reader.css" />
+    <link rel="stylesheet" href="/static/css/archive-chat.css" />
+    <link rel="stylesheet" href="/static/css/archive-search.css" />
+    <link rel="stylesheet" href="/static/css/archive-export.css" />
+    <!-- The transcript list, the archive's primary browse surface. It had
+         NO stylesheet at all until now, so every node under
+         `.archive-tlist` rendered in Chrome's user-agent defaults - white
+         bevelled buttons and 13.33px Arial in every one of the 23 themes.
+         See the header of the file. -->
+    <link rel="stylesheet" href="/static/css/archive-tlist.css" />
+    <!-- LAST, AND THE ORDER IS THE MECHANISM. The alignment layer holds
+         the rules that belong in archive-reader.css, which is under
+         concurrent edit by another owner. Every selector in it is
+         deliberately no more specific than the rule it aligns, so it
+         works by coming after and by nothing else - do not move it above
+         archive-reader.css, and fold it INTO archive-reader.css once that
+         file is free. -->
+    <link rel="stylesheet" href="/static/css/archive-align.css" />
+    <!-- The pane resizers, and the rule that every label in the browse
+         panes truncates with an ellipsis plus a `title` rather than
+         wrapping. LAST on purpose: several rules replace a wrap declared
+         in archive-tlist.css, and load order is the whole mechanism -
+         each selector is no more specific than the one it replaces. -->
+    <link rel="stylesheet" href="/static/css/archive-panes.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -320,6 +388,40 @@
                  whether or not a session is open. Icon is an open folder,
                  distinct from settings' gear-circle and every other glyph
                  in this row. -->
+            <!-- ARCHIVE. INLINE, and immediately before the file
+                 editor on purpose: these are the app's two BROWSERS -
+                 one over your files, one over your transcripts - and
+                 sitting them together is what lets this icon read as
+                 what it is without a text label.
+                 It was in the header OVERFLOW until the owner asked for
+                 an icon instead ("make it an icon next to files up on
+                 top, dont waste page space"). It is claimed inline by
+                 header-menu.js's HEADER_INLINE_CONTROL_IDS, so the fold
+                 never moves it. The launchpad body row that used to
+                 compensate for it being buried is gone with it - see
+                 the note where it stood in launchpad.js.
+                 It is APP-scoped, not session-scoped, so it is correct
+                 on every screen - see the SCOPE BOUNDARY note in
+                 header-menu.js. Deliberately NOT class="hidden": the
+                 hidden gating on its neighbours is driven by SESSION
+                 state in app.js, and the archive is reachable whether
+                 or not a session exists. Its own gating is a different
+                 thing and still very much in force - _wireArchive()
+                 hides this button at wire time and reveals it only once
+                 ArchiveEntry.ensure() has measured the server as having
+                 the message archive switched ON; disabled and unknown
+                 both leave it hidden. Icon is a stack of archive boxes,
+                 distinct from the gear, the folder and the door beside
+                 it. Wired in header-menu.js, never inline - src/main.py
+                 stamps script-src 'self', which silently refuses an
+                 inline onclick (see #logoutBtn's comment above). -->
+            <button type="button" id="archiveBtn" class="btn-icon" aria-label="Message archive" title="message archive" data-tooltip="Message archive">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
             <button type="button" id="configEditorBtn" class="btn-icon hidden" aria-label="File editor" title="file editor" data-tooltip="file editor" aria-expanded="false" aria-controls="config-editor-panel">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -332,12 +434,16 @@
                  header's RIGHT flank, and .header--home sizes
                  #header-home-spacer to mirror that flank's width so the
                  title lands on the real centre. The flank token
-                 (--home-header-flank-w) budgets TWO inline controls
-                 (#configEditorBtn and the kebab #header-menu-toggle);
-                 a third inline child here on the home screen made the
-                 right flank wider than the spacer it was supposed to
-                 equal, which pushed the title off centre by half the
-                 difference. -->
+                 (--home-header-flank-w) budgets the inline controls
+                 (#archiveBtn when the archive is switched on,
+                 #configEditorBtn, and the kebab #header-menu-toggle);
+                 an inline child here on the home screen that the token
+                 does not account for makes the right flank wider than
+                 the spacer it is supposed to equal, which pushes the
+                 title off centre by half the difference. The token has
+                 a :has(#archiveBtn:not([hidden])) branch in styles.css
+                 precisely because that button's presence is measured at
+                 runtime rather than fixed. -->
             <!-- NO CONNECTION LIGHT IN THIS ROW ANY MORE. It used to be
                  the last child here. It is now a bottom-bar control,
                  never a header one - see .info near the end of this file
@@ -549,6 +655,12 @@
     <!-- Launchpad Screen -->
     <div id="launchpad-screen" class="screen"></div>
 
+    <!-- Archive Screen - the message browser. Empty; ArchiveScreen builds
+         it, the same way LaunchpadScreen builds #launchpad-screen. The
+         class="screen" is load-bearing: hideAllScreens() and the docked
+         sidebar layout offset in session-sidebar.css both key on it. -->
+    <div id="archive-screen" class="screen"></div>
+
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
         <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
@@ -565,11 +677,17 @@
 
         <div class="terminal-container">
             <div id="terminal"></div>
-        </div>
-
-        <div class="local-servers" id="localServersContainer" style="display: none;">
-            <h3>Local Servers</h3>
-            <div id="localServersList"></div>
+            <!-- INSIDE the terminal container, and absolutely positioned
+                 there (see .local-servers), so that showing or hiding it
+                 cannot change #terminal's height. It used to be a sibling
+                 below this container, and every appearance shrank the
+                 terminal by ~4 rows, which tmux answered with a SIGWINCH
+                 and claude with ESC[2J - erasing the conversation a few
+                 seconds after every reconnect. -->
+            <div class="local-servers" id="localServersContainer" style="display: none;">
+                <h3>Local Servers</h3>
+                <div id="localServersList"></div>
+            </div>
         </div>
 
         <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always
@@ -607,6 +725,10 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
+    <!-- The vertical three-dot mark, in ONE place. Both the header
+         overflow (header-menu.js) and every conversation row
+         (session-row-menu.js) draw it, so it must load before both. -->
+    <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
@@ -619,6 +741,14 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- The status LED component. Pure, no dependencies, no DOM access -
+         it only builds a string. MUST load BEFORE session-status-ui.js,
+         which renders every light in the app through it. -->
+    <script src="/static/js/status-led.js"></script>
+    <!-- Rolls a set of sessions up into one LED for a group header or the
+         launchpad top bar. Depends on status-led.js for the vocabularies,
+         so it loads after it. -->
+    <script src="/static/js/session-status-summary.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>
@@ -641,12 +771,41 @@
          it, and it degrades to today's plain row while the registry is
          still fetching. -->
     <script src="/static/js/session-theme-tint.js"></script>
+    <!-- The "needs a keypress" badge: is this session parked on an
+         unanswered startup prompt (folder trust, login) it has fired no
+         hook past? Must load BEFORE launchpad.js and
+         session-sidebar-rows.js, both of which call
+         window.SessionStartupGate. No dependencies of its own. -->
+    <script src="/static/js/session-startup-gate.js"></script>
     <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
          launchpad.js, whose showFolderPickerModal() is now a delegate to
          window.FolderPickerModal.open(). It reads no controller state -
          the escaper is passed in - so it has no ordering constraint on
          anything else. -->
     <script src="/static/js/folder-picker-modal.js"></script>
+    <!-- The folder step for a NEW project ("start empty"), which had none
+         and so let every project land at ".../ses_<hex>". Must load AFTER
+         folder-picker-modal.js, whose picker its browse button opens, and
+         BEFORE launchpad.js, which calls window.ProjectCreateFolder
+         .validateName / .choose during the create flow. -->
+    <script src="/static/js/project-create-folder.js"></script>
+    <!-- Which stored RECENT rows survive the "already running" guard.
+         Must load BEFORE launchpad.js, whose renderRecentSessions() calls
+         window.SessionRecentVisibility.visibleRecentRows while painting.
+         Pure - two arrays in, one array out, no state and no events - so
+         this is its only ordering constraint. -->
+    <script src="/static/js/session-recent-visibility.js"></script>
+    <!-- The launch-wrapper pill on a running-session row. Must load
+         BEFORE launchpad.js, which calls window.LaunchpadWrapperPill.html
+         while painting the row. Pure string rendering, no state, no
+         events - it reads nothing else, so this is its only constraint. -->
+    <script src="/static/js/launchpad-wrapper-pill.js"></script>
+    <!-- Whether a repaint of the project tree is worth doing at all. Must
+         load BEFORE launchpad.js, whose renderProjectList() and
+         renderRunningSessions() both consult it on every 5s poll tick.
+         Pure decision logic - markup and screen state in, a verdict out -
+         so this is its only ordering constraint. -->
+    <script src="/static/js/project-list-render-guard.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
@@ -710,6 +869,15 @@
          window.TerminalMetrics.guardedFit so an untrustworthy cell
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
+    <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
+         whose requestFit() asks it how long to wait and whose flush()
+         asks it whether a settled grid is worth a pty_resize at all. A
+         resize costs the user an ESC[2J on the alternate screen, so a
+         layout element that flickers must not reach tmux. Pure - inputs
+         in, one verdict out, no state and no events. If it is missing
+         terminal-layout.js keeps its original debounce and ships every
+         fit, which is the behaviour that shipped. -->
+    <script src="/static/js/terminal-resize-settle.js"></script>
     <script src="/static/js/terminal-layout.js"></script>
     <!-- Must load BEFORE terminal.js: terminal.js's withTerminalBackgroundOpacity
          wrapper reads window.TerminalBackgroundOpacity at call time, but
@@ -717,6 +885,15 @@
          if this tag is missing or fails - load order still matters so the
          translucency is live from the very first theme applied. -->
     <script src="/static/js/terminal-background-opacity.js"></script>
+    <!-- Whether a re-attach may wipe the terminal buffer. Must load
+         BEFORE terminal.js, whose connectToSession() and
+         reconnectToExistingSession() both call
+         window.TerminalReconnectBuffer at the very top, before any
+         teardown. Pure - measurements in, one verdict out, no state and
+         no events - so this is its only ordering constraint. If it is
+         missing terminal.js falls back to 'replace', which is the
+         behaviour that shipped. -->
+    <script src="/static/js/terminal-reconnect-buffer.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
@@ -782,6 +959,12 @@
          screen-transition methods. -->
     <script src="/static/js/globalAudioToggle.js"></script>
 
+    <!-- The ONE decision point for which theme a navigation target paints.
+         Must load AFTER themes/registry.js (it calls window.Themes) and
+         AFTER globalAudioToggle.js (it re-syncs the audio gate), and BEFORE
+         app.js RUNS - every show*() method calls into it. -->
+    <script src="/static/js/theme-navigation.js"></script>
+
     <!-- Per-session theme picker, mounted on the terminal screen. Must
          load AFTER themes/registry.js (window.Themes.getActiveSession /
          applyGlobal / listAll). The per-session music opt-in that used to
@@ -817,6 +1000,21 @@
     <script src="/static/js/session-sidebar-rename.js"></script>
     <script src="/static/js/session-sidebar-rows.js"></script>
     <script src="/static/js/session-sidebar-groups.js"></script>
+    <!-- Restart: ASK, then act, then land back in the session. The
+         picker fetches the read-only preview (GET /sessions/restart/
+         preview) and shows which rung the respawn ladder would land on
+         before anything is spawned - an empty #{pane_start_command}
+         silently returns a LOGIN SHELL - and lets the user move the
+         session onto a different launch wrapper. The return module
+         reopens the SAME session afterwards, by the id the server read
+         back, never by name. Both are called from
+         session-sidebar-clicks.js and launchpad.js, so both load
+         BEFORE them; both use window.API and window.App. -->
+    <script src="/static/js/session-restart-continuity.js"></script>
+    <script src="/static/js/session-restart-live.js"></script>
+    <script src="/static/js/session-restart-options.js"></script>
+    <script src="/static/js/session-restart-picker.js"></script>
+    <script src="/static/js/session-restart-return.js"></script>
     <!-- Click routing for the list, split out of session-sidebar.js to
          keep that file under the 500-line budget. Must load BEFORE it:
          the controller's handlers delegate straight into this. -->
@@ -836,6 +1034,17 @@
          move a session between them. Loads AFTER reorder because it
          borrows that module's live-region announcer. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
+    <!-- The row's overflow menu, and the three gestures that open it.
+         session-row-menu.js composes the row's own control builders
+         (session-sidebar-rows.js, session-status-ui.js,
+         session-row-actions.js, session-sidebar-group-actions.js for the
+         group picker item), places itself with anchor-popover.js and
+         routes its clicks into session-sidebar-clicks.js, so it must load
+         after all of them. The gesture module must load after the menu
+         AND after session-sidebar.js, whose #session-sidebar-list it
+         attaches to. -->
+    <script src="/static/js/session-row-menu.js"></script>
+    <script src="/static/js/session-row-menu-gestures.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the
@@ -952,6 +1161,118 @@
     <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
+    <!-- Archive (message browser). Order is DEPENDENCY order: the API
+         half first (api-archive.js extends API.prototype and throws if
+         api.js has not run), then pure helpers, then state, then views,
+         then the composition root. app.js MUST stay last - it is the
+         controller and reaches for these globals at parse time. -->
+    <script src="/static/js/api-archive.js"></script>
+    <!-- THE WAY IN. Both the launchpad row and the header overflow item
+         call ArchiveEntry.open(), so there is ONE navigation into the
+         archive rather than two that can drift apart. Before this the
+         only control in the whole DOM matching /archive/ was the archive
+         screen's own Back button - you had to type the URL. -->
+    <script src="/static/js/archive-entry.js"></script>
+    <script src="/static/js/archive-outcome.js"></script>
+    <script src="/static/js/archive-mask.js"></script>
+    <script src="/static/js/archive-format.js"></script>
+    <!-- Subsequence matching for the transcript list's per-column
+         filters. Pure; no DOM. -->
+    <script src="/static/js/archive-fuzzy.js"></script>
+    <script src="/static/js/archive-deeplink.js"></script>
+    <script src="/static/js/archive-virtual-list.js"></script>
+    <script src="/static/js/archive-state.js"></script>
+    <script src="/static/js/archive-outcome-view.js"></script>
+    <script src="/static/js/archive-body-gate.js"></script>
+    <script src="/static/js/archive-body-cache.js"></script>
+    <script src="/static/js/archive-line-render.js"></script>
+    <!-- archive-nav-fuzzy.js defines no dependency of its own; it must
+         simply precede archive-nav-merged.js, which calls it. -->
+    <script src="/static/js/archive-nav-fuzzy.js"></script>
+    <script src="/static/js/archive-nav-row.js"></script>
+    <!-- The next three all read window.ArchiveNavRow at IIFE time, so they
+         load AFTER archive-nav-row.js and BEFORE archive-nav.js.
+         archive-nav-card.js renders a project as a card; archive-nav-row.js
+         delegates to it at CALL time, so the order between those two is not
+         load-bearing, but archive-nav-tree.js IS a hard dependency of
+         archive-nav.js, which reads window.ArchiveNavTree at create() time.
+         archive-nav-info.js is the card's info modal and registers with
+         modal-stack.js, which is already loaded far above. -->
+    <script src="/static/js/archive-nav-card.js"></script>
+    <script src="/static/js/archive-nav-info.js"></script>
+    <script src="/static/js/archive-nav-tree.js"></script>
+    <!-- The rail's ORDER: comparators, the persisted choice, and how a
+         project's date renders. Both readers reach for it at PAINT
+         time, not at load time (archive-nav-row.js calls activityCell
+         inside renderRow, archive-nav-merged.js calls sortNodes inside
+         paint), so any position before the first paint is correct - and
+         both guard on its absence rather than throwing. -->
+    <script src="/static/js/archive-nav-order.js"></script>
+    <!-- The by-machine drill-down, split out of archive-nav.js when the
+         order control took that file over the 500-line cap. Read at
+         create() time, so it must load BEFORE archive-nav.js. -->
+    <script src="/static/js/archive-nav-drill.js"></script>
+    <script src="/static/js/archive-nav-merged.js"></script>
+    <script src="/static/js/archive-nav.js"></script>
+    <script src="/static/js/archive-tlist-row.js"></script>
+    <!-- The compact scheme chooser and the three fuzzy inputs. MUST load
+         before archive-transcript-list.js, which builds one. -->
+    <script src="/static/js/archive-tlist-filter.js"></script>
+    <script src="/static/js/archive-transcript-list.js"></script>
+    <script src="/static/js/archive-keys.js"></script>
+    <!-- The keyboard help MODAL, split out of archive-keys.js when the
+         `v` binding took that file over the 500-line cap. It reads
+         ArchiveKeys.bindings() at OPEN time, so it MUST load after it. -->
+    <script src="/static/js/archive-keys-help.js"></script>
+    <script src="/static/js/archive-reader-dom.js"></script>
+    <script src="/static/js/archive-reader-paging.js"></script>
+    <script src="/static/js/archive-reader-select.js"></script>
+    <script src="/static/js/archive-reader-body.js"></script>
+    <script src="/static/js/archive-reader.js"></script>
+    <script src="/static/js/archive-search-render.js"></script>
+    <script src="/static/js/archive-search.js"></script>
+    <script src="/static/js/archive-export.js"></script>
+    <script src="/static/js/archive-screen-reader.js"></script>
+    <!-- THE CONVERSATION VIEW, which is the reader's DEFAULT. Six files,
+         loaded innermost first because each one reads the globals of the
+         ones above it AT CALL TIME, not at load: block -> estimate,
+         block/info/subagents -> turn, turn/estimate/stack -> view,
+         view -> screen. archive-mask.js, archive-outcome*.js and
+         archive-virtual-list.js are all already loaded above; the chat
+         view reuses them rather than growing its own masking, its own
+         outcome vocabulary or its own windowing engine. -->
+    <script src="/static/js/archive-chat-block.js"></script>
+    <script src="/static/js/archive-chat-info.js"></script>
+    <script src="/static/js/archive-chat-subagents.js"></script>
+    <script src="/static/js/archive-chat-turn.js"></script>
+    <script src="/static/js/archive-chat-estimate.js"></script>
+    <script src="/static/js/archive-chat-stack.js"></script>
+    <script src="/static/js/archive-chat-clicks.js"></script>
+    <script src="/static/js/archive-chat-view.js"></script>
+    <script src="/static/js/archive-chat-screen.js"></script>
+    <!-- Draggable, remembered pane widths. MUST load before
+         archive-screen-shell.js, which attaches the two handles to the
+         grid it creates, at script load. -->
+    <script src="/static/js/archive-pane-resize.js"></script>
+    <!-- What a breadcrumb segment SAYS, so no database id reaches one.
+         Pure; no DOM. -->
+    <script src="/static/js/archive-crumb.js"></script>
+    <!-- Names a project reached by URL rather than by a rail click. Reads
+         window.ArchiveCrumb.indexNodes, so it loads AFTER archive-crumb.js
+         and before archive-screen.js, which builds the resolver. -->
+    <script src="/static/js/archive-crumb-resolve.js"></script>
+    <!-- The screen's DOM, and the cross-pane reader toolbar. Both split
+         out of archive-screen.js for the 500-line cap; both MUST load
+         before it, because it builds its shell at ITS script load. -->
+    <script src="/static/js/archive-screen-shell.js"></script>
+    <script src="/static/js/archive-screen-tools.js"></script>
+    <!-- Both reader-pane views and the switch between them. Reads
+         ArchiveReader, ArchiveChatScreen and ArchiveScreenTools at CALL
+         time, so it only has to load before archive-screen.js, which
+         builds it at wire(). -->
+    <script src="/static/js/archive-screen-views.js"></script>
+    <script src="/static/js/archive-screen.js"></script>
+
     <script src="/static/js/app.js"></script>
 
     <!-- v0.7.0 Part 2 — toast notifications container. Fixed top-right via

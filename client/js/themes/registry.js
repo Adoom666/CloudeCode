@@ -862,6 +862,13 @@
         // Expose constants for the selector + tests
         STORAGE_KEY: STORAGE_KEY,
         DEFAULT_THEME_ID: DEFAULT_THEME_ID,
+        // The user's own global choice, read through the one function that
+        // owns both STORAGE_KEY and the default. Exported for
+        // theme-navigation.js, which restores this theme whenever the
+        // navigation target has no pin of its own. Before it was exported,
+        // app.js open-coded `localStorage.getItem('cloude.theme') || 'claude'`
+        // in three places.
+        getStoredThemeId: getStoredThemeId,
         // Sync helper used by app.js to set <html data-theme> BEFORE init()
         // fetches anything - kills FOUC for repeat visitors.
         applyStoredThemeIdSync: function () {

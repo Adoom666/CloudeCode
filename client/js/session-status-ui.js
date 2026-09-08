@@ -16,10 +16,14 @@
  *                       the corpse open. Loudest treatment on purpose
  *                       (see CLAUDE.md hazard: a dead pane that "looked"
  *                       fine).
- *   question         - Claude is waiting on YOU (a Notification or
- *                       PermissionRequest hook fired and nothing has
- *                       resolved it yet). The state this whole feature
- *                       exists to surface alongside finished_unread.
+ *   question         - Claude is BLOCKED on you: a PermissionRequest
+ *                       hook fired and nothing has resolved it yet. It
+ *                       will not proceed until you answer.
+ *   notice           - Claude WANTS you: a Notification hook fired and
+ *                       nothing has resolved it yet. Not blocked. Split
+ *                       out of `question` on 2026-09-08 - see
+ *                       docs/session-status.md for why one state could
+ *                       not honestly carry both.
  *   working_subagent - the agent is actively working INSIDE a spawned
  *                       subagent (SubagentStart/Stop heartbeat).
  *   working          - the agent is actively doing tool work at the top
@@ -51,7 +55,8 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     const STATUS_LABELS = {
         dead: 'dead - process exited',
-        question: 'your turn - claude is waiting on you',
+        question: 'your turn - claude needs your permission',
+        notice: 'your turn - claude wants your attention',
         working_subagent: 'working - a subagent is active',
         working: 'working - agent active',
         finished_unread: 'finished - unread',
@@ -83,6 +88,7 @@ console.log('[SessionStatusUI Module] Loading...');
     const STATUS_DOT_CLASS = {
         dead: 'dead',
         question: 'question',
+        notice: 'notice',
         working_subagent: 'working-subagent',
         working: 'working',
         finished_unread: 'finished-unread',
@@ -165,10 +171,60 @@ console.log('[SessionStatusUI Module] Loading...');
      *        title="dead - process exited"
      *        aria-label="dead - process exited"></span>'
      */
-    function dotHtml(status) {
+    function dotHtml(status, signals) {
         const key = normalizeStatus(status);
         const label = STATUS_LABELS[key];
         const cssClass = STATUS_DOT_CLASS[key];
+
+        // THE LED IS THE INDICATOR NOW, and this is the one seam that
+        // makes that true everywhere at once. Every surface in this app
+        // (sidebar row, launchpad card, project tree, terminal header)
+        // already renders its light by calling dotHtml, so delegating
+        // here upgrades all of them together and makes it impossible for
+        // one of them to keep painting the old single dot.
+        //
+        // The old `.status-dot` markup below is kept as the fallback for
+        // exactly one case: status-led.js failing to load. It is not dead
+        // code and must not be deleted - a missing script would otherwise
+        // render no light at all, which is worse than rendering the old
+        // one, and this is the indicator that tells a user their session
+        // is dead.
+        //
+        // `signals` carries the two fields the LED needs that a bare
+        // status string cannot express - `unread` (which drives the halo
+        // independently of the dot) and `startup_gate` (a separate probe
+        // from the hook stream). It is optional: a caller that passes
+        // nothing gets a correct LED for the status alone, just without
+        // the unread halo.
+        if (globalThis.StatusLed) {
+            const s = signals || {};
+            const led = globalThis.StatusLed.ledStateFor({
+                activity_status: key,
+                unread: s.unread,
+                startup_gate: s.startup_gate,
+            });
+            // ONE ELEMENT, BOTH VOCABULARIES. The legacy
+            // `status-dot status-dot--<state>` classes are kept on the
+            // LED rather than replaced, for two reasons that are not
+            // cosmetic. First, several call sites and harnesses find this
+            // element by `.status-dot`, and silently changing what they
+            // select would break them at a distance with no error.
+            // Second, the class still carries the seven-state vocabulary,
+            // which is a genuinely different thing from the LED's two
+            // dimensions and is worth keeping addressable.
+            //
+            // The legacy element-level PAINT is neutralised in
+            // client/css/status-led.css by a `.status-dot.status-led`
+            // block, so the two stylesheets cannot both draw. That block
+            // and this line are a pair: neither makes sense alone.
+            return globalThis.StatusLed.ledHtml({
+                inner: led.inner,
+                outer: led.outer,
+                size: s.size,
+                title: label,
+                extraClass: `status-dot status-dot--${cssClass}`,
+            });
+        }
         // label/cssClass come from the frozen tables above via
         // normalizeStatus, so they cannot currently carry a special
         // character. Escaped anyway: the audit that added escapeAttr found

@@ -50,8 +50,12 @@ const path = require('path');
  * Session activity statuses that mean a human is needed.
  *
  * Mirrors the server's vocabulary in src/core/session_status.py:
- *   question        - a Notification/PermissionRequest hook fired and nothing
- *                     has resolved it. Claude is literally waiting on him.
+ *   question        - a PermissionRequest hook fired and nothing has resolved
+ *                     it. Claude is STOPPED, waiting on him to answer.
+ *   notice          - a Notification hook fired and nothing has resolved it.
+ *                     Claude wants his attention but is not blocked. Split
+ *                     out of `question` on 2026-09-08; it is an attention
+ *                     signal by definition, so it belongs in this list too.
  *   finished_unread - a Stop hook landed and he has not looked yet.
  *   dead            - the session's pane is gone.
  *
@@ -61,7 +65,12 @@ const path = require('path');
  *
  * @type {ReadonlyArray<string>}
  */
-const ATTENTION_STATUSES = Object.freeze(['question', 'finished_unread', 'dead']);
+const ATTENTION_STATUSES = Object.freeze([
+  'question',
+  'notice',
+  'finished_unread',
+  'dead',
+]);
 
 /**
  * The session status meaning the server could not resolve it.

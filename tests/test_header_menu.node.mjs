@@ -41,12 +41,24 @@ function test(name, fn) {
 
 /** Ids the overflow menu owns, in the order index.html declares them. */
 const EXPECTED_IDS = [
+    // `archiveBtn` USED TO BE FIRST HERE. It moved to INLINE_IDS when
+    // the owner asked for the archive as a header ICON rather than a
+    // menu entry, and the launchpad body row that compensated for it
+    // being buried was removed in the same change. See INLINE_IDS.
     'logoutBtn',
     'settingsBtn',
 ];
 
-/** Ids that must stay inline in the header at every width. */
-const INLINE_IDS = ['configEditorBtn'];
+/**
+ * Ids that must stay inline in the header at every width.
+ *
+ * `archiveBtn` sits beside `configEditorBtn`: the app's two BROWSERS,
+ * one over files and one over transcripts. Being inline is about WHERE
+ * it lives, not WHETHER it shows - it is still hidden at wire time and
+ * revealed only once ArchiveEntry.ensure() measures the message archive
+ * as enabled, which test_message_archive_client_gate.node.mjs asserts.
+ */
+const INLINE_IDS = ['archiveBtn', 'configEditorBtn'];
 
 /**
  * Ids that must no longer exist as header buttons at all.
@@ -101,7 +113,7 @@ function load(options = {}) {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
-    for (const file of ['dismiss-guard.js', 'header-menu.js']) {
+    for (const file of ['kebab-icon.js', 'dismiss-guard.js', 'header-menu.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(__dirname, '..', 'client', 'js', file), 'utf8'),
             sandbox);
@@ -143,7 +155,7 @@ test('the module and index.html agree on which controls the menu owns', () => {
         EXPECTED_IDS, 'the exported list is the contract');
 });
 
-test('THE OVERFLOW HOLDS EXACTLY volume, logout and settings', () => {
+test('THE OVERFLOW HOLDS EXACTLY logout and settings', () => {
     const { env, controls } = load();
     const panel = env.document.getElementById('header-menu-panel');
     assert.deepEqual(buttonIds(panel), EXPECTED_IDS);

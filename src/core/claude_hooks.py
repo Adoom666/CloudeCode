@@ -96,6 +96,30 @@ LIFECYCLE_EVENTS = ("SessionStart", "SessionEnd")
 # lifecycle pair).
 _MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS + LIFECYCLE_EVENTS
 
+# WORK, as opposed to BROWSING. The events that mean the conversation
+# itself did something: a prompt was submitted, a tool ran, a subagent ran,
+# a turn stopped, permission was asked for, a notification was raised.
+# ``sessions.last_work_at`` is stamped from these and from nothing else,
+# and the session and project lists are ordered by it - so this tuple is
+# the definition of what is allowed to move a row up the list.
+#
+# WHY LIFECYCLE_EVENTS ARE EXCLUDED, and it is the whole point of the
+# tuple existing. ``SessionStart`` fires with ``source`` in
+# ["startup", "resume", "clear", "compact", "fork"], and ``resume`` is
+# emitted when a user REJOINS a conversation - i.e. exactly when he
+# clicked a row to look at it. Counting that as work would reintroduce
+# the defect this ordering exists to remove, through the one event that
+# looks least like browsing from the endpoint's side. ``SessionEnd`` is
+# excluded for the mirror-image reason: a session ending is not the
+# session working, and stamping it would float every dead session to the
+# top of a list whose whole job is to say what is live and recent.
+#
+# Notification / PermissionRequest ARE included and that is deliberate:
+# both mean a turn is in flight and waiting on the user. A session that
+# is blocked asking for permission is the single most work-in-progress
+# state there is, and burying it would be the opposite of useful.
+WORK_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS
+
 
 def _build_managed_command(event_kind: str) -> str:
     """Build the curl one-liner for a given hook event.

@@ -1,0 +1,258 @@
+/* =====================================================================
+ * ARCHIVE DESIGN-LANGUAGE ALIGNMENT LAYER.
+ *
+ * WHY A SEPARATE FILE RATHER THAN EDITS IN PLACE. `archive-reader.css`
+ * is under concurrent edit by another owner. Everything in this file is
+ * an alignment of a rule that lives THERE, so it is written here and
+ * loaded LAST instead of being merged into a file two people are holding
+ * at once. When that work lands, these rules belong in
+ * archive-reader.css and this file should be folded into it - it is a
+ * seam, not a permanent layer, and it says so in one place rather than
+ * being discovered later.
+ *
+ * FOLD EVALUATED AND REFUSED, 2026-09-01. The concurrent edit has
+ * landed and archive-reader.css is free, so the fold was measured: it
+ * is 499 lines and this file is 248, and 747 breaks the repo's
+ * 500-line cap that the whole archive JS layer was just split to
+ * honour. Folding would trade one real seam for one oversized file.
+ * The fold is therefore DEFERRED, not forgotten, and it is blocked on
+ * archive-reader.css itself being split along a real seam first - not
+ * on anyone's availability any more. Re-measure before assuming the
+ * numbers above still hold.
+ *
+ * Load order is load-bearing: this file must come AFTER
+ * archive-reader.css in client/index.html or none of it applies. Every
+ * selector here is deliberately no more specific than the rule it
+ * aligns, so the ordering is the whole mechanism and there is no
+ * specificity arms race to lose track of.
+ *
+ * THE MEASURED DIVERGENCES THIS CLOSES (live server, 1440x900, before):
+ *
+ *   .archive-row          padding 8px 16px   -> 14px 16px (.project-item)
+ *   .archive-row          no hover at all    -> bg-hover, no cursor change
+ *   .archive-row__text    12.48px / 1.35     -> 0.9rem / 1.4
+ *                                               (.project-description)
+ *   .archive-row__text    unbounded measure  -> 90ch
+ *   .archive-row--turn    border-left 3px    -> inset 3px 0 box-shadow
+ *   .archive-row__lineno  3.61:1 legacy_apple, 4.31:1 codex, 3.85:1
+ *                         legacy_windows     -> --color-fg-muted
+ *   .archive-row__badge   padding 0 0.35rem  -> 2px 6px + fill + radius
+ *
+ * ITEM 37 AGAIN, AND IT IS THE REASON --turn MOVES. styles.css records
+ * that a `border-left` accent rail beside a 1px ring is joined by a
+ * diagonal miter drawn along the corner arc under `border-radius` - the
+ * two-tone smear at the corners - and that the fix is `box-shadow:
+ * inset 3px 0`, which is clipped to the radius instead of mitered.
+ * `.archive-row--turn` reintroduced the exact form that comment exists
+ * to forbid. Every rail below is now a shadow.
+ *
+ * THE BODY MEASURE IS IN `ch`, NOT `rem`. `.archive-row__text` is
+ * monospace, so one `ch` IS one character, and a 90ch cap says
+ * "ninety characters" at every viewport width, every theme font stack
+ * and every zoom level. A rem cap would say something different in each
+ * of those. Measured at 1440 the reader ran about 102 characters per
+ * line and was unbounded above that.
+ *
+ * NOTHING HERE DEPENDS ON BORDER-RADIUS OR ON COLOUR ALONE. The three
+ * zero-radius themes (terminal, gameboy, legacy_apple) are a deliberate
+ * design choice, so every state carried below is also carried by
+ * geometry, weight or literal text.
+ * ===================================================================== */
+
+/* --- reader rows ---------------------------------------------------- */
+
+.archive-row {
+    padding: 14px 16px;
+    transition: background-color 0.3s ease;
+}
+
+/* A LINE-TRACKING HIGHLIGHT, NOT A CLICK AFFORDANCE. A reader row is not
+ * a control, so this changes the fill and NOTHING else: no border, no
+ * glow, no cursor change. It exists because a transcript is a long
+ * uniform column and the eye needs somewhere to hold its place - the
+ * same job a table's row highlight does. */
+.archive-row:hover {
+    background-color: var(--color-bg-hover);
+}
+
+/* The rails. Shadows, never borders - see ITEM 37 above. The 3px width,
+ * the tokens and the meaning are unchanged from archive-reader.css; only
+ * the painting mechanism moved. */
+.archive-row--turn {
+    border-left: 0;
+    box-shadow: inset 3px 0 0 var(--color-accent-border);
+}
+
+.archive-row--tool {
+    border-left: 0;
+    box-shadow: inset 3px 0 0 var(--color-border);
+}
+
+/* --- reader type ---------------------------------------------------- */
+
+/* .project-description's 0.9rem / 1.4. The reading surface of the app
+ * had been carrying its SMALLEST and TIGHTEST text. */
+.archive-row__text {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    padding: 8px 10px;
+    max-width: 90ch;
+    border-radius: var(--radius-md);
+}
+
+.archive-row__head {
+    font-size: 0.85rem;
+    gap: 8px;
+}
+
+.archive-row__meta {
+    font-size: 0.8rem;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* CONTRAST, MEASURED NOT ASSUMED. `--color-fg-faint` put the line number
+ * at 3.61:1 on legacy_apple, 3.85:1 on legacy_windows and 4.31:1 on
+ * codex - all below WCAG AA's 4.5:1 for body text. `--color-fg-muted` is
+ * the token every theme already tunes against `--color-bg`, which is the
+ * surface this actually sits on. A line number is a wayfinding element;
+ * it is not decoration and does not get the decoration token. */
+.archive-row__lineno {
+    color: var(--color-fg-muted);
+    font-size: 0.8rem;
+}
+
+.archive-row__role {
+    font-size: 0.85rem;
+}
+
+.archive-row__type,
+.archive-row__range {
+    font-size: 0.8rem;
+}
+
+/* --- reader badges and chips ---------------------------------------- */
+
+/* .recent-session-lifecycle's shape. These had `padding: 0 0.35rem` -
+ * zero vertical padding - lowercase, and no fill, so they read as loose
+ * words rather than as tags. */
+.archive-row__badge,
+.archive-row__chip {
+    padding: 2px 6px;
+    font-size: 0.7em;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-bg-soft);
+}
+
+.archive-row__badge--sidechain,
+.archive-row__badge--agent {
+    background: var(--color-accent-bg);
+}
+
+.archive-row__badge--compact {
+    background: var(--color-warning-bg);
+}
+
+/* --- reader controls ------------------------------------------------ */
+
+/* radius-md is the app's default (39 uses in styles.css). The archive
+ * was inconsistent with ITSELF here: a handful of controls took
+ * radius-sm while every other archive surface took none, so in the 20
+ * themes with a non-zero radius exactly those few looked rounded. */
+.archive-row__action {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    transition: all 0.3s ease;
+}
+
+.archive-row__action:hover {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+.archive-row__action:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+/* Gate and refusal rails: shadows, same as the turn/tool rails, and the
+ * width difference between soft (3px) and hard (4px) is preserved
+ * because that width IS the severity signal in a monochrome theme. */
+.archive-row__body[data-body-state="gated-soft"] {
+    border-left: 0;
+    box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.archive-row__body[data-body-state="gated-hard"],
+.archive-row__body[data-body-state="withheld-server"],
+.archive-row__body[data-body-state="mask-refused"] {
+    border-left: 0;
+    box-shadow: inset 4px 0 0 var(--color-danger);
+}
+
+.archive-row__progress-children {
+    border-left: 0;
+    box-shadow: inset 2px 0 0 var(--color-border);
+}
+
+/* --- reader header -------------------------------------------------- */
+
+.archive-reader__header {
+    padding: 14px 16px;
+}
+
+.archive-reader__title {
+    font-size: 1rem;
+    color: var(--color-accent);
+}
+
+.archive-reader__facts {
+    margin-top: 4px;
+    font-size: 0.8rem;
+}
+
+.archive-reader__idle-head {
+    font-size: 1rem;
+    color: var(--color-accent);
+}
+
+.archive-reader__idle-note,
+.archive-reader__deadline,
+.archive-reader__sentinel {
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+/* --- keyboard selection in the reader ------------------------------- */
+
+/* The contract half of `data-selected`, written ahead of the DOM
+ * carrying it. Same reasoning as the transcript list: selection is not
+ * hover, both can be true at once, so the difference is GEOMETRY (a 6px
+ * rail plus a ring) rather than a shade. */
+.archive-row[data-selected="true"] {
+    background-color: var(--color-bg-hover);
+    box-shadow: inset 6px 0 0 var(--color-accent),
+                inset 0 0 0 2px var(--color-accent-border-strong);
+}
+
+/* --- archive-wide focus --------------------------------------------- */
+
+/* Every interactive archive surface gets the app's ring. The UA default
+ * is a 1px blue outline, which measures as very nearly invisible against
+ * every dark theme in this app. */
+.archive-nav__row:focus-visible,
+.archive-search__hit-loc:focus-visible,
+.archive-search__resume-btn:focus-visible,
+.archive-outcome__action:focus-visible,
+.archive-export__retry:focus-visible,
+.archive-export__cancel:focus-visible,
+.archive-screen__back:focus-visible,
+.archive-screen__search-btn:focus-visible,
+.archive-screen__export-btn:focus-visible,
+.archive-screen__search-input:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}

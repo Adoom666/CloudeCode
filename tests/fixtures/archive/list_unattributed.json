@@ -1,0 +1,65 @@
+{
+ "meta": {
+  "paging": {
+   "has_more": true,
+   "limit": 3,
+   "next_cursor": "eyJpZCI6MTk1NTgsImluZ2VzdGVkX2F0IjoiMjAyNi0wOC0zMFQxNjowMjoyOC43MjA4MDZaIiwidiI6MX0",
+   "returned": 3
+  },
+  "scope": {
+   "corpus_id": 2,
+   "kind": "corpus"
+  },
+  "unattributed_transcript_count": 5
+ },
+ "result": [
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "bf93b53b58fdb639fd8419e68c17d9957ddd6a63ba1576bb028372473ed19329",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:02:29.850290Z",
+   "line_count": 39,
+   "line_ending": "LF",
+   "project_attribution": "none_declared",
+   "raw_byte_length": 86298,
+   "session_ref": "audit",
+   "session_ref_scheme": "uuid",
+   "source_path": "7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/local_8baf2dfc-eddd-4b30-b220-ddb31001ce95/audit.jsonl",
+   "transcript_id": 19562
+  },
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "f83fcb26ce01fa46e94910f561a992ee008cabbf47326b2202763c0be4253147",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:02:29.707251Z",
+   "line_count": 23,
+   "line_ending": "LF",
+   "project_attribution": "none_declared",
+   "raw_byte_length": 30068,
+   "session_ref": "audit",
+   "session_ref_scheme": "uuid",
+   "source_path": "7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/local_6c9d7028-fd07-4c19-b1ce-61498b86026e/audit.jsonl",
+   "transcript_id": 19560
+  },
+  {
+   "attribution_state": "evidenced",
+   "content_sha256": "06fe9e25adbd0dc8d4f2249fe12511f2ef62e034d3f4be3f1d3d9c46bcc7239d",
+   "has_trailing_newline": true,
+   "host_attribution": "manifest_verified",
+   "ingested_at": "2026-08-30T16:02:28.720806Z",
+   "line_count": 54,
+   "line_ending": "LF",
+   "project_attribution": "none_declared",
+   "raw_byte_length": 96611,
+   "session_ref": "audit",
+   "session_ref_scheme": "uuid",
+   "source_path": "7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/local_46463ead-0bb4-41b5-b8e9-0bc095f58379/audit.jsonl",
+   "transcript_id": 19558
+  }
+ ],
+ "result_status": "ok",
+ "scope_status": "resolved",
+ "unevaluated": []
+}

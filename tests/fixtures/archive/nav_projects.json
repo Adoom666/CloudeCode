@@ -1,0 +1,45 @@
+{
+ "meta": {
+  "paging": {
+   "has_more": true,
+   "limit": 3,
+   "next_cursor": "eyJzbHVnIjoiLVVzZXJzLWpzdWdhbWVsZS1MaWJyYXJ5LUFwcGxpY2F0aW9uLVN1cHBvcnQtQ2xhdWRlLWxvY2FsLWFnZW50LW1vZGUtc2Vzc2lvbnMtNzIwNWNlNzMtNjVhMy00ZWRiLThmYTItZTRjNGFkNmY2OTg5LTYwYmMwZDA5LWUyMDMtNDI5MS05NDMzLTdjMTIyMGI0OGI1Mi1sb2NhbC02YzlkNzAyOC1mZDA3LTRjMTktYjFjZS02MTQ5OGI4NjAyNmUtb3V0cHUtc2NoamphIiwidiI6MX0",
+   "returned": 3
+  },
+  "scope": {
+   "corpus_id": 2,
+   "corpus_key": "local-agent-mode-sessions",
+   "kind": "corpus"
+  },
+  "unattributed": {
+   "href": "/api/v1/archive/corpora/2/unattributed",
+   "transcript_count": 5
+  }
+ },
+ "result": [
+  {
+   "first_seen_at": "2026-08-30T16:02:01.621849Z",
+   "observed_cwd": "/Users/jsugamele/Library/Application Support/Claude/local-agent-mode-sessions/7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/agent/local_ditto_60bc0d09-e203-4291-9433-7c1220b48b52/outputs",
+   "project_id": 72,
+   "slug": "-Users-jsugamele-Library-Application-Support-Claude-local-agent-mode-sessions-7205ce73-65a3-4edb-8fa2-e4c4ad6f6989-60bc0d09-e203-4291-9433-7c1220b48b52-agent-local-ditto-60bc0d09-e203-4291-9433-7c1220-sr3bln",
+   "transcript_count": 2
+  },
+  {
+   "first_seen_at": "2026-08-30T16:02:28.718038Z",
+   "observed_cwd": "/Users/jsugamele/Library/Application Support/Claude/local-agent-mode-sessions/7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/local_46463ead-0bb4-41b5-b8e9-0bc095f58379/outputs",
+   "project_id": 74,
+   "slug": "-Users-jsugamele-Library-Application-Support-Claude-local-agent-mode-sessions-7205ce73-65a3-4edb-8fa2-e4c4ad6f6989-60bc0d09-e203-4291-9433-7c1220b48b52-local-46463ead-0bb4-41b5-b8e9-0bc095f58379-outpu-cgsgaf",
+   "transcript_count": 1
+  },
+  {
+   "first_seen_at": "2026-08-30T16:02:29.706053Z",
+   "observed_cwd": "/Users/jsugamele/Library/Application Support/Claude/local-agent-mode-sessions/7205ce73-65a3-4edb-8fa2-e4c4ad6f6989/60bc0d09-e203-4291-9433-7c1220b48b52/local_6c9d7028-fd07-4c19-b1ce-61498b86026e/outputs",
+   "project_id": 75,
+   "slug": "-Users-jsugamele-Library-Application-Support-Claude-local-agent-mode-sessions-7205ce73-65a3-4edb-8fa2-e4c4ad6f6989-60bc0d09-e203-4291-9433-7c1220b48b52-local-6c9d7028-fd07-4c19-b1ce-61498b86026e-outpu-schjja",
+   "transcript_count": 1
+  }
+ ],
+ "result_status": "ok",
+ "scope_status": "resolved",
+ "unevaluated": []
+}

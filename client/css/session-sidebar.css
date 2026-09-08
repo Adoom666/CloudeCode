@@ -75,11 +75,28 @@
     display: flex;
     flex-direction: column;
     transform: translateX(-100%);
-    transition: transform 160ms ease;
+    /* VISIBILITY IS HALF A BUG FIX, NOT STYLING - do not "simplify" it out.
+     * A panel taken off screen by a transform alone is still in the tab
+     * order and can still hold document.activeElement, so the sidebar row
+     * the user just clicked kept focus while invisible and its keydown
+     * handler went on eating ArrowUp/Down, Home/End, Space, Enter and `p`
+     * (which silently pins a session). `visibility: hidden` takes the whole
+     * subtree out of focus; see SessionSidebarController._releaseFocus().
+     *
+     * The animation is unchanged, and the two transition lines are what
+     * makes that true. Closing: visibility is delayed by 160ms, so it holds
+     * `visible` for exactly the length of the slide-out and only then goes
+     * hidden. Opening: the delay is 0s, so the panel is visible before the
+     * slide-in starts. `visibility` is animatable in discrete steps, which
+     * is why this works at all where `display: none` would kill both. */
+    visibility: hidden;
+    transition: transform 160ms ease, visibility 0s linear 160ms;
 }
 
 .session-sidebar-panel--open {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform 160ms ease, visibility 0s linear 0s;
 }
 
 /* ---- PINNED (docked) -------------------------------------------------
@@ -405,4 +422,16 @@ body.session-sidebar-pinned .session-sidebar-panel {
     background: var(--color-danger-bg-hover);
     border-color: var(--color-danger);
     outline: none;
+}
+
+/* NO WORK RECORDED YET, made visible rather than merely implied.
+ *
+ * The sidebar is ordered by `last_work_at`, so a session that has never
+ * been measured working sits at the bottom - the same place a human
+ * reads as "the stalest thing I own". Those are different statements.
+ * The row is dimmed and carries a title saying so, so the third outcome
+ * is something you can SEE, not something the ordering silently folds
+ * into the tail of the measured rows. */
+.session-sidebar-row[data-work="unrecorded"] .session-sidebar-row-name {
+    opacity: 0.72;
 }

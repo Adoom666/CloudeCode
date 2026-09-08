@@ -46,9 +46,26 @@
 }
 
 .status-dot--question {
-    /* "Your turn" - second-loudest treatment after dead. Fast pulse +
-     * the theme accent so it reads as "act now", distinct from the
-     * slower finished-unread pulse below. */
+    /* BLOCKED ON A YES/NO (a PermissionRequest) - second-loudest
+     * treatment after dead. Fast pulse + the stronger orange so it reads
+     * as "act now", distinct from the slower finished-unread pulse below
+     * and from the calmer `notice` beneath it. Same hue the LED gives
+     * `waiting-permission`; see client/css/status-led.css for why that
+     * token and not the danger red.
+     *
+     * THIS FILE IS THE FALLBACK PATH ONLY - it paints a `.status-dot`
+     * emitted WITHOUT the LED, i.e. when status-led.js failed to load.
+     * See the referee block at the bottom of status-led.css. */
+    background: var(--color-status-pending, #ffa500);
+    box-shadow: 0 0 8px var(--color-status-pending, #ffa500);
+    animation: status-dot-pulse 0.9s ease-in-out infinite;
+}
+
+.status-dot--notice {
+    /* WANTS ATTENTION AND IS NOT BLOCKED (a Notification). The theme
+     * accent this state used to share with `question`, and the same fast
+     * pulse - it still wants the user - but the calmer of the two hues,
+     * because it will not stop the agent from making progress. */
     background: var(--color-accent);
     box-shadow: 0 0 8px var(--color-accent-glow, var(--color-accent));
     animation: status-dot-pulse 0.9s ease-in-out infinite;

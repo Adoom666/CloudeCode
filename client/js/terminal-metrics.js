@@ -357,7 +357,117 @@ console.log('[TerminalMetrics Module] Loading...');
         }
     }
 
+    /**
+     * Everything that can move a row count without the box moving, in one
+     * log-safe string.
+     *
+     * WHY THIS EXISTS. A terminal was measured at 45 rows on reconnect and
+     * 41 rows eight seconds later while `#terminal` stayed 668px tall the
+     * whole time. The box did not change; the CELL did - roughly 14.8px to
+     * 16.3px per row. Row count alone cannot tell those two situations
+     * apart, so `[TERM-RESIZE]` could not say which had happened, and
+     * neither could anyone reading it afterwards.
+     *
+     * These are the only inputs to a cell height, so a line carrying all
+     * of them can be diffed between two resizes and the mover identified
+     * without guessing: the two options, the renderer's actual cell box,
+     * the font stack, whether font loading is still in flight, and which
+     * renderer is live. The last matters more than it looks - the WebGL
+     * renderer floors the cell to whole device pixels and the DOM renderer
+     * does not (see renderedWidth above), so losing the WebGL context
+     * silently changes the cell size and therefore the grid.
+     *
+     * Never throws: a diagnostic that can break a resize is worse than no
+     * diagnostic.
+     *
+     * @param {object} controller - a TerminalController with .term.
+     * @returns {string} space-separated key=value pairs, or 'cell=unreadable'.
+     * @example
+     *   describeCellMetrics(ctl)
+     *   // 'font=14 lh=1 cell=8.33x14.85 renderer=webgl fonts=loaded family=ui-monospace'
+     */
+    function describeCellMetrics(controller) {
+        try {
+            const term = controller && controller.term;
+            if (!term) return 'cell=no-term';
+            const o = term.options || {};
+            let cell = 'unreadable';
+            try {
+                const c = term._core._renderService.dimensions.css.cell;
+                cell = `${round2(c.width)}x${round2(c.height)}`;
+            } catch (err) {
+                // Private API; a version bump can move it. The rest of the
+                // line is still worth printing, so this is not fatal.
+                cell = 'unreadable';
+            }
+            const fonts = (typeof document !== 'undefined' && document.fonts
+                && document.fonts.status) || 'unknown';
+            const renderer = controller._webglAddon ? 'webgl' : 'dom';
+            const family = String(o.fontFamily || '').split(',')[0].trim();
+            return `font=${o.fontSize} lh=${o.lineHeight} cell=${cell} `
+                + `renderer=${renderer} fonts=${fonts} family=${family} `
+                + describeBoxHeights();
+        } catch (err) {
+            return 'cell=unreadable';
+        }
+    }
+
+    /**
+     * The heights of every box between the screen and the terminal.
+     *
+     * The other half of "what moved". A row count changes either because
+     * the cell changed or because the box did, and the cell fields above
+     * cover only the first. When the terminal went 45 rows to 41 with
+     * `cell=8x16` on both lines, the cell fields proved it was the box -
+     * and then could not say WHICH box, which is a second debugging round
+     * for the sake of four more numbers.
+     *
+     * `.info` is listed explicitly because it is the last in-flow sibling
+     * of `.terminal-container` and its contents (session id, status text,
+     * the re-parented status dot) all arrive after connect, so it is the
+     * box most able to change late. Its height is now reserved in CSS;
+     * this is how anyone checks that the reservation is holding.
+     *
+     * @returns {string} space-separated key=value pairs in CSS px.
+     * @example
+     *   describeBoxHeights() // 'screen=741 container=698 term=668 info=43'
+     */
+    function describeBoxHeights() {
+        try {
+            if (typeof document === 'undefined') return 'boxes=unreadable';
+            const h = (sel) => {
+                const el = sel.charAt(0) === '#'
+                    ? document.getElementById(sel.slice(1))
+                    : document.querySelector(sel);
+                return el && Number.isFinite(el.clientHeight) ? el.clientHeight : '?';
+            };
+            // .info carries a border, which clientHeight excludes - use
+            // offsetHeight so the number matches what it takes from the
+            // column.
+            let info = '?';
+            const infoEl = document.querySelector('.info');
+            if (infoEl && Number.isFinite(infoEl.offsetHeight)) info = infoEl.offsetHeight;
+            return `screen=${h('#terminal-screen')} container=${h('.terminal-container')} `
+                + `term=${h('#terminal')} info=${info}`;
+        } catch (err) {
+            return 'boxes=unreadable';
+        }
+    }
+
+    /**
+     * Round to two decimals for a log line, tolerating non-numbers.
+     *
+     * @param {*} n - candidate number.
+     * @returns {string} the rounded value, or '?' when not finite.
+     * @example round2(14.84375) // '14.84'
+     */
+    function round2(n) {
+        return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : '?';
+    }
+
     window.TerminalMetrics = {
+        describeCellMetrics,
+        describeBoxHeights,
         currentGrid,
         waitForFonts,
         xtermStylesheetApplied,

@@ -1,0 +1,54 @@
+{
+ "meta": {
+  "body_bytes_note": "body_bytes is a DEPRECATED alias for body_chars and counts UNICODE CODE POINTS, not bytes. Read body_chars.",
+  "body_bytes_units": "unicode_code_points",
+  "body_size_units": "unicode_code_points",
+  "offset_units": "unicode_code_points",
+  "offset_units_utf16_available": true,
+  "paging": {
+   "has_more": null,
+   "limit": 50,
+   "next_cursor": null,
+   "returned": 0
+  },
+  "query": {
+   "case_sensitive": false,
+   "q": "zzzqqqxyznotfound"
+  },
+  "scan": {
+   "budget_bytes": 536870912,
+   "budget_transcripts": 2000,
+   "bytes_scanned": 551648566,
+   "elapsed_seconds": 3.255133,
+   "resume_cursor": "eyJieXRlcyI6NTUxNjQ4NTY2LCJsaW5lX25vIjotMSwic2Nhbm5lZCI6ODAxLCJ0X2lkIjo2NTY5LCJ0X2luZ2VzdGVkX2F0IjoiMjAyNi0wOC0yOVQyMzozMDoxMS41NjU1MzhaIiwidiI6MX0",
+   "status": "budget_exhausted",
+   "transcripts_not_scanned": 2615,
+   "transcripts_scanned": 801
+  },
+  "scope": {
+   "kind": "project",
+   "project_id": 12,
+   "transcripts_in_scope": 3416
+  },
+  "snippet_gate": {
+   "guarantee": "best_effort",
+   "known_values_indexed": 739,
+   "layers": [
+    "body_secret_finding_count",
+    "detectors_over_window",
+    "known_credential_value_hash"
+   ],
+   "limitation": "A credential never detected anywhere in this corpus is not in the known-value index and is invisible to the detectors for the same reason it was never detected. Pass snippets=false for a response that carries no preview text at all.",
+   "withholding_never_suppresses_a_hit": true
+  }
+ },
+ "result": [],
+ "result_status": "partial",
+ "scope_status": "resolved",
+ "unevaluated": [
+  {
+   "reason": "2615 of 3416 transcripts were not scanned: byte budget 536870912 was spent after 801 transcripts",
+   "subject": "project:12"
+  }
+ ]
+}

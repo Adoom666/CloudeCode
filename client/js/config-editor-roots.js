@@ -147,7 +147,7 @@ function projectRootsNotice(reason) {
 function workdirUnavailableNotice(label, projectPath) {
     const where = projectPath || 'the working directory';
     return `${label}: could not reach ${where} - it may have been moved, `
-        + 'deleted, or unmounted.';
+        + 'removed, or unmounted.';
 }
 
 /**

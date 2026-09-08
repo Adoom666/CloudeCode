@@ -1,0 +1,345 @@
+/* =====================================================================
+ * THE THREE-OUTCOME VISUAL VOCABULARY. Shared by every archive region.
+ *
+ * WHAT THIS FILE IS DEFENDING. The server pays real cost to distinguish
+ * "I looked and found nothing" from "I could not look" from "I ran out
+ * of budget partway". archive-outcome.js carries that as far as a token
+ * and archive-outcome-view.js carries it to markup. THIS file carries it
+ * the last step, to the pixel. There is no outer check after CSS. If a
+ * cannot_determine and an empty result land on screen looking alike,
+ * every layer of care underneath was spent for nothing.
+ *
+ * SIX CHANNELS, AND NO SINGLE ONE IS LOAD BEARING.
+ *   1. the leading word          (markup, archive-outcome-view.js)
+ *   2. the prose                 (markup)
+ *   3. data-outcome              (markup)
+ *   4. which actions exist       (markup)
+ *   5. border STYLE and WEIGHT   (this file)
+ *   6. a text glyph before the label, and the label's own weight and
+ *      letter spacing             (this file)
+ * Colour is a seventh and is never used alone. A person with a colour
+ * vision deficiency, a monochrome display or a high-contrast OS setting
+ * still reads the difference off channels 1, 2, 5 and 6.
+ *
+ * BORDER-RADIUS IS NOT A CHANNEL AND MUST NEVER BECOME ONE. Three of
+ * this app's themes - `terminal`, `gameboy` and `legacy_apple` - zero
+ * every radius token deliberately, as part of a sharp-edged aesthetic
+ * the owner chose and asked not to be "fixed". A meaning carried by a
+ * rounded corner is a meaning those three themes cannot express, so it
+ * would be a meaning that silently disappears on a quarter of the
+ * installs. No rule below sets border-radius at all.
+ *
+ * EVERY COLOUR IS AN EXISTING THEME TOKEN. Nothing is hardcoded, so a
+ * theme that redefines its palette redefines these blocks with it.
+ * ===================================================================== */
+
+.archive-outcome {
+    display: block;
+    padding: 14px 16px;
+    margin: 10px 0;
+    background: var(--color-bg-card);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+/* The leading word. Channel 6's carrier: weight and letter-spacing are
+ * set per outcome below, so the label reads differently even rendered
+ * in a single colour on a monochrome screen. */
+.archive-outcome__label {
+    margin: 0 0 6px 0;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+}
+
+/* Channel 6's glyph. A TEXT marker, not an icon font and not a
+ * background image: it survives a failed font load, a print stylesheet
+ * and a monochrome display, and it is keyed off data-outcome, which
+ * archive-outcome-view.js already writes - no markup change is needed
+ * for these rules to have something to match. A rule whose selector
+ * nothing emits is a missing feature that DOM tests cannot see, so
+ * every selector below is keyed on an attribute that is measurably
+ * present in the rendered block. */
+.archive-outcome__label::before {
+    content: "";
+    margin-right: 8px;
+    font-family: var(--font-mono);
+}
+
+.archive-outcome[data-outcome="ok"] .archive-outcome__label::before { content: "[=]"; }
+.archive-outcome[data-outcome="empty"] .archive-outcome__label::before { content: "[0]"; }
+.archive-outcome[data-outcome="partial"] .archive-outcome__label::before { content: "[!]"; }
+.archive-outcome[data-outcome="cannot-determine"] .archive-outcome__label::before { content: "[X]"; }
+.archive-outcome[data-outcome="not-found"] .archive-outcome__label::before { content: "[?]"; }
+.archive-outcome[data-outcome="transport-error"] .archive-outcome__label::before { content: "[--]"; }
+
+.archive-outcome__headline {
+    margin: 0 0 8px 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+/* THE AUDIT TRAIL, BEHIND A DISCLOSURE. Every fact the block used to
+ * shout is still here and still exact; it is one click away instead of
+ * being the fifth restatement of the headline. The summary NAMES what is
+ * inside rather than saying "details", so nobody has to open it to find
+ * out whether it is worth opening. */
+.archive-outcome__audit {
+    margin: 8px 0 0;
+    border-top: 1px solid var(--color-border);
+    padding-top: 8px;
+}
+
+.archive-outcome__audit > summary {
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    list-style: none;
+    padding: 4px 0;
+}
+
+.archive-outcome__audit > summary::-webkit-details-marker {
+    display: none;
+}
+
+/* The open/closed marker is TEXT, so it survives the three themes that
+ * zero every radius token, a monochrome display and a screenshot. */
+.archive-outcome__audit > summary::before {
+    content: "[+] ";
+}
+
+.archive-outcome__audit[open] > summary::before {
+    content: "[-] ";
+}
+
+.archive-outcome__audit > summary:hover {
+    color: var(--color-accent);
+}
+
+.archive-outcome__audit > summary:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.archive-outcome__reasons {
+    margin: 8px 0;
+    padding-left: 18px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.archive-outcome__reason-subject {
+    font-weight: 700;
+    margin-right: 8px;
+}
+
+.archive-outcome__coverage,
+.archive-outcome__has-more {
+    margin: 6px 0 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--color-fg-muted);
+}
+
+.archive-outcome__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.archive-outcome__action {
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    background: var(--color-bg-elevated);
+    color: var(--color-fg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.archive-outcome__action:hover:not([disabled]) {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent);
+    box-shadow: 0 0 8px var(--color-accent-border-soft);
+}
+
+.archive-outcome__action:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.archive-outcome__action[disabled] {
+    cursor: not-allowed;
+    opacity: 0.55;
+    /* A disabled control still has to say WHY, so the reason the
+     * renderer attached is surfaced on hover and to assistive tech
+     * rather than only living in an attribute nobody reads. */
+    text-decoration: line-through;
+}
+
+/* ---- OK ------------------------------------------------------------
+ * Plain. Results are the ordinary case and must not compete visually
+ * with the three that need attention. */
+.archive-outcome[data-outcome="ok"] {
+    border-left: 1px solid var(--color-border);
+}
+
+.archive-outcome[data-outcome="ok"] .archive-outcome__label {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--color-fg-muted);
+}
+
+/* ---- EMPTY ---------------------------------------------------------
+ * A POSITIVE finding: the scope was read and holds nothing. Solid, thin,
+ * calm. It must never look like a warning, because it is a measurement
+ * that succeeded. */
+.archive-outcome[data-outcome="empty"] {
+    border: 1px solid var(--color-border);
+    border-left: 1px solid var(--color-border);
+}
+
+.archive-outcome[data-outcome="empty"] .archive-outcome__label {
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--color-fg-muted);
+}
+
+/* ---- PARTIAL -------------------------------------------------------
+ * "I did not finish looking." Thick solid rail on the leading edge, and
+ * a striped background so the block is distinguishable from `empty` even
+ * with every colour token collapsed to one value. */
+/* THE HATCH IS A RAIL, NOT A WASH. It used to tile the whole block, so
+ * every sentence of the partial state was read over a diagonal barber
+ * pole. The hatch IS the distinctness signal and it stays - it is now a
+ * 14px band down the left edge beside the 4px warning rail, with the
+ * prose on the flat card surface where prose belongs. Confined with
+ * background-size + no-repeat rather than by deleting a layer, so the
+ * pattern, the token and the 135deg are all unchanged.
+ *
+ * `background-image` and `background-color` are declared separately, not
+ * through the `background` shorthand, for the reason documented at
+ * .project-item in styles.css: the shorthand silently discards whichever
+ * layer a later rule does not restate. */
+.archive-outcome[data-outcome="partial"] {
+    border-left: 4px solid var(--color-warning);
+    background-color: var(--color-bg-card);
+    background-image:
+        repeating-linear-gradient(
+            135deg,
+            var(--color-warning-bg) 0,
+            var(--color-warning-bg) 6px,
+            transparent 6px,
+            transparent 12px
+        );
+    background-repeat: no-repeat;
+    background-size: 14px 100%;
+    background-position: left top;
+    padding-left: 32px;
+}
+
+.archive-outcome[data-outcome="partial"] .archive-outcome__label {
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--color-warning);
+}
+
+/* ---- CANNOT-DETERMINE ----------------------------------------------
+ * "This was NOT answered." The heaviest treatment in the file: a 6px
+ * rail, a full outline and the widest label spacing. It is deliberately
+ * louder than `partial`, because a partial at least measured something.
+ */
+.archive-outcome[data-outcome="cannot-determine"] {
+    border: 1px solid var(--color-danger-border);
+    border-left: 6px solid var(--color-danger);
+    background: var(--color-danger-bg);
+}
+
+.archive-outcome[data-outcome="cannot-determine"] .archive-outcome__label {
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: var(--color-danger);
+}
+
+/* ---- NOT-FOUND -----------------------------------------------------
+ * Also a real measurement: the archive was read and the id is not in it.
+ * DASHED, which is a channel neither `empty` nor `cannot-determine`
+ * uses, so the three are separable by border style alone. */
+.archive-outcome[data-outcome="not-found"] {
+    border: 1px dashed var(--color-border);
+    border-left: 1px dashed var(--color-border);
+    background: transparent;
+}
+
+.archive-outcome[data-outcome="not-found"] .archive-outcome__label {
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    color: var(--color-fg-muted);
+}
+
+/* ---- TRANSPORT-ERROR -----------------------------------------------
+ * "The server did not answer at all." Same severity as
+ * cannot-determine, DOUBLE border so the two are not interchangeable:
+ * "the server said it could not evaluate" and "the server said nothing"
+ * are different findings and lead to different next steps. */
+.archive-outcome[data-outcome="transport-error"] {
+    border: 3px double var(--color-danger-strong);
+    border-left: 6px double var(--color-danger-strong);
+    background: var(--color-danger-bg);
+}
+
+.archive-outcome[data-outcome="transport-error"] .archive-outcome__label {
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    color: var(--color-danger-strong);
+}
+
+.archive-outcome__transport-reason {
+    margin: 0.3rem 0 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--color-danger-strong);
+}
+
+/* ---- NARROW VIEWPORT ----------------------------------------------
+ * NORMATIVE: outcome blocks do NOT shrink into icons below the one-pane
+ * breakpoint. On a 375px screen a cannot-determine still renders the
+ * words and the reason text, wrapped. Compressing the third outcome into
+ * a glyph on small screens reintroduces exactly the indistinguishability
+ * this file exists to prevent, on the viewport where a person is most
+ * likely to be skimming. Only the padding tightens. */
+@media (max-width: 700px) {
+    .archive-outcome {
+        padding: 12px 12px;
+    }
+
+    .archive-outcome[data-outcome="partial"] {
+        padding-left: 28px;
+    }
+
+    .archive-outcome__label {
+        font-size: 0.8rem;
+        /* Spacing shrinks proportionally so the six labels stay
+         * distinguishable from each other rather than converging. */
+        letter-spacing: 0.06em;
+    }
+
+    .archive-outcome[data-outcome="cannot-determine"] .archive-outcome__label,
+    .archive-outcome[data-outcome="transport-error"] .archive-outcome__label {
+        letter-spacing: 0.12em;
+    }
+
+    .archive-outcome__actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

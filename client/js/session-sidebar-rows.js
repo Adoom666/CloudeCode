@@ -4,14 +4,32 @@
  *
  * Split out of client/js/session-sidebar.js for the project's 500-line
  * rule, and along the same seam the repo already uses for row internals:
- * client/js/session-row-actions.js owns the destructive control and
+ * client/js/session-row-actions.js owns the destructive control,
  * client/js/session-status-ui.js owns the status dot and the mark-unread
- * toggle. This module is the row that composes them, nothing else - it
- * holds no state and touches no DOM, it only returns strings.
+ * toggle, and client/js/session-row-menu.js owns the kebab those two now
+ * fold into. This module is the row that composes them, nothing else -
+ * it holds no state and touches no DOM, it only returns strings.
+ *
+ * THE ACTION ICONS ARE NO LONGER DRAWN INLINE: pin, mark-unread and
+ * close/restart/remove live in the row's overflow menu. Their builders
+ * are unchanged and still have exactly one caller each - now
+ * session-row-menu.js rather than rowHtml(). `pinButtonHtml` is exported
+ * for it and must stay exported.
+ *
+ * NO GROUP CHIP EITHER, AS OF THIS ROUND. "no i dont need to see the
+ * group name in the item. its in the group i can see the group on the
+ * sidebar." The chip used to name the group a row was filed in AND open
+ * the group picker; the display half is simply gone, and the action half
+ * moved into the kebab menu the same way pin/mark-unread/close did -
+ * see `rowMenuItemHtml` in client/js/session-sidebar-group-actions.js,
+ * pulled in by client/js/session-row-menu.js. Group membership itself is
+ * untouched: it is still DB-backed and it is still how the sidebar's
+ * OWN group headers file each row, which is the only place the filing
+ * is shown now.
  *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, pin, mark-unread, delete
+ *   compact   grip, dot, name, kebab
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
  *   detailed  the above, with the badge moved DOWN to a second line that
  *             also carries the session's age
@@ -46,32 +64,19 @@
  * per density. The density contract is a number the stylesheet states,
  * not an accident of whichever controls currently ride the line.
  *
- * A RESTART CONTROL IS NOW EMITTED for a row whose status is `dead`.
- * SUPERSEDES the rule that used to stand here, which read: "NO RESTART
- * CONTROL IS EMITTED HERE, AT ANY DENSITY. Sidebar rows come from the
- * attachable probe, which carries an activity status and no `lifecycle`
- * at all, so this module cannot know that a session is stopped rather
- * than unknown - and restarting something whose state you could not
- * determine is how you end up with two of it."
- *
- * Both halves of that were checked before it was changed, and both have
- * stopped being true:
- *
- *   1. THE STATUS IS NOT ALWAYS A GUESS. `session-sidebar-fetch.js`
- *      `mergeLiveRow()` overwrites `status` with the server's
- *      `activity_status` for every session this app holds a backend for,
- *      and that value is `resolve_pane_status()`'s reading of tmux's own
- *      `#{pane_dead}`. So `dead` on such a row is a measurement. A row
- *      the probe alone produced still carries `unknown`, and
- *      `SessionRowActions.actionsFor` refuses to treat `unknown` as
- *      stopped - so the undetermined case is still withheld, which is
- *      what the original rule was protecting.
- *   2. "TWO OF IT" IS NOT A REACHABLE OUTCOME for this control. Restart
- *      creates nothing: it runs `tmux respawn-pane` against the pane that
- *      is already there (see src/core/session_respawn.py). It never
- *      passes `-k`, and tmux REFUSES respawn-pane on a live pane without
- *      it, so even clicking a stale `dead` row cannot disturb a session
- *      that came back to life, let alone duplicate one.
+ * A RESTART CONTROL IS EMITTED for a row whose status is `dead`, and it
+ * now rides in the kebab menu with the rest of the actions. It
+ * SUPERSEDES an older rule saying the sidebar could not know a session
+ * was stopped rather than unknown. Both halves of that rule stopped
+ * being true: `session-sidebar-fetch.js` `mergeLiveRow()` overwrites
+ * `status` with the server's `activity_status` for every session this
+ * app holds a backend for, and that value is `resolve_pane_status()`
+ * reading tmux's own `#{pane_dead}` - so `dead` is a MEASUREMENT, while
+ * a probe-only row still carries `unknown` and
+ * `SessionRowActions.actionsFor` refuses to treat `unknown` as stopped.
+ * And restart cannot produce "two of it": it runs `tmux respawn-pane`
+ * against the pane already there (src/core/session_respawn.py), never
+ * passes `-k`, and tmux REFUSES respawn-pane on a live pane without it.
  *
  * The destructive control (close vs remove) is unchanged and still comes
  * from SessionRowActions.
@@ -262,6 +267,18 @@ console.log('[SessionSidebarRows Module] Loading...');
                 // row SHOWS, which is why this is conditional.
                 age: (density === 'detailed') ? ageLabel(r.created_at_epoch) : null,
                 theme: r.pinned_theme || null,
+                // punchlist 19 - the "needs a keypress" badge appears and
+                // disappears on its own, without any other field on the
+                // row changing: a session parked on its trust prompt has
+                // the same name, label, status and ownership before and
+                // after somebody answers it. Leaving this out would mean
+                // the badge painted on whichever poll tick happened to
+                // differ for an unrelated reason, and then stayed on
+                // screen after the prompt was answered. Normalized, so an
+                // absent field and an explicit 'unknown' are one value.
+                startup: window.SessionStartupGate
+                    ? window.SessionStartupGate.normalize(r.startup_gate)
+                    : 'unknown',
             })),
         });
     }
@@ -354,64 +371,34 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: build one row at the given density. The dot, the
-     *   mark-unread toggle and the destructive control all come from the
-     *   shared modules, so this row and the launcher's running-session row
-     *   are literally the same controls with the same tooltips and the
-     *   same confirm copy.
+     * Description: build one row at the given density. The dot, the theme
+     *   swatch and the kebab all come from shared modules, so this row
+     *   and the launcher's running-session row are the same controls
+     *   with the same tooltips and confirm copy.
+     *
+     *   `is_pinned`, `unread` and `status` are stamped on the KEBAB even
+     *   though nothing on the row draws them any more - the menu is built
+     *   from those attributes, so they are still things the row carries
+     *   and are still keyed in ``signature`` above.
      * Inputs: r (object) - one merged session row.
      *   density (string) - 'compact' | 'cozy' | 'detailed'.
      * Output: string - HTML.
      */
-    /**
-     * Description: the group affordance on a row - a CHIP naming the
-     *   group this conversation is filed in, doubling as the button that
-     *   opens the group picker.
-     *
-     *   IT IS ONE CONTROL, NOT TWO, and that is the point. The chip has
-     *   to exist anyway for a PINNED row, because a pinned row is drawn
-     *   in the pinned band rather than under its group's header, so
-     *   without it the filing is invisible for exactly the rows the user
-     *   cares most about. Making that same chip the picker means the
-     *   non-drag route is always visible rather than hidden behind a
-     *   hover, which matters on a phone where there is no hover.
-     *
-     *   An UNGROUPED row still gets the control, rendered as a muted
-     *   "+ group" rather than as nothing: a control that only appears
-     *   once you have used it cannot be discovered.
-     *
-     *   Emits NOTHING when the group model is unknown or unreadable.
-     *   Offering to file a conversation into a table we could not read
-     *   is offering an action that cannot work.
-     * Inputs: name (string) - tmux name.
-     * Output: string - HTML, possibly empty.
-     */
-    function groupChipHtml(name) {
-        const G = window.SessionSidebarGroupStore;
-        if (!G || !G.isUsable()) return '';
-        const uuid = G.groupOf(name);
-        const group = uuid ? G.groupByUuid(uuid) : null;
-        const label = group ? group.name : '+ group';
-        const title = group
-            ? `In the ${group.name} group - click to move it`
-            : 'Not in a group - click to file it';
-        return (
-            '<button type="button" class="session-sidebar-row-group'
-            + `${group ? '' : ' session-sidebar-row-group--none'}" `
-            + `data-group-pick="${esc(name)}" `
-            + `title="${esc(title)}" aria-label="${esc(title)}" `
-            + 'aria-haspopup="menu">'
-            + `<span class="session-sidebar-row-group__label">${esc(label)}</span>`
-            + '</button>'
-        );
-    }
-
     function rowHtml(r, density) {
         const mode = density || 'cozy';
         const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // punchlist 19 - "needs a keypress". Empty string for both 'ready'
+        // and 'unknown', so this adds nothing to a normal row. It rides
+        // at EVERY density including compact, unlike the tmux/external
+        // badge: that badge is redundant with the row's own styling,
+        // while this one is the only thing on screen saying the session
+        // has not started. A density setting must not be able to hide it.
+        const startupGate = window.SessionStartupGate
+            ? window.SessionStartupGate.indicatorHtml(r.startup_gate)
+            : '';
         // TWO STRINGS, NOT INTERCHANGEABLE. `name` is the tmux handle,
-        // for the ATTRIBUTES - grip, pin, group chip, delete and reorder
-        // all key on it, so it must never be a label. `display` is what
+        // for the ATTRIBUTES - grip, pin, group filing, delete and
+        // reorder all key on it, so it must never be a label. `display` is what
         // a HUMAN reads, from the one resolver in session-label.js. This
         // row rendered the handle over a `label` its payload has carried
         // since the feature landed, so "Media Compression" showed as
@@ -436,11 +423,12 @@ console.log('[SessionSidebarRows Module] Loading...');
         const themeSwatch = window.SessionThemeTint
             ? window.SessionThemeTint.swatchHtml(r.pinned_theme)
             : '';
-        const markUnread = window.SessionStatusUI
-            ? window.SessionStatusUI.markUnreadHtml(r.name, !!r.unread)
-            : '';
-        const rowAction = window.SessionRowActions
-            ? window.SessionRowActions.html(r.status, r.name, 'session-sidebar-row-delete')
+        // ONE CONTROL WHERE THREE USED TO BE - "lets fold the icons a
+        // thin 3 dots up and down sub menu". The menu is built from the
+        // SAME builders that used to be called here, so nothing was
+        // dropped and no label was rewritten.
+        const kebab = window.SessionRowMenu
+            ? window.SessionRowMenu.kebabHtml(r)
             : '';
         const rename = renameState(r);
         // The badge is the first thing to go when the user asks for thin
@@ -462,7 +450,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             `<div class="session-sidebar-row" data-name="${name}" ` +
             `data-active="${r.is_this_tab ? '1' : '0'}" ` +
             `data-pinned="${r.is_pinned ? '1' : '0'}" ` +
-            `data-rename-state="${rename.state}" ` +
+            `data-rename-state="${rename.state}" ` + (window.SessionSidebarFetch ? window.SessionSidebarFetch.workAttr(r) : '') +
             `role="option" aria-selected="${r.is_this_tab ? 'true' : 'false'}" ` +
             `tabindex="-1"${sidAttr}${themeAttrs}>` +
             '<div class="session-sidebar-row-main">' +
@@ -480,11 +468,9 @@ console.log('[SessionSidebarRows Module] Loading...');
             // full width of the name away from the status dot, which is
             // the other coloured mark on the row.
             themeSwatch +
+            startupGate +
             inlineBadge +
-            groupChipHtml(r.name) +
-            pinButtonHtml(r.name, !!r.is_pinned) +
-            markUnread +
-            rowAction +
+            kebab +
             '</div>' +
             secondLine +
             '</div>'

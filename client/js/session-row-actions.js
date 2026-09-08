@@ -74,6 +74,40 @@ console.log('[SessionRowActions Module] Loading...');
     const STOPPED_STATUSES = ['dead'];
 
     /**
+     * Statuses that mean "we positively know this session is RUNNING".
+     * A row in one of these may offer restart alongside close, because
+     * restarting a live session is now a supported operation
+     * (respawn-pane -k, same tmux name, same row).
+     *
+     * ``unknown`` IS DELIBERATELY ABSENT HERE TOO, and for the sharper
+     * version of the same reason: offering restart on a row whose state
+     * we could not read would put a control that KILLS A RUNNING PROCESS
+     * in front of a user on the strength of a guess.
+     *
+     * ``stopped`` IS ABSENT, and it is not a near miss. It means the
+     * tmux instance is GONE, not that a pane is holding an exited
+     * process, so there is no pane to kill and nothing to respawn into.
+     * That is the distinction session-status-ui.js spells out at length
+     * where it explains why ``stopped`` is not a synonym for ``dead``.
+     *
+     * The list is an allow-list rather than "everything that is not
+     * dead" so a status added to the vocabulary later cannot silently
+     * inherit a destructive control. Every entry is a live-pane state in
+     * client/js/session-status-ui.js, including the ``running``
+     * back-compat alias a half-upgraded tab still sends.
+     * @type {Array<string>}
+     */
+    const LIVE_STATUSES = [
+        'working',
+        'working_subagent',
+        'question',
+        'notice',
+        'finished_unread',
+        'idle',
+        'running',
+    ];
+
+    /**
      * Hover tooltip + accessible name per action. Identical text goes to
      * both `title` (pointer) and `aria-label` (assistive tech) so the two
      * can never drift, and lowercase to match the app's UI voice.
@@ -146,9 +180,9 @@ console.log('[SessionRowActions Module] Loading...');
             primaryLabel: 'close',
             details:
                 'this cannot be undone. the running process is terminated, ' +
-                'and files uploaded to this session are deleted from the ' +
-                "project's .cloude_uploads folder. the transcript is not " +
-                'deleted and stays under ~/.claude/projects.',
+                'and files uploaded to this session are removed from the ' +
+                "project's .cloude_uploads folder. the transcript is kept " +
+                'and stays under ~/.claude/projects.',
         },
         [ACTION_REMOVE]: {
             title: 'remove session',
@@ -156,9 +190,9 @@ console.log('[SessionRowActions Module] Loading...');
             details:
                 'this cannot be undone. this session already exited, so no ' +
                 'running process is stopped, but files uploaded to it are ' +
-                "deleted from the project's .cloude_uploads folder. the " +
+                "removed from the project's .cloude_uploads folder. the " +
                 'leftover tmux shell is cleared and cloudecode forgets the ' +
-                'entry. the transcript is not deleted and stays under ' +
+                'entry. the transcript is kept and stays under ' +
                 '~/.claude/projects.',
         },
     };
@@ -186,15 +220,35 @@ console.log('[SessionRowActions Module] Loading...');
     /**
      * Decide which action a row with this status is allowed to offer.
      *
+     * Description: three cases, and the third is not the second.
+     *
+     *   A DEAD row is unchanged: restart first, because it is what the
+     *   user came for, then remove.
+     *
+     *   A row we positively know is LIVE now offers restart too, after
+     *   close. It is second rather than first on purpose - close is
+     *   where the muscle memory already points on these rows, and moving
+     *   it would relocate a destructive control under a cursor that had
+     *   learned where it was.
+     *
+     *   OFFERING IT IS NOT PERMITTING IT. This control opens the restart
+     *   picker; a live restart still needs the arm box AND the confirm
+     *   modal inside it (client/js/session-restart-picker.js), and the
+     *   server still refuses without `confirm_restart_live`. Three
+     *   gates, and this is only the first.
+     *
+     *   An UNKNOWN row gets close alone, exactly as before. We could not
+     *   read its state, and a control that kills a running process is
+     *   not something to offer on a guess.
      * Inputs:
      *   status (string|null|undefined) - raw activity_status/status value
      *     from the API payload.
      * Output:
-     *   string - ACTION_CLOSE or ACTION_REMOVE.
+     *   Array<string> - one or two ACTION_* ids, in render order.
      * Example:
-     *   actionFor('working') -> 'close'
-     *   actionFor('dead')    -> 'remove'
-     *   actionFor(undefined) -> 'close'   // unknown is never assumed dead
+     *   actionsFor('working')  -> ['close', 'restart']
+     *   actionsFor('dead')     -> ['restart', 'remove']
+     *   actionsFor(undefined)  -> ['close']   // unknown is never guessed
      */
     function actionsFor(status) {
         const key = window.SessionStatusUI
@@ -206,6 +260,9 @@ console.log('[SessionRowActions Module] Loading...');
             // poor trade on a row whose whole problem is that it looks
             // finished.
             return [ACTION_RESTART, ACTION_REMOVE];
+        }
+        if (LIVE_STATUSES.indexOf(key) !== -1) {
+            return [ACTION_CLOSE, ACTION_RESTART];
         }
         return [ACTION_CLOSE];
     }
@@ -225,6 +282,8 @@ console.log('[SessionRowActions Module] Loading...');
      * Example:
      *   actionFor('working') -> 'close'
      *   actionFor('dead')    -> 'restart'
+     *   // a live row's SECOND action is restart; this accessor cannot
+     *   // see it, which is why new code calls actionsFor instead.
      */
     function actionFor(status) {
         return actionsFor(status)[0];
@@ -237,13 +296,17 @@ console.log('[SessionRowActions Module] Loading...');
      *   controls. Close and remove both destroy something the user cannot
      *   get back (a running process, an uploads bucket), so both confirm.
      *
-     *   RESTART DOES NOT, and that is a decision rather than an omission.
-     *   It kills nothing, deletes nothing, and writes no database row; it
-     *   puts a process into a pane that is already empty, and the close
-     *   button sitting beside it undoes the result. A dialog here would
-     *   put a second click back into precisely the flow the user reported
-     *   as broken - and a confirmation that guards a harmless action is
-     *   how users learn to click through the ones that matter.
+     *   RESTART RETURNS FALSE, and that no longer means "no
+     *   confirmation". It means "not THIS confirmation". Restart now
+     *   opens the restart picker
+     *   (client/js/session-restart-picker.js), whose own restart button
+     *   is the explicit act, and which can state two things this generic
+     *   dialog cannot: which rung the respawn ladder would land on - an
+     *   empty `pane_start_command` silently returns a LOGIN SHELL - and
+     *   which launch wrapper the session will come back on. Routing it
+     *   through the shared modal as well would ask the user to agree
+     *   twice to a decision the picker already spelled out in full, and
+     *   the second dialog would say less than the first.
      * Inputs:
      *   action (string) - an ACTION_* id.
      * Output:
@@ -437,6 +500,8 @@ console.log('[SessionRowActions Module] Loading...');
         ACTION_CLOSE,
         ACTION_REMOVE,
         ACTION_RESTART,
+        LIVE_STATUSES,
+        STOPPED_STATUSES,
         ATTR_ACTION,
         ATTR_NAME,
         BASE_CLASS,

@@ -277,17 +277,34 @@ class TestDatastoreUnreadableIsItsOwnOutcome:
         Description: the signature is the enforcement. While it takes a
           config list, a caller can hand one in and the module can grow
           a second opinion about where projects come from.
+
+          THE BAN IS ON A SECOND SOURCE, NOT ON EVERY PARAMETER, and the
+          distinction matters enough to spell out. This used to read
+          ``params == ["state_dir"]``, which enforced the real invariant
+          and also, incidentally, forbade a FILTER over the one source -
+          so adding ``include_archived`` (which changes nothing about
+          where the rows come from, only which of them are returned)
+          failed a guard about provenance. The allowlist below keeps the
+          enforcement exact: anything named for a source - config,
+          projects, entries, fallback - still fails, because it is not
+          in the list.
         """
         import inspect
 
         from src.core import project_authority as authority
 
+        allowed = {"state_dir", "include_archived"}
         params = list(
             inspect.signature(authority.resolve_projects).parameters
         )
-        assert params == ["state_dir"], (
-            f"resolve_projects still accepts {params}; it must read only "
-            "the datastore"
+        assert params[0] == "state_dir", (
+            f"resolve_projects no longer leads with state_dir: {params}"
+        )
+        extra = [p for p in params if p not in allowed]
+        assert not extra, (
+            f"resolve_projects accepts {extra}; it must read only the "
+            "datastore, so it may take the state dir and read FILTERS "
+            "over it, never another source of projects"
         )
 
 

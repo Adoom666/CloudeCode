@@ -108,14 +108,31 @@ class TestWrites:
             with pytest.raises(ProjectNameAmbiguous):
                 resolve_by_name(conn, "same")
 
-    def test_touch_moves_a_project_to_the_top(self, seeded: Path) -> None:
+    def test_touch_does_NOT_move_a_project_to_the_top(self, seeded: Path) -> None:
+        """SUPERSEDES ``test_touch_moves_a_project_to_the_top``.
+
+        That test pinned the behaviour the user asked to have removed. He
+        reads the launcher as a timeline - "it keeps me know what was
+        recent and i can look down the list to recap other things" - and
+        ``touch_project_by_path`` is what POST /sessions calls when he
+        CLICKS a project, so the old contract meant looking at the list
+        reordered it.
+
+        ``last_opened_at`` is still written; it is simply no longer the
+        sort key. See ``_ORDER_BY`` in src/core/project_writes.py, and
+        tests/test_session_work_ordering.py for the key that replaced it.
+        """
         with closing(connect(db_path_for(seeded))) as conn:
-            assert list_projects_ordered(conn)[0]["display_name"] != "ai-setup"
+            before = [r["display_name"] for r in list_projects_ordered(conn)]
+            assert before[0] != "ai-setup"
             touched = touch_project_by_path(
                 conn, "/Users/jsugamele/Development/ai-setup"
             )
             assert touched is not None
-            assert list_projects_ordered(conn)[0]["display_name"] == "ai-setup"
+            assert touched["last_opened_at"] is not None, (
+                "the column is kept and still written - only the ordering changed"
+            )
+            assert [r["display_name"] for r in list_projects_ordered(conn)] == before
 
     def test_touch_on_an_unknown_directory_is_a_miss_not_an_error(
         self, seeded: Path
@@ -132,30 +149,46 @@ class TestWrites:
         assert names[0] == "fs2"
         assert names[-1] == "ai-setup"
 
-    def test_a_newly_created_project_sorts_first(self, seeded: Path) -> None:
+    def test_a_newly_created_project_sorts_LAST_until_it_is_worked_in(
+        self, seeded: Path
+    ) -> None:
+        """SUPERSEDES ``test_a_newly_created_project_sorts_first``.
+
+        The list is ordered by work now, and a project created a second
+        ago has had none done in it - which is a real thing to say, not a
+        demotion. It joins the unrecorded tail, in creation order, and its
+        row is LABELLED as unrecorded so its position does not read as
+        "the stalest thing you own" (see ``_projectWorkAttrs`` in
+        client/js/launchpad.js). The first turn run inside it moves it to
+        the top, which is what the old rule was really reaching for.
+        """
         with closing(connect(db_path_for(seeded))) as conn:
             create_project(conn, name="brand-new", path="/brand/new")
-            assert list_projects_ordered(conn)[0]["display_name"] == "brand-new"
+            rows = list_projects_ordered(conn)
+            assert rows[-1]["display_name"] == "brand-new"
+            assert rows[-1]["work_at"] is None
 
     def test_a_presence_refresh_does_not_reorder_the_launcher(
         self, seeded: Path
     ) -> None:
-        """Why last_opened_at exists rather than reusing updated_at.
+        """Nothing a plain page load touches may reorder the launcher.
 
         refresh_and_list_presence writes updated_at on every row on every
-        plain page load. If the launcher ordered by updated_at it would
-        reshuffle itself just from being looked at, and would claim to be
-        sorting by "last opened" while sorting by "last probed".
+        plain page load, so ordering by updated_at would reshuffle the
+        list purely from it being looked at. That was the original reason
+        for ``last_opened_at``; the ordering has since moved on again, to
+        MAX(sessions.last_work_at), because opening turned out to be a
+        look too. The invariant this test guards is the durable one and
+        is unchanged: LOOKING CHANGES NOTHING.
         """
         from src.core.project_store import refresh_and_list_presence
 
         with closing(connect(db_path_for(seeded))) as conn:
-            touch_project_by_path(conn, "/Users/jsugamele/Development/ai-setup")
             before = [r["display_name"] for r in list_projects_ordered(conn)]
 
+            touch_project_by_path(conn, "/Users/jsugamele/Development/ai-setup")
             refresh_and_list_presence(conn)
 
             after = [r["display_name"] for r in list_projects_ordered(conn)]
 
         assert after == before
-        assert after[0] == "ai-setup"

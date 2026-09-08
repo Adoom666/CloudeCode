@@ -1,0 +1,212 @@
+/*
+ * The restart picker panel.
+ *
+ * It reuses `.modal-overlay` / `.modal-content` / `.modal-btn` from
+ * styles.css so it is the same object on screen as every other dialog in
+ * the app; everything here is only the option list inside it.
+ *
+ * THE PREDICTED RUNG IS COLOURED, and that is the point of this file.
+ * "starts the agent", "returns a plain shell" and "cannot be determined"
+ * are three different answers, so they get three different treatments -
+ * a shell that reads like an agent is the exact failure the panel exists
+ * to prevent, and a badge that looks identical in all three cases would
+ * put it right back.
+ */
+
+.restart-picker__options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 12px 0 4px;
+    max-height: 46vh;
+    max-height: 46dvh;
+    overflow-y: auto;
+}
+
+.restart-picker__option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border-color, #333);
+    border-radius: 4px;
+    cursor: pointer;
+    /* A 44px-tall target on a coarse pointer without forcing it on a
+       mouse, which would make a three-option list taller than the
+       viewport on a phone. It is a FLOOR, never a height: the row grows
+       past it whenever its text needs the room. */
+    min-height: 44px;
+    /* THE LINE THAT STOPS THE ROWS PAINTING ON EACH OTHER. Do not remove.
+       The list above is a flex column with a max-height, and a flex item
+       defaults to `flex-shrink: 1`. So when the rows did not fit, the
+       flex algorithm took the difference out of the ROWS instead of
+       letting the container scroll: each row was compressed toward the
+       44px floor above while the text inside kept its natural height,
+       spilled past the border and landed on the next row's title. On the
+       owner's session that was a 62px box holding 113px of text on a
+       desktop and a 58px box holding 145px on a phone.
+
+       `0` makes the row refuse to give up height it needs, so the
+       overflow lands on `.restart-picker__options`, which has
+       `overflow-y: auto` and is built to take it.
+       tests/test_restart_picker_geometry.py fails without this. */
+    flex-shrink: 0;
+}
+
+.restart-picker__option:hover {
+    border-color: var(--accent-color, #6cf);
+}
+
+/* NOT hidden. A wrapper that cannot launch right now is still a wrapper
+   the user configured, and removing it from the list reads as "you never
+   made that one". It is shown, dimmed, with its reason. */
+.restart-picker__option.is-unavailable {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.restart-picker__option input[type="radio"] {
+    margin-top: 2px;
+    flex: 0 0 auto;
+}
+
+.restart-picker__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* Take the width the radio leaves and no more. `min-width: 0` is the
+       half that matters: without it this flex item's automatic minimum
+       size is its longest unbreakable word, so an absolute path in the
+       detail line would push the row wider than the panel instead of
+       wrapping inside it. */
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.restart-picker__title {
+    font-weight: 600;
+    /* Long wrapper ids must wrap rather than push the panel wide. */
+    overflow-wrap: anywhere;
+}
+
+.restart-picker__current {
+    margin-left: 8px;
+    font-weight: 400;
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.restart-picker__kind {
+    font-size: 0.85em;
+    text-transform: lowercase;
+}
+
+.restart-picker__kind[data-kind="agent"],
+.restart-picker__kind[data-kind="replay"] {
+    color: var(--success-color, #5c9);
+}
+
+.restart-picker__kind[data-kind="shell"] {
+    color: var(--warning-color, #d90);
+}
+
+.restart-picker__kind[data-kind="not_dead"],
+.restart-picker__kind[data-kind="cannot_determine"] {
+    color: var(--text-muted, #999);
+}
+
+/* A DEFINITE ABSENCE, not an unknown, so it is not painted like one.
+   The transcript was looked for and is gone; restarting would open a
+   pane that exits at once. */
+.restart-picker__kind[data-kind="transcript_missing"] {
+    color: var(--danger-color, #e06c75);
+}
+
+.restart-picker__detail {
+    font-size: 0.85em;
+    opacity: 0.8;
+    overflow-wrap: anywhere;
+}
+
+/*
+ * THE ONE FACT THAT IS NOT A CHOICE.
+ *
+ * A sentence every option would have carried identically is a statement
+ * about the SESSION, so it is printed once here, immediately above the
+ * list it constrains, rather than five times inside it. It is a heading
+ * for the choices, not one of them, so it gets no border and no tap
+ * target: nothing about it should read as selectable.
+ */
+.restart-picker__shared {
+    font-size: 0.9em;
+    margin: 10px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.restart-picker__shared[data-kind="transcript_missing"]
+.restart-picker__shared-line {
+    color: var(--danger-color, #e06c75);
+}
+
+/* THE EXACT WORDING, KEPT AND FOLDED AWAY. The uuid and the absolute
+   path are what an operator needs to go looking; they are not what a
+   user needs to decide. `<details>` opens under a thumb, which a `title`
+   tooltip does not, and this app is driven from a phone. */
+.restart-picker__shared-more {
+    margin-top: 4px;
+    font-size: 0.9em;
+    opacity: 0.75;
+}
+
+.restart-picker__shared-more summary {
+    cursor: pointer;
+    /* A real target on a coarse pointer without turning a one-line
+       disclosure into a button-sized block on a mouse. */
+    padding: 4px 0;
+}
+
+.restart-picker__notice,
+.restart-picker__why {
+    font-size: 0.85em;
+    opacity: 0.85;
+    margin-top: 8px;
+}
+
+.restart-picker__why:empty {
+    margin-top: 0;
+}
+
+.restart-picker .modal-btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/*
+ * The live-restart arming control.
+ *
+ * IT IS STYLED AS A WARNING, NOT AS A SETTING. Ticking it unlocks an
+ * operation that kills a process the user is running, so it carries the
+ * same danger treatment the shell badge does rather than reading as one
+ * more preference. The 44px minimum keeps it a real target on a phone,
+ * where this panel is mostly used.
+ */
+.restart-picker__arm {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 10px;
+    min-height: 44px;
+    border: 1px solid var(--danger-color, #e06c75);
+    border-radius: 4px;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.restart-picker__arm input {
+    flex: 0 0 auto;
+    /* A checkbox at the browser default is a small target next to a
+       44px row; this keeps the box itself tappable. */
+    width: 18px;
+    height: 18px;
+}

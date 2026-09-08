@@ -156,9 +156,10 @@ class ProjectsView:
 def _row_to_view(row: Dict[str, Any]) -> Dict[str, Any]:
     """Project one authoritative table row into the API's project shape.
 
-    Inputs: row (dict) - a ``projects`` table row.
+    Inputs: row (dict) - a ``projects`` table row, plus the ``work_at``
+      roll-up ``list_projects_ordered`` computes.
     Output: dict - ``{"id", "name", "path", "description", "root",
-      "agent_type"}``.
+      "agent_type", "work_at"}``.
     """
     return {
         "id": row["id"],
@@ -167,10 +168,26 @@ def _row_to_view(row: Dict[str, Any]) -> Dict[str, Any]:
         "description": row["description"],
         "root": row["root"],
         "agent_type": row["default_agent_type"],
+        # MAX(sessions.last_work_at) across this project's sessions - the
+        # key the list is ordered by. Carried to the client so it can
+        # LABEL a project with no recorded work instead of letting it sit
+        # anonymously at the bottom looking like the least recent one.
+        # ``.get`` because this function is also handed rows from paths
+        # that do not compute the roll-up.
+        "work_at": row.get("work_at"),
+        # WHETHER THIS PROJECT IS ARCHIVED, carried on every row rather
+        # than implied by which request fetched it. A client that had to
+        # infer it from "I asked for archived ones, so these must be the
+        # archived ones" would render a mixed list - which is exactly
+        # what ``include_archived=True`` returns, live rows and archived
+        # rows together - identically. None means live.
+        "archived_at": row.get("archived_at"),
     }
 
 
-def resolve_projects(state_dir: Path) -> ProjectsView:
+def resolve_projects(
+    state_dir: Path, *, include_archived: bool = False
+) -> ProjectsView:
     """Read the project list from the datastore, or say it could not be.
 
     Description: the single read entry point. Takes no config list and
@@ -184,7 +201,12 @@ def resolve_projects(state_dir: Path) -> ProjectsView:
       reason db_health.py gives: opening with creation turns "your
       database is missing" into a brand-new empty file that renders as a
       healthy install containing none of your work.
-    Inputs: state_dir (Path) - where cloude.db lives.
+    Inputs: state_dir (Path) - where cloude.db lives. include_archived
+      (bool) - when False (the default, so every existing caller is
+      unchanged) archived projects are omitted, matching design section
+      4.3. When True the list holds BOTH live and archived rows; the
+      caller tells them apart by each row's ``archived_at``, never by
+      the flag it passed.
     Output: ProjectsView.
     Example: resolve_projects(settings.get_state_dir()).mode -> "db"
     """
@@ -192,7 +214,9 @@ def resolve_projects(state_dir: Path) -> ProjectsView:
 
     try:
         with closing(connect(db_file, create=False)) as conn:
-            rows = list_projects_ordered(conn)
+            rows = list_projects_ordered(
+                conn, include_archived=include_archived
+            )
             reconcile = reconcile_summary(conn)
     except DatastoreUnreadableError as exc:
         return _unreadable(str(exc), db_file)

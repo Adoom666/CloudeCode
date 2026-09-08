@@ -89,7 +89,7 @@
             (index === 0 ? ' disabled' : '') + ' aria-label="move up" title="move up">^</button>' +
             '    <button type="button" class="modal-btn modal-btn-secondary" data-command-action="down" data-command-index="' + index + '"' +
             (index === commands.length - 1 ? ' disabled' : '') + ' aria-label="move down" title="move down">v</button>' +
-            '    <button type="button" class="modal-btn modal-btn-danger" data-command-action="delete" data-command-id="' + id + '">delete</button>' +
+            '    <button type="button" class="modal-btn modal-btn-danger" data-command-action="delete" data-command-id="' + id + '">remove</button>' +
             '  </div>' +
             '</div>'
         );
@@ -219,7 +219,7 @@
     async function deleteCommand(id) {
         var target = commands.find(function (c) { return c.id === id; });
         if (!target) return;
-        if (!window.confirm('delete "' + target.label + '"?')) return;
+        if (!window.confirm('remove "' + target.label + '"?')) return;
         await persist(commands.filter(function (c) { return c.id !== id; }));
     }
 

@@ -132,18 +132,34 @@ test('losing Remove on a dead row would be a regression - it is still there', ()
     );
 });
 
-test('a running row offers ONLY close - restart is not offered for a live agent', () => {
+test('a running row offers close FIRST and then restart', () => {
+    // SUPERSEDES "only close", by TODO item 22 part 2. Restarting a live
+    // session is now a supported operation (respawn-pane -k in place), so
+    // the row offers it - but close stays FIRST, because that is where the
+    // muscle memory on these rows already points and moving a destructive
+    // control under a trained cursor is its own defect.
+    //
+    // Offering it is not permitting it. The control opens the restart
+    // picker, which needs an arm box AND a confirm modal, and the server
+    // needs `confirm_restart_live` on top of that. See
+    // tests/test_restart_live_gate.node.mjs.
     const w = loadModules();
     for (const status of ['working', 'idle', 'question', 'working_subagent']) {
         const actions = local(w.SessionRowActions.actionsFor(status));
-        assert.deepEqual(actions, [w.SessionRowActions.ACTION_CLOSE], status);
+        assert.deepEqual(
+            actions,
+            [w.SessionRowActions.ACTION_CLOSE, w.SessionRowActions.ACTION_RESTART],
+            status,
+        );
     }
 });
 
 test('unknown status is never treated as dead', () => {
     const w = loadModules();
     // Guessing 'dead' here would offer to restart a session that may well
-    // be running, and to remove one that is not gone.
+    // be running, and to remove one that is not gone. It stays close-only
+    // even now that KNOWN-live rows offer restart: a control that kills a
+    // running process is not offered on a state nobody could read.
     assert.deepEqual(local(w.SessionRowActions.actionsFor(undefined)), [
         w.SessionRowActions.ACTION_CLOSE,
     ]);
@@ -165,11 +181,18 @@ test('THE VISIBLE DEFECT: dead-row markup renders two buttons', () => {
     assert.deepEqual(local(actionsIn(markup)), ['restart', 'remove']);
 });
 
-test('a running row still renders exactly one button', () => {
+test('a running row renders close then restart, an unknown one close alone', () => {
     const w = loadModules();
-    const markup = w.SessionRowActions.html('working', 'my-session', 'surface');
-    assert.equal(buttonCount(markup), 1, markup);
-    assert.deepEqual(local(actionsIn(markup)), ['close']);
+    const live = w.SessionRowActions.html('working', 'my-session', 'surface');
+    assert.equal(buttonCount(live), 2, live);
+    assert.deepEqual(local(actionsIn(live)), ['close', 'restart']);
+
+    // The row whose state could not be read is the one that keeps the old
+    // single-button markup, and that is the half of the rule still worth
+    // pinning.
+    const unread = w.SessionRowActions.html('unknown', 'my-session', 'surface');
+    assert.equal(buttonCount(unread), 1, unread);
+    assert.deepEqual(local(actionsIn(unread)), ['close']);
 });
 
 test('the restart button carries a real glyph, not an empty control', () => {

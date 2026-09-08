@@ -224,25 +224,45 @@ graph TD
 
     PU["RENAME / EDIT<br/>PATCH /projects/project_name"] --> PU1["src/core/project_writes.py::update_project"]
 
-    PD["DELETE<br/>DELETE /projects/project_name"]:::hard --> PD1["a HARD DELETE FROM projects. not an archive.<br/>the folder on disk is not touched<br/>src/core/project_writes.py::delete_project"]:::hard
+    PA["ARCHIVE - the UI's only destructive-shaped control<br/>POST /projects/project_name/archive"] --> PA1["stamps archived_at, touches nothing else -<br/>no cascade to the project's sessions<br/>src/core/project_archive.py::archive_project"]
+    PA1 --> PA2["reversible: POST /projects/project_name/unarchive<br/>clears archived_at<br/>src/core/project_archive.py::unarchive_project"]
+
+    PD["DELETE<br/>DELETE /projects/project_name"]:::hard --> PD1["a HARD DELETE FROM projects. not an archive.<br/>the folder on disk is not touched<br/>src/core/project_writes.py::delete_project<br/>NO CLIENT CALLS THIS - see below"]:::hard
     PD1 --> PD2["a TOMBSTONE is written in the SAME transaction,<br/>or reconcile would re-import it from config.json<br/>src/core/project_tombstones.py::record_tombstone"]
 
     PP["PRESENCE is its own axis, four states<br/>present, missing, unreachable, UNCHECKED<br/>src/core/project_presence.py"] --> PP1["unchecked is a real state, not a stand-in for present<br/>GET /projects/presence"]
 ```
 
-**The asymmetry is deliberate and worth stating once.** Deleting a SESSION is
-soft, because history and transcripts are built on the row. Deleting a PROJECT
-is hard plus a tombstone, because the row's only job is to be a launcher entry.
-`projects.archived_at` exists in the schema and no code path writes it.
+**No UI action hard-deletes a project any more.** Owner's instruction,
+2026-09-08, verbatim: "sessions and projects can be archived not deleted.
+archived items are not visible unless the checkbox is checked." The project
+row used to carry two destructive-shaped controls side by side - a trash
+button calling `deleteProject()` (`DELETE /projects/project_name`, the hard
+delete above) and a separate archive/unarchive toggle. The trash button is
+gone from `client/js/launchpad.js`, the `deleteProject` wrapper it called is
+gone from `client/js/api.js` (its only caller), and archive/unarchive (already
+reversible, already correctly labelled) is now the row's only destructive
+control. `DELETE /projects/project_name` and
+`src/core/project_writes.py::delete_project` are UNCHANGED and still
+reachable directly - nothing in the client calls them.
+
+**The asymmetry that remains is deliberate and worth stating once.**
+Deleting a SESSION RECORD is soft (a stamp on the row, history and
+transcripts are built on it). The project hard-delete endpoint above is
+still hard plus a tombstone when something DOES call it directly - but nothing
+in the UI does, so from the user's side both sessions and projects now behave
+the same way: archived, never deleted, recoverable behind a "show archived"
+checkbox. `projects.archived_at` is written by
+`src/core/project_archive.py::archive_project`.
 
 ### Sidebar groups key on `tmux_name`, on purpose
 
 ```mermaid
 graph LR
-    G["session_group_members.tmux_name is the PRIMARY KEY<br/>src/core/session_group_store.py::assign"]
+    G["session_group_membership.session_uuid is the PRIMARY KEY (schema v24)<br/>it was tmux_name through v23 - a recycled name is not identity<br/>src/core/session_group_membership.py::assign"]
     G --> G1["NO check that the session exists.<br/>the sidebar's rows come from a live tmux probe and<br/>many have no sessions row at all - requiring one<br/>would make exactly those rows ungroupable"]
-    G --> G2["one group per session, enforced by the key.<br/>ungrouped is the ABSENCE of a row, not a group called OTHER<br/>src/core/session_group_store.py::group_of"]
-    G --> G3["a membership for a name that later disappears is harmless<br/>src/core/session_group_store.py::prune_missing"]
+    G --> G2["one group per session, enforced by the key.<br/>ungrouped is the ABSENCE of a row, not a group called OTHER<br/>src/core/session_group_membership.py::group_of"]
+    G --> G3["a membership for a name that later disappears is harmless<br/>src/core/session_group_membership.py::prune_missing"]
     G --> G4["deleting a group never deletes a conversation<br/>src/core/session_group_store.py::delete_group"]
 ```
 
@@ -393,8 +413,8 @@ The same word means different things on different paths. This table is why.
 | delete a record | `client/js/launchpad.js` via `client/js/api.js::deleteSessionRecord` | none | `DELETE /sessions/records/session_uuid` | - | - |
 | fork - GUI | `client/js/launchpad.js::_forkSession` via `client/js/api.js::forkSession` | none | `POST /sessions/session_name/fork` | - | parent untouched by construction; `src/core/session_fork.py::children_of` derives the relationship |
 | fork - CLI | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by `POST /hooks/claude-event` | - |
-| project create / edit / delete | `client/js/api.js::createProject`, `client/js/api.js::updateProject`, `client/js/api.js::deleteProject` | none | `POST /projects`, `PATCH /projects/project_name`, `DELETE /projects/project_name` | - | `src/core/project_reconcile.py` re-reads config.json on start |
-| group assign | `client/js/session-sidebar-group-actions.js` - drag, menu and keyboard picker all land on one write | none | `POST /session-groups/assign` | - | `src/core/session_group_store.py::prune_missing` |
+| project create / edit / archive | `client/js/api.js::createProject`, `client/js/api.js::updateProject`, `client/js/api.js::archiveProject`, `client/js/api.js::unarchiveProject` | none | `POST /projects`, `PATCH /projects/project_name`, `POST /projects/project_name/archive`, `POST /projects/project_name/unarchive` | - | `src/core/project_reconcile.py` re-reads config.json on start |
+| group assign | `client/js/session-sidebar-group-actions.js` - drag, menu and keyboard picker all land on one write | none | `POST /session-groups/assign` | - | `src/core/session_group_membership.py::prune_missing` |
 
 **The tray is read-only over sessions.** It polls `GET /sessions/list`
 through `macOS/tray-api.js` and renders counts in `macOS/tray-status.js`. It

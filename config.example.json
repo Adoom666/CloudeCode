@@ -37,6 +37,10 @@
     "sweep_interval_seconds": 3600,
     "max_size_mb": 10
   },
+  "_comment_message_archive": "MASTER SWITCH FOR THE MESSAGE ARCHIVE, OFF BY DEFAULT. Set enabled to true and RESTART the server to turn it on. On means four things happen that do not happen otherwise: the message_* schema is created in cloude.db, a background scheduler starts and walks ~/.claude/projects every 900 seconds indexing your own conversation transcripts into that database, the /api/v1/archive/* and /api/v1/corpus/* routes are mounted, and the message archive screen gets its entry points on the launchpad and in the header menu. OFF IS DORMANT, NOT DESTRUCTIVE: an install that already has message_* tables keeps every row when this is false or absent, nothing is dropped or altered, and flipping it back to true restores the feature as it was. Absent counts as false - having the tables is evidence of a past upgrade, never of consent. CLOUDE_MESSAGE_ARCHIVE=1 or =0 in the environment overrides this file; any other value for it is treated as unreadable and the feature stays off. Reported live at GET /api/v1/features.",
+  "message_archive": {
+    "enabled": false
+  },
   "_comment_common_slash_commands": "Bare strings still work exactly as before; their short descriptions come from the built-in table in src/core/slash_command_labels.py. Use the object form only to override the wording or to describe a command the table does not know. Keep descriptions under 28 characters - they render on the chip on a phone.",
   "common_slash_commands": [
     "/clear",

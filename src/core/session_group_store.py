@@ -52,9 +52,12 @@ band, and it carries a small chip naming the group it is filed in, so
 the membership is visible while the pin is what decides where it sits.
 Unpin it and it drops back into its group. That is the whole model.
 
-ONE GROUP PER SESSION, ENFORCED BY THE PRIMARY KEY. ``tmux_name`` is the
-membership table's primary key, so a second membership is impossible at
-the database level rather than by convention. Many-membership was
+ONE GROUP PER SESSION, ENFORCED BY THE PRIMARY KEY.
+``session_group_membership.session_uuid`` is the membership table's
+primary key (schema v24; it was ``tmux_name`` through v23, which was an
+ephemeral name pretending to be an identity - see db_models' v24 block).
+A second membership is therefore impossible at the database level rather
+than by convention. Many-membership was
 rejected on a rendering argument, not a modelling one: the sidebar is a
 PARTITION render, every row appears exactly once, and the whole reorder
 and drag algebra in client/js/session-sidebar-reorder.js is built on
@@ -86,8 +89,16 @@ sees can name the number.
 ORDERING. Groups carry an explicit ``position``; the pinned band is
 always above all of them (it is not a group, so it does not compete for a
 slot) and OTHER is always last (a remainder that floated into the middle
-of named groups would read as a group). Order WITHIN a group is the
-existing localStorage manual order, unchanged - see the table above.
+of named groups would read as a group). Order WITHIN a group is now
+stored too, on ``session_group_membership.position`` (v24) - see
+``src/core/session_group_membership.py``, which owns that half of the
+feature and every read and write against that table.
+
+THE TABLE ABOVE IS THEREFORE OUT OF DATE IN ONE ROW, and it is left
+readable rather than silently edited: "manual order - localStorage" was
+true through v23. What is still per-device is the FALLBACK sort for
+ungrouped rows, which is a view concern; the arrangement inside a named
+group is a fact about the filing.
 """
 
 from __future__ import annotations
@@ -95,39 +106,32 @@ from __future__ import annotations
 import sqlite3
 import uuid as _uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from src.core.db import table_exists, transaction
+from src.core.db import transaction
 from src.core.db_models import SESSION_GROUP_MAX, SESSION_GROUP_NAME_MAX
 from src.core.trail_entry import utc_now
-
-
-class SessionGroupError(Exception):
-    """Base for every failure this module raises deliberately."""
-
-
-class GroupNotFound(SessionGroupError):
-    """No group carries the given uuid."""
-
-
-class GroupNameInvalid(SessionGroupError):
-    """A name was empty after trimming, or longer than the bound."""
-
-
-class GroupLimitReached(SessionGroupError):
-    """This install already holds ``SESSION_GROUP_MAX`` groups."""
-
-
-class GroupsUnavailable(SessionGroupError):
-    """The tables are not present.
-
-    CANNOT DETERMINE, said out loud. This is raised rather than returning
-    an empty list because "this install has no groups" and "this database
-    predates groups / could not be read" are different facts, and a
-    caller that cannot tell them apart will render the second as the
-    first - which is the false green this project keeps removing. The
-    route turns it into a distinct status, never into ``[]``.
-    """
+from src.core.session_group_errors import (  # noqa: F401  (re-exported)
+    GroupLimitReached,
+    GroupNameInvalid,
+    GroupNotFound,
+    GroupsUnavailable,
+    SessionGroupError,
+    SessionNotStored,
+)
+from src.core.session_group_membership import (  # noqa: F401  (re-exported)
+    assign,
+    assign_session,
+    clear_group,
+    group_id_for as _group_id,
+    group_of,
+    group_of_session,
+    members_by_group,
+    prune_missing,
+    require_tables as _require_tables,
+    session_uuid_for_name,
+    set_member_order,
+)
 
 
 @dataclass(frozen=True)
@@ -142,8 +146,16 @@ class SessionGroup:
         position: sort key among groups, ascending. Ties break on
             ``group_uuid`` so the order is total and stable rather than
             whatever sqlite happened to return.
-        members: tmux names filed in this group, in no meaningful order -
-            the sidebar's own manual order decides how they are drawn.
+        members: tmux names filed in this group, in the group's own
+            stored order. A member with NO tmux name - an IMPORTED
+            conversation, which has no pane and never will have one - is
+            absent from this tuple and present in ``member_session_uuids``,
+            so a caller reading only this one sees exactly what it saw
+            before v24 rather than a None in a list of strings.
+        member_session_uuids: the DURABLE key of every member, in the
+            same stored order, imported conversations included. This is
+            the complete membership; ``members`` is the subset that has a
+            pane to point at.
     """
 
     group_uuid: str
@@ -152,24 +164,7 @@ class SessionGroup:
     created_at: str
     updated_at: Optional[str]
     members: tuple
-
-
-def _require_tables(conn: sqlite3.Connection) -> None:
-    """Raise ``GroupsUnavailable`` unless both tables exist.
-
-    Description: the guard that keeps "no groups yet" and "this database
-      cannot answer" apart. Both tables are checked, not just one: a
-      half-applied migration is exactly the state where an optimistic
-      read would return a confident empty list.
-    Inputs: conn (sqlite3.Connection).
-    Output: None.
-    Raises: GroupsUnavailable - either table is missing.
-    """
-    for table in ("session_groups", "session_group_members"):
-        if not table_exists(conn, table):
-            raise GroupsUnavailable(
-                f"table {table!r} is not present in this datastore"
-            )
+    member_session_uuids: tuple = ()
 
 
 def normalize_name(raw: str) -> str:
@@ -198,22 +193,6 @@ def normalize_name(raw: str) -> str:
     return name
 
 
-def _members_by_group(conn: sqlite3.Connection) -> Dict[int, List[str]]:
-    """Every membership, bucketed by group id.
-
-    Description: read in ONE query rather than one per group, so listing
-      N groups is two statements and not N+1.
-    Inputs: conn (sqlite3.Connection).
-    Output: dict[int, list[str]] - group id -> tmux names.
-    """
-    out: Dict[int, List[str]] = {}
-    for row in conn.execute(
-        "SELECT group_id, tmux_name FROM session_group_members"
-    ):
-        out.setdefault(int(row[0]), []).append(str(row[1]))
-    return out
-
-
 def list_groups(conn: sqlite3.Connection) -> List[SessionGroup]:
     """Every group, in render order, each carrying its members.
 
@@ -221,6 +200,11 @@ def list_groups(conn: sqlite3.Connection) -> List[SessionGroup]:
       then ``group_uuid`` so the order is TOTAL - a position tie must not
       leave the order to whatever sqlite returns, or two clients drawing
       the same data could draw it differently.
+
+      MEMBERS ARE IN THEIR STORED ORDER, not sorted. Through v23 they
+      came back alphabetised, because there was no order to return; v24
+      stores one and returning it sorted would throw away the
+      arrangement the read exists to carry.
     Inputs: conn (sqlite3.Connection).
     Output: list[SessionGroup] - possibly empty, which genuinely means
       "this install has no groups".
@@ -228,37 +212,26 @@ def list_groups(conn: sqlite3.Connection) -> List[SessionGroup]:
     Example: [g.name for g in list_groups(conn)]  # ['work', 'infra']
     """
     _require_tables(conn)
-    members = _members_by_group(conn)
+    members = members_by_group(conn)
     rows = conn.execute(
         "SELECT id, group_uuid, name, position, created_at, updated_at "
         "FROM session_groups ORDER BY position ASC, group_uuid ASC"
     ).fetchall()
-    return [
-        SessionGroup(
-            group_uuid=str(r[1]),
-            name=str(r[2]),
-            position=int(r[3]),
-            created_at=str(r[4]),
-            updated_at=(str(r[5]) if r[5] is not None else None),
-            members=tuple(sorted(members.get(int(r[0]), []))),
+    out: List[SessionGroup] = []
+    for r in rows:
+        filed = members.get(int(r[0]), [])
+        out.append(
+            SessionGroup(
+                group_uuid=str(r[1]),
+                name=str(r[2]),
+                position=int(r[3]),
+                created_at=str(r[4]),
+                updated_at=(str(r[5]) if r[5] is not None else None),
+                members=tuple(name for _, name in filed if name),
+                member_session_uuids=tuple(uuid for uuid, _ in filed),
+            )
         )
-        for r in rows
-    ]
-
-
-def _group_id(conn: sqlite3.Connection, group_uuid: str) -> int:
-    """Resolve a public uuid to the internal row id.
-
-    Inputs: conn (sqlite3.Connection), group_uuid (str).
-    Output: int.
-    Raises: GroupNotFound - no such group.
-    """
-    row = conn.execute(
-        "SELECT id FROM session_groups WHERE group_uuid = ?", (group_uuid,)
-    ).fetchone()
-    if row is None:
-        raise GroupNotFound(f"no group with uuid {group_uuid!r}")
-    return int(row[0])
+    return out
 
 
 def create_group(
@@ -348,15 +321,7 @@ def delete_group(conn: sqlite3.Connection, group_uuid: str) -> int:
     _require_tables(conn)
     with transaction(conn):
         gid = _group_id(conn, group_uuid)
-        freed = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM session_group_members WHERE group_id = ?",
-                (gid,),
-            ).fetchone()[0]
-        )
-        conn.execute(
-            "DELETE FROM session_group_members WHERE group_id = ?", (gid,)
-        )
+        freed = clear_group(conn, gid)
         conn.execute("DELETE FROM session_groups WHERE id = ?", (gid,))
     return freed
 
@@ -403,102 +368,3 @@ def set_group_order(conn: sqlite3.Connection, group_uuids: List[str]) -> None:
                 "UPDATE session_groups SET position = ? WHERE id = ?",
                 (index, known[group_uuid]),
             )
-
-
-def assign(
-    conn: sqlite3.Connection,
-    tmux_name: str,
-    group_uuid: Optional[str],
-    *,
-    now: Optional[str] = None,
-) -> None:
-    """File one session into a group, or return it to ungrouped.
-
-    Description: THE ONE WRITE THE DRAG PERFORMS, and the one the menu
-      and the keyboard picker perform too - all three land here, so they
-      cannot drift apart in what a move means. ``group_uuid=None`` is
-      "ungrouped", expressed as deleting the membership row rather than
-      as a row pointing at a sentinel group, per the module docblock.
-
-      An assignment REPLACES any existing one (``INSERT OR REPLACE`` on
-      the primary key), which is the one-group-per-session rule doing its
-      job rather than an error the caller has to pre-check.
-
-      NO CHECK THAT THE SESSION EXISTS, on purpose. The sidebar's rows
-      come from a live tmux probe and many of them have no row in
-      ``sessions``; requiring one would make exactly those rows
-      ungroupable. A membership for a name that later disappears is
-      harmless and is cleaned by ``prune_missing``.
-    Inputs: conn (sqlite3.Connection), tmux_name (str) - the sidebar's own
-      row key. group_uuid (str|None). now (str|None).
-    Output: None.
-    Raises: GroupNotFound - a non-None uuid naming no group.
-      GroupsUnavailable.
-    Example: assign(conn, "cloude_infra", g.group_uuid)
-    """
-    _require_tables(conn)
-    if not isinstance(tmux_name, str) or not tmux_name.strip():
-        raise SessionGroupError("tmux_name is empty")
-    with transaction(conn):
-        if group_uuid is None:
-            conn.execute(
-                "DELETE FROM session_group_members WHERE tmux_name = ?",
-                (tmux_name,),
-            )
-            return
-        gid = _group_id(conn, group_uuid)
-        conn.execute(
-            "INSERT OR REPLACE INTO session_group_members "
-            "(tmux_name, group_id, added_at) VALUES (?, ?, ?)",
-            (tmux_name, gid, now or utc_now()),
-        )
-
-
-def group_of(conn: sqlite3.Connection, tmux_name: str) -> Optional[str]:
-    """Which group a session is filed in, or None for ungrouped.
-
-    Inputs: conn (sqlite3.Connection), tmux_name (str).
-    Output: str|None - the group uuid.
-    Raises: GroupsUnavailable.
-    """
-    _require_tables(conn)
-    row = conn.execute(
-        "SELECT g.group_uuid FROM session_group_members m "
-        "JOIN session_groups g ON g.id = m.group_id "
-        "WHERE m.tmux_name = ?",
-        (tmux_name,),
-    ).fetchone()
-    return str(row[0]) if row is not None else None
-
-
-def prune_missing(conn: sqlite3.Connection, live_names: List[str]) -> int:
-    """Drop memberships for sessions that no longer exist.
-
-    Description: NOT CALLED ON EVERY POLL, and the reason is the same one
-      that makes ``arrange()`` keep a remembered-but-absent name in its
-      slot: a tmux probe that fails, or one taken while a session is
-      being recreated, would otherwise erase the user's filing for every
-      row it could not see. This is an explicit housekeeping call for a
-      caller that KNOWS its list is complete, never a side effect of a
-      read.
-    Inputs: conn (sqlite3.Connection), live_names (list[str]) - every
-      session name that currently exists. An empty list is refused, since
-      "no sessions" and "the probe returned nothing" are the same bytes.
-    Output: int - memberships removed.
-    Raises: GroupsUnavailable.
-    """
-    _require_tables(conn)
-    if not live_names:
-        return 0
-    keep = set(live_names)
-    with transaction(conn):
-        doomed = [
-            str(r[0])
-            for r in conn.execute("SELECT tmux_name FROM session_group_members")
-            if str(r[0]) not in keep
-        ]
-        for name in doomed:
-            conn.execute(
-                "DELETE FROM session_group_members WHERE tmux_name = ?", (name,)
-            )
-    return len(doomed)

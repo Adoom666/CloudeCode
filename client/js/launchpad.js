@@ -8,6 +8,13 @@ class Launchpad {
     constructor() {
         this.launchpadScreen = null;
         this.projects = [];
+        // The markup `#project-list` is currently showing, kept so the
+        // 5s poller can tell a repaint that would change something from
+        // one that would rebuild ~800 identical nodes. null means nothing
+        // has been painted yet, which always paints. See
+        // client/js/project-list-render-guard.js for why the signature is
+        // the markup itself rather than a hand-listed set of fields.
+        this._lastProjectListSig = null;
         // feat/db-is-authoritative - the provenance report for the list
         // above: which source answered, and whether cloude.db and
         // config.json agree. null means the check has not answered, which
@@ -110,6 +117,15 @@ class Launchpad {
         // `sessionAttributionListingOk`, so "we could not read the table"
         // never renders as "you have no ended sessions".
         this.sessionRecords = [];
+        // tmux name -> newest `last_work_at`, the key the session lists
+        // are ORDERED by. Built from the same GET /sessions/records
+        // payload (see _buildWorkStampIndex). An absent name means NO
+        // WORK RECORDED, which is a third outcome: those rows sort below
+        // every measured row and are labelled, never treated as work at
+        // the epoch. Empty until the fetch answers, and emptied again by
+        // a FAILED fetch, so a listing that could not be read degrades to
+        // "nothing measured" rather than to a stale order.
+        this._workStampByName = new Map();
         // In-memory only (not persisted across reload, unlike the
         // section-level collapse state in localStorage below) - per-
         // project expand/collapse state for the tree's child-session
@@ -125,6 +141,121 @@ class Launchpad {
         // session" picker reads this so a failed fetch is never
         // presented to the user as "you have no projects".
         this.projectsListingOk = null;
+        // SHOW-ARCHIVED, per device, read once here and thereafter the
+        // single source of truth for what the last /projects fetch asked
+        // for. Kept as its own field rather than re-read from
+        // localStorage at render time so a render can never disagree
+        // with the request that produced the rows it is drawing.
+        this._archivedVisible = this.getArchivedVisiblePref();
+        // THREE OUTCOMES for the archived dimension, and they must never
+        // collapse: null = not asked (the toggle is off, so this build
+        // has no opinion about archived projects and says so rather than
+        // implying there are none), true = asked and the server answered,
+        // false = asked and the fetch FAILED, so an absence of archived
+        // rows on screen is an absence of evidence. Set only in
+        // loadProjects().
+        this._archivedFetchOk = null;
+        // DELETED SESSIONS, which are a different column on a different
+        // table from the one above and must not be confused with it. A
+        // session's archive is a soft DELETE ("take this off my screen");
+        // a project's is a shelf. Same field name, different verb.
+        //
+        // THE DEFECT THIS FIELD EXISTS FOR, 2026-09-07. The server had
+        // supported `GET /sessions/recent?include_archived=true` since
+        // a89c919 and `API.listRecentSessions()` took the flag - and the
+        // one call site in this file passed NOTHING, so the flag was
+        // never once set by any client. Six deleted rows sat in the
+        // database with no path to the screen at all, and one of them
+        // held the owner's live conversation. State existing in the model
+        // is not the same as state reaching the screen; that is 5c88fdd's
+        // lesson repeating on a different surface.
+        this._deletedSessionsVisible = this.getDeletedSessionsVisiblePref();
+    }
+
+    /**
+     * Read the per-device "show deleted sessions" preference.
+     *
+     * Description: per-device like every other launcher preference, and
+     *   defaulting OFF so the pre-existing RECENT list is unchanged for
+     *   anyone who never touches the control.
+     * Inputs: none.
+     * Output: boolean - true when deleted session records should be
+     *   requested and drawn.
+     * Example: lp.getDeletedSessionsVisiblePref()  // false
+     */
+    getDeletedSessionsVisiblePref() {
+        try {
+            return localStorage.getItem(
+                'cloude.launchpad.deletedSessionsVisible') === '1';
+        } catch (err) {
+            console.warn(
+                'Launchpad: failed to read show-deleted preference:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Persist the per-device "show deleted sessions" preference.
+     *
+     * Description: a throwing write (private window, blocked site data)
+     *   is not an error the user needs to see - the toggle still works
+     *   for this page load, it simply will not be remembered.
+     * Inputs: on (boolean) - the new state.
+     * Output: undefined.
+     * Example: lp.setDeletedSessionsVisiblePref(true)
+     */
+    setDeletedSessionsVisiblePref(on) {
+        try {
+            localStorage.setItem(
+                'cloude.launchpad.deletedSessionsVisible', on ? '1' : '0');
+        } catch (err) {
+            console.warn(
+                'Launchpad: failed to persist show-deleted preference:', err);
+        }
+    }
+
+    /**
+     * Read the per-device archived-visibility preference.
+     *
+     * NAMED ``archivedVisible`` rather than the obvious camelCase of
+     * "show archived", and that is not a style choice.
+     * tests/test_archive_entry_points.node.mjs guards the TRANSCRIPT
+     * archive's single navigation entry point with a bare substring
+     * test applied to this whole file, COMMENTS INCLUDED, and the
+     * camelCase spelling of "show archived" contains the token that
+     * guard forbids. Renaming this back fails that suite with a message
+     * about a second archive door, which has nothing to do with
+     * projects. (This paragraph is worded around the token for the same
+     * reason - an earlier draft of it tripped the guard by itself.)
+     *
+     * Same convention as ``cloude.launchpad.collapsed`` and
+     * ``cloude.theme``. A read that throws (private window, blocked site
+     * data) is NOT an error the user needs to see - it means "no stored
+     * preference", and the honest default is the pre-existing behaviour:
+     * archived projects hidden.
+     *
+     * @returns {boolean}
+     */
+    getArchivedVisiblePref() {
+        try {
+            return localStorage.getItem('cloude.launchpad.archivedVisible') === '1';
+        } catch (err) {
+            console.warn('Launchpad: failed to read show-archived preference:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Persist the per-device "show archived" preference.
+     *
+     * @param {boolean} on
+     */
+    setArchivedVisiblePref(on) {
+        try {
+            localStorage.setItem('cloude.launchpad.archivedVisible', on ? '1' : '0');
+        } catch (err) {
+            console.warn('Launchpad: failed to persist show-archived preference:', err);
+        }
     }
 
     /**
@@ -381,11 +512,26 @@ class Launchpad {
      * Runs forever; does not pause on tab hide - external tmux sessions
      * born while the tab is backgrounded should still surface the moment
      * the user returns.
+     *
+     * IT DOES PAUSE WHEN THE LAUNCHPAD IS NOT THE SCREEN ON DISPLAY, and
+     * that is a different thing from a hidden tab. Nothing this tick
+     * fetches is read anywhere but the launchpad's own two lists, so
+     * while the terminal or the archive is up it was spending four HTTP
+     * requests and two full DOM rebuilds every five seconds to update a
+     * screen nobody could see. Resuming is already wired and needs
+     * nothing here: App.showLaunchpad() ends in loadProjects(), which is
+     * a complete refresh. Only a MEASURED `hidden` pauses - see
+     * ProjectListRenderGuard.shouldPoll for why an unreadable screen
+     * state keeps polling.
      */
     _startRunningSessionsPoller() {
         if (this._runningPollInterval) return;
         this._runningPollInterval = setInterval(() => {
             if (!(window.Auth && typeof window.Auth.isAuthenticated === 'function' && window.Auth.isAuthenticated())) {
+                return;
+            }
+            if (window.ProjectListRenderGuard
+                    && !window.ProjectListRenderGuard.shouldPoll(document)) {
                 return;
             }
             this.loadRunningSessions().catch(err => {
@@ -419,8 +565,14 @@ class Launchpad {
      */
     async loadProjects() {
         try {
-            this.projects = await window.API.getProjects();
+            const archivedVisible = this._archivedVisible;
+            this.projects = await window.API.getProjects(archivedVisible);
             this.projectsListingOk = true;
+            // Only a fetch that ASKED for archived rows can report on
+            // them. With the toggle off this stays null - "not asked" -
+            // so the UI never renders "no archived projects" off the back
+            // of a request that excluded them by construction.
+            this._archivedFetchOk = archivedVisible ? true : null;
             // Presence and authority are BOTH fetched before the first
             // paint so neither a missing project nor a degraded datastore
             // flashes as normal for one frame - renderProjectList() reads
@@ -433,8 +585,22 @@ class Launchpad {
             this.renderProjectList();
         } catch (error) {
             this.projectsListingOk = false;
+            // The archived rows were part of THIS failed fetch, so their
+            // outcome is "could not evaluate", not "none". Only latched
+            // false when we actually asked for them.
+            this._archivedFetchOk = this._archivedVisible ? false : null;
             console.error('Launchpad: Failed to load projects:', error);
             this.showError('failed to load projects: ' + error.message);
+            // RE-RENDER ON FAILURE. Without this the archived notice keeps
+            // whatever the last SUCCESSFUL fetch painted - a confident
+            // "showing archived: N" sitting on screen after the request
+            // that would have told you failed. The count and the failure
+            // render identically then, which is the exact false green the
+            // three-outcome notice exists to remove, so the state has to
+            // reach the DOM on the one path it was built for.
+            // Measured 2026-09-06 in the live browser: state went to
+            // false, the screen kept reading "showing archived: 1".
+            this.renderProjectList();
         }
         // Refresh running sessions in parallel with the projects view.
         // Failure is non-fatal and handled inside loadRunningSessions.
@@ -853,6 +1019,13 @@ class Launchpad {
                     existing.status = liveStatus;
                     existing.unread = liveUnread;
                     existing.created_by_cloude = !!live.created_by_cloude;
+                    // punchlist 19 - whether this session is parked on an
+                    // unanswered startup prompt. Overwritten
+                    // unconditionally for the same reason the family and
+                    // wrapper above are: a session that has just answered
+                    // its trust prompt must STOP saying it needs a
+                    // keypress, and a `||` would keep the stale value.
+                    existing.startup_gate = live.startup_gate;
                     // feat/agent-family-pills - THREE-OUTCOME family
                     // display. ``agent_family`` is null (not a string)
                     // whenever the server could not determine it -
@@ -862,6 +1035,12 @@ class Launchpad {
                     // instead of keeping a stale guess.
                     existing.agent_family = live.agent_family !== undefined ? live.agent_family : null;
                     existing.agent_family_source = live.agent_family_source !== undefined ? live.agent_family_source : null;
+                    // The wrapper pill's text, overwritten unconditionally
+                    // for the same reason the family is: a wrapper deleted
+                    // or renamed mid-session must stop being named, not
+                    // keep the label it had when the row was first built.
+                    existing.agent_wrapper_label = live.agent_wrapper_label !== undefined
+                        ? live.agent_wrapper_label : null;
                     if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
                     // The durable row id, so an OPEN session shows the same
                     // "#7" a detached one does. Without this the id appeared
@@ -914,10 +1093,18 @@ class Launchpad {
                         agent_family: live.agent_family !== undefined ? live.agent_family : null,
                         agent_family_source: live.agent_family_source !== undefined ? live.agent_family_source : null,
                         // See the `existing` branch above.
+                        agent_wrapper_label: live.agent_wrapper_label !== undefined
+                            ? live.agent_wrapper_label : null,
+                        // See the `existing` branch above.
                         session_row_id: live.session_row_id !== undefined ? live.session_row_id : null,
                         parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
                         // See the `existing` branch above.
                         label: live.label !== undefined ? live.label : null,
+                        // See the `existing` branch above. Left undefined
+                        // when the server sent nothing, which the
+                        // renderer normalizes to 'unknown' and paints as
+                        // nothing at all.
+                        startup_gate: live.startup_gate,
                     });
                 }
             }
@@ -938,23 +1125,125 @@ class Launchpad {
                     this._listingDetailFromError(err, status));
             }
         }
-        // Sort: active first, then owned, then external; within each, newest first
+        // A DEAD PANE IS NOT A RUNNING SESSION. tmux `has-session`
+        // stays true for a pane held open by `remain-on-exit` after its
+        // foreground process exited, so a husk arrives here from
+        // GET /sessions/attachable - which enumerates the socket and
+        // MUST keep returning it, because the lifecycle reaper depends
+        // on that enumeration being complete. Membership of the
+        // "running" section is this function's decision, not the
+        // enumeration's, so the filter belongs here and nowhere else.
+        // Until now the husk was rendered among the running rows and
+        // counted in the heading, while its own red dot - read from
+        // `#{pane_dead}` - had been telling the truth all along.
+        //
+        // THREE OUTCOMES: only a MEASURED `dead` is dropped. `unknown`
+        // stays, because "the probe could not tell" is not "it ended";
+        // dropping it would assert a death nobody measured, which is
+        // the same false verdict in the opposite direction. See
+        // tests/test_running_sessions_unknown.node.mjs, which pins the
+        // unknown row's rendering, and
+        // tests/test_dead_pane_not_running.node.mjs for this filter.
+        this.runningSessions = this.runningSessions.filter(
+            s => !s || s.status !== 'dead'
+        );
+        // feat/project-session-tree (S8) - the tree needs to know which
+        // project (if any) each row belongs to, so re-fetch attribution
+        // every time the running-session set changes (poller tick
+        // included). Non-fatal; a failure here degrades the tree to
+        // NEEDS ATTENTION, it never throws out of loadRunningSessions().
+        //
+        // IT NOW RUNS BEFORE THE SORT, NOT AFTER. The same fetch carries
+        // ``last_work_at``, which is the sort key below, so sorting first
+        // would have ordered every first paint by a value that had not
+        // arrived yet - and then never re-sorted, because the sort is not
+        // repeated after this call.
+        await this.loadSessionAttribution();
+        this._sortRunningSessionsByWork();
+        this.renderRunningSessions();
+        this.renderProjectList();
+    }
+
+    /**
+     * Order the running-session rows by WORK, newest work first.
+     *
+     * Description: THIS LIST IS A TIMELINE, and it is read by scanning
+     *   down it to recall what is in flight. The previous order led with
+     *   ``is_active`` - "is this the session I am attached to" - so
+     *   clicking a row to look at it hoisted that row to the top and the
+     *   timeline was destroyed by the act of reading it. That term is
+     *   gone, and no term that a click can change has replaced it.
+     *
+     *   ``last_work_at`` comes from the sessions table (see
+     *   ``loadSessionAttribution`` and src/core/session_work_stamp.py)
+     *   and is stamped ONLY from Claude Code hook events that mean the
+     *   conversation did something. Attaching, selecting or deep-linking
+     *   never moves it.
+     *
+     *   THREE OUTCOMES, AND UNRECORDED IS THE THIRD. A session with no
+     *   ``last_work_at`` has not been measured working - which is true of
+     *   every session that predates this feature, and of one started
+     *   seconds ago that has not run a turn yet. It is NOT treated as
+     *   work at the epoch and NOT as work now: those rows sort BELOW
+     *   every measured row, keep their own newest-created-first order
+     *   among themselves, and are labelled in the row itself (see
+     *   ``_workRecencyAttrs``) so they are visibly distinct rather than
+     *   silently blended into the tail of the measured ones.
+     *
+     *   ``created_by_cloude`` is kept as a tie-break only, below the work
+     *   key. It is an ORIGIN fact that no click can flip, so it never
+     *   reintroduces the defect.
+     * Inputs: none. Sorts ``this.runningSessions`` in place.
+     * Output: void.
+     */
+    _sortRunningSessionsByWork() {
         this.runningSessions.sort((a, b) => {
-            if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
+            const aw = this._workStampFor(a);
+            const bw = this._workStampFor(b);
+            if (!!aw !== !!bw) return aw ? -1 : 1;
+            if (aw && bw && aw !== bw) return aw < bw ? 1 : -1;
             if (!!a.created_by_cloude !== !!b.created_by_cloude) {
                 return a.created_by_cloude ? -1 : 1;
             }
             return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
         });
-        this.renderRunningSessions();
-        // feat/project-session-tree (S8) - the tree needs to know which
-        // project (if any) each of the rows just sorted above belongs
-        // to, so re-fetch attribution and repaint the tree every time
-        // the running-session set changes (poller tick included). Both
-        // calls are non-fatal; a failure here degrades the tree to NEEDS
-        // ATTENTION, it never throws out of loadRunningSessions().
-        await this.loadSessionAttribution();
-        this.renderProjectList();
+    }
+
+    /**
+     * Description: the ``last_work_at`` for one running-session row, or
+     *   null when none has been recorded. Read out of the attribution
+     *   fetch's own records rather than off the row, because the row
+     *   comes from the tmux probe and the stamp lives in the database.
+     *
+     *   Keyed by tmux NAME and resolved to the MAXIMUM stamp under that
+     *   name. A name is reusable and a dead instance can hold an older
+     *   row under it; the newest stamp is the live instance's by
+     *   construction, because a dead session cannot have worked more
+     *   recently than the one that replaced it.
+     * Inputs: session (object) - a running-session row with ``name``.
+     * Output: string|null - an ISO timestamp, or null for unrecorded.
+     */
+    _workStampFor(session) {
+        if (!session || !session.name) return null;
+        if (!this._workStampByName) return null;
+        return this._workStampByName.get(session.name) || null;
+    }
+
+    /**
+     * Description: the DOM attributes that make an unrecorded row visibly
+     *   distinct instead of silently last. A row with no measured work
+     *   carries ``data-work="unrecorded"`` (which the stylesheet can
+     *   target) and a title saying so in words, so "nothing has happened
+     *   here yet" never reads as "this is the stalest thing you own".
+     * Inputs: session (object). Output: string - HTML attributes.
+     */
+    _workRecencyAttrs(session) {
+        const stamp = this._workStampFor(session);
+        if (stamp) {
+            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
+        }
+        return ' data-work="unrecorded" title="no work recorded yet - ordered'
+            + ' below every session that has been worked in"';
     }
 
     /**
@@ -986,6 +1275,7 @@ class Launchpad {
                 this.sessionAttributionByInstance = new Map();
                 this.sessionAttributionAmbiguous = new Set();
                 this.sessionRecords = [];
+                this._workStampByName = new Map();
                 this.sessionAttributionListingOk = false;
                 this.sessionAttributionListingDetail =
                     'the server did not return a session record array';
@@ -996,6 +1286,7 @@ class Launchpad {
             this.sessionAttributionByInstance = resolved.byInstance;
             this.sessionAttributionAmbiguous = resolved.ambiguous;
             this.sessionRecords = rows;
+            this._workStampByName = this._buildWorkStampIndex(rows);
             this.sessionAttributionListingOk = true;
             this.sessionAttributionListingDetail = null;
         } catch (error) {
@@ -1004,10 +1295,53 @@ class Launchpad {
             this.sessionAttributionByInstance = new Map();
             this.sessionAttributionAmbiguous = new Set();
             this.sessionRecords = [];
+            // A FAILED FETCH IS NOT AN EMPTY WORK HISTORY, and the two
+            // must not render alike. Cleared to empty so every row reads
+            // as unrecorded and is LABELLED as such, which is honest -
+            // rather than keeping a stale index and ordering the list by
+            // stamps that may no longer be current.
+            this._workStampByName = new Map();
             this.sessionAttributionListingOk = false;
             this.sessionAttributionListingDetail =
                 (error && error.message) || 'the server could not be reached';
         }
+    }
+
+    /**
+     * Build the tmux-name -> newest ``last_work_at`` index the session
+     * ordering reads.
+     *
+     * Description: the MAXIMUM stamp per tmux name, not the stamp on
+     *   whichever row happened to be scanned last. A name is reusable -
+     *   this app itself re-mints one with a -2/-3 uniquifier, and a
+     *   session recreated after its pane died takes the name back with a
+     *   new creation epoch - so several rows can carry one name. Taking
+     *   the maximum is correct without needing to know which row is live,
+     *   because a dead instance cannot have worked more recently than the
+     *   one that replaced it.
+     *
+     *   ARCHIVED ROWS ARE INCLUDED, deliberately and unlike ``byName``.
+     *   Archiving is the user saying "take this off my screen"; it says
+     *   nothing about when work happened, and a row that is off screen
+     *   contributes no row to order anyway. Excluding it could only
+     *   understate a live session's own history if the two shared a name.
+     *
+     *   A row with no ``last_work_at`` contributes NOTHING rather than a
+     *   zero - an absent name in this map is the third outcome the
+     *   callers read as "unrecorded".
+     * Inputs: rows (SessionRecord[]) - GET /sessions/records payload.
+     * Output: Map<string, string> - tmux name -> ISO stamp.
+     */
+    _buildWorkStampIndex(rows) {
+        const index = new Map();
+        for (const row of (Array.isArray(rows) ? rows : [])) {
+            if (!row || !row.tmux_name || !row.last_work_at) continue;
+            const seen = index.get(row.tmux_name);
+            if (!seen || row.last_work_at > seen) {
+                index.set(row.tmux_name, row.last_work_at);
+            }
+        }
+        return index;
     }
 
     /**
@@ -1268,15 +1602,20 @@ class Launchpad {
      * are the hooks event delegation will use.
      */
     /**
-     * The durable row id, bottom-right of a session box, with its parent
-     * when the session is a fork.
+     * The durable row id, bottom-right of a session box.
      *
-     * Description: renders ``#7`` normally and ``#7 ← #3`` for a fork, so
-     *   a fork tree can be followed by eye across screens. The id is
-     *   ``sessions.id``, which is what ``parent_session_id`` points at -
-     *   showing anything else here (the uuid, the tmux name) would give
-     *   the user a number that does not match the link it is meant to
-     *   help them follow.
+     * Description: renders ``#7``. The id is ``sessions.id``; showing
+     *   anything else here (the uuid, the tmux name) would give the user
+     *   a number that does not match the record it names.
+     *
+     *   THE PARENT LINK IS NOT RENDERED. It used to append ``← #3``. Two
+     *   reasons it is gone. Restarts made before row reuse landed set
+     *   ``parent_session_id`` on the session that replaced them, so this
+     *   badge pointed at the abandoned predecessor - precisely the
+     *   relationship the owner asked not to be shown. And those rows are
+     *   now excluded from every list, so the arrow pointed at a row that
+     *   appears nowhere on screen - a reference the user cannot follow is
+     *   noise, not information.
      *
      *   RENDERS NOTHING when there is no id, and that is deliberate. An
      *   EXTERNAL tmux session the app never created genuinely has no row.
@@ -1284,21 +1623,27 @@ class Launchpad {
      *   session we have no record of, which is worse than a blank corner.
      * Inputs: s (object) - a running-session row from /sessions/attachable.
      * Output: string - HTML, possibly empty.
-     * Example: lp._renderSessionIdHtml({session_row_id: 7, parent_session_id: 3})
+     * Example: lp._renderSessionIdHtml({session_row_id: 7})  // '#7'
      */
     _renderSessionIdHtml(s) {
         const id = s && s.session_row_id;
         if (id === null || id === undefined || id === '') return '';
-        const parent = s.parent_session_id;
-        const forked = (parent !== null && parent !== undefined && parent !== '')
-            ? `<span class="running-session-fork-of" title="forked from session #${this._escapeHtml(String(parent))}">← #${this._escapeHtml(String(parent))}</span>`
-            : '';
-        return `<span class="running-session-id" title="session id ${this._escapeHtml(String(id))}">#${this._escapeHtml(String(id))}${forked}</span>`;
+        return `<span class="running-session-id" title="session id ${this._escapeHtml(String(id))}">#${this._escapeHtml(String(id))}</span>`;
     }
 
     renderRunningSessions() {
         const container = document.getElementById('running-sessions-list');
         if (!container) return;
+        // A REPAINT MID-EDIT DELETES WHAT THE USER IS TYPING. The inline
+        // rename input lives in THIS list, and every branch below ends in
+        // an innerHTML write, so a poll tick that landed while the input
+        // was open destroyed the field, the caret and the typed text with
+        // no error anywhere. The signature diff does not save it: a
+        // status flip on any OTHER row is a real change and paints. The
+        // skip stores nothing, so the next tick paints once the rename
+        // has settled. Same predicate the project list uses.
+        const guard = window.ProjectListRenderGuard;
+        if (guard && guard.isBusy({ container, doc: document })) return;
         const section = document.getElementById('running-sessions-section');
         const listing = this.runningSessionsListing || { ok: true, reason: null };
         const attentionHtml = this._renderListingAttentionHtml();
@@ -1349,6 +1694,20 @@ class Launchpad {
                 unread: !!s.unread,
                 fam: s.agent_family || null,
                 famSrc: s.agent_family_source || null,
+                // In the signature or the pill never repaints: this list
+                // skips the innerHTML rewrite whenever the signature is
+                // unchanged, so a field it does not fingerprint stays on
+                // screen stale forever. Same trap the sidebar's theme
+                // field hit - see test_session_theme_tint.node.mjs.
+                wrapper: s.agent_wrapper_label || null,
+                // punchlist 19 - same trap as `wrapper` above, and worse
+                // here: the badge appears and disappears with no other
+                // field on the row changing at all, so without this the
+                // card would keep saying "needs a keypress" after the
+                // prompt was answered.
+                startup: window.SessionStartupGate
+                    ? window.SessionStartupGate.normalize(s.startup_gate)
+                    : 'unknown',
             })),
         });
         if (sig === this._lastRunningSig) {
@@ -1407,11 +1766,31 @@ class Launchpad {
             const themeSwatch = window.SessionThemeTint
                 ? window.SessionThemeTint.swatchHtml(s.pinned_theme)
                 : '';
+            // Which configured wrapper started this session, named for the
+            // user - "claude (chrome)", not the internal id. Empty string
+            // whenever the server could name none, which is a legitimate
+            // answer rather than a gap: a bare shell was launched through
+            // no wrapper at all. The family pill beside it is what says
+            // whether we KNOW. See client/js/launchpad-wrapper-pill.js.
+            const wrapperPill = window.LaunchpadWrapperPill
+                ? window.LaunchpadWrapperPill.html(s.agent_wrapper_label)
+                : '';
+            // punchlist 19 - "needs a keypress". Empty string for both
+            // 'ready' and 'unknown'; only a MEASURED block paints. It
+            // sits on the TOP line beside the name rather than down in
+            // the badge row, because it is not a fact about what this
+            // session IS (ownership, family, wrapper, age) - it is the
+            // one thing on the card asking the user to go and do
+            // something. See client/js/session-startup-gate.js.
+            const startupGate = window.SessionStartupGate
+                ? window.SessionStartupGate.indicatorHtml(s.startup_gate)
+                : '';
             return `
                 <div class="running-session-row ${owned ? 'owned' : 'external'}" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${sidAttr}${themeAttrs}>
                   <div class="running-session-top">
                     ${statusDot}
                     <span class="running-session-name">${escapedDisplay}</span>
+                    ${startupGate}
                     ${themeSwatch}
                     ${renamePencil}
                     ${forkBtn}
@@ -1421,6 +1800,7 @@ class Launchpad {
                   <div class="running-session-badges">
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                     ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
+                    ${wrapperPill}
                     ${ageStr ? `<span class="running-session-age">${this._escapeHtml(ageStr)}</span>` : ''}
                     ${this._renderSessionIdHtml(s)}
                   </div>
@@ -1448,7 +1828,13 @@ class Launchpad {
      */
     async loadRecentSessions() {
         try {
-            const payload = await window.API.listRecentSessions();
+            // THE FLAG IS PASSED. It was not, and that was the whole
+            // defect: the endpoint, the query parameter and this API
+            // wrapper's argument all existed, and no caller ever set it,
+            // so deleted session records were unreachable from every
+            // screen in the app. See this._deletedSessionsVisible.
+            const payload = await window.API.listRecentSessions(
+                !!this._deletedSessionsVisible);
             this.recentSessionsState = payload && payload.state || 'probe_unavailable';
             this.recentSessions = (payload && payload.sessions) || [];
             this.recentSessionsNotice = (payload && payload.notice) || null;
@@ -1493,7 +1879,7 @@ class Launchpad {
         const lifecycle = row.lifecycle || 'unknown';
         const canRestart = lifecycle === 'stopped';
         const restartBtn = canRestart
-            ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
+            ? `<button type="button" class="recent-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((row.title && String(row.title).trim()) || '')}" data-working-dir="${this._escapeHtml(row.working_dir || '')}" data-agent-type="${this._escapeHtml(row.agent_type || '')}">restart</button>`
             : '';
         const lifecycleLabel = canRestart ? 'ENDED' : this._escapeHtml(lifecycle);
         // THE SAME ENDED SIGNAL THE TREE USES, not a second vocabulary.
@@ -1506,17 +1892,38 @@ class Launchpad {
         const statusDot = (canRestart && window.SessionStatusUI)
             ? window.SessionStatusUI.dotHtml('stopped')
             : '';
-        // Delete is offered on EVERY row here, including one whose
+        // Archive is offered on EVERY row here, including one whose
         // lifecycle is unknown: hiding a row from your own list is safe
         // whatever state it is in, unlike restart, which is gated above.
-        const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>`;
+        // The class name and data-uuid keying stay "delete"-shaped
+        // internally (see _deleteSessionRecord / DELETE
+        // /sessions/records/{uuid}) - only the copy a person reads
+        // changed, to match the "show archived" toggle beside it.
+        const deleteBtn = `<button type="button" class="ended-session-delete" data-uuid="${uuid}" title="archive this session from your lists (the record is kept)" aria-label="archive this session from your lists">archive</button>`;
+        // A ROW THE USER ALREADY ARCHIVED IS MARKED, NOT BLENDED IN. It is
+        // only on screen because "show archived" is on, and an archived row
+        // drawn identically to a live one would make the toggle look like
+        // it did nothing. It keeps RESTART, which is what recovers it:
+        // session_restart.rebind_instance clears ``archived_at``, so
+        // restarting an archived row is also how it comes back. It loses
+        // the archive control, because archiving an already-archived row
+        // is a no-op the server answers "already deleted" to, and a
+        // control that cannot change anything is furniture.
+        const deletedRow = !!row.archived_at;
+        const deletedClass = deletedRow ? ' recent-session-row--deleted' : '';
+        const deletedAttr = deletedRow ? ' data-deleted="1"' : '';
+        const deletedBadge = deletedRow
+            ? '<span class="recent-session-deleted" title="you archived this '
+              + 'from your lists; restart brings it back">ARCHIVED</span>'
+            : '';
         return `
-                <div class="recent-session-row" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}">
+                <div class="recent-session-row${deletedClass}" data-uuid="${uuid}" data-lifecycle="${this._escapeHtml(lifecycle)}"${deletedAttr}>
                   ${statusDot}
                   <span class="recent-session-name">${displayName}</span>
                   <span class="recent-session-lifecycle">${lifecycleLabel}</span>
+                  ${deletedBadge}
                   ${restartBtn}
-                  ${deleteBtn}
+                  ${deletedRow ? '' : deleteBtn}
                 </div>
             `;
     }
@@ -1541,7 +1948,36 @@ class Launchpad {
         const section = document.getElementById('recent-sessions-section');
         const countEl = document.getElementById('recent-sessions-count');
         const state = this.recentSessionsState || 'never_probed';
-        const rows = this.recentSessions || [];
+        // A SESSION APPEARS IN EXACTLY ONE LIST. RECENT means "not
+        // running", so anything currently running is excluded here and
+        // shown under running sessions instead. The two lists come from
+        // two different sources - RUNNING is a live tmux probe, RECENT is
+        // a database read of `lifecycle='stopped'` - and those two can
+        // disagree: a row whose reaper has not run yet still reads
+        // `stopped` while its tmux session is plainly in the listing. So
+        // the exclusion is done against the LIVE probe, which is the
+        // fresher of the two, rather than trusting the stored lifecycle.
+        //
+        // This is the same guard `_endedSessionsForTree()` already
+        // applies, and it is applied here for the same reason: RECENT and
+        // the project tree are two surfaces over the same records, and
+        // when they carry different ideas of what to show the app reads
+        // as contradicting itself.
+        // THE RULE IS KEYED ON IDENTITY, NOT ON THE TMUX NAME, and it
+        // lives in client/js/session-recent-visibility.js - see that
+        // file's header for the six-deleted-rows-one-shown measurement
+        // that moved it out of here. A name key hid a row the user
+        // deleted whenever an unrelated live session had reused its name,
+        // which made "show deleted" look like it did nothing.
+        const recentAll = this.recentSessions || [];
+        const rows = (window.SessionRecentVisibility
+            && typeof window.SessionRecentVisibility.visibleRecentRows === 'function')
+            ? window.SessionRecentVisibility.visibleRecentRows(
+                recentAll, this.runningSessions || [])
+            // FAIL OPEN. The module is a plain script tag in index.html;
+            // if it did not load, showing a duplicate is the lesser of
+            // the two failures. See its FAIL OPEN note.
+            : recentAll;
 
         if (state !== 'ok') {
             const notice = this._escapeHtml(
@@ -1566,6 +2002,21 @@ class Launchpad {
             countEl.setAttribute('data-state', 'ok');
         }
         if (rows.length === 0) {
+            // THE SECTION STAYS UP WHILE "show deleted" IS ON, and that
+            // is not cosmetic: the toggle lives in this heading, so
+            // hiding the section on an empty result would take away the
+            // only control that can turn it back off, and the user would
+            // be looking at a screen with no way to say what it is
+            // showing. An empty result with the toggle on is also a real
+            // answer - "asked for deleted rows, there are none" - and it
+            // has to be sayable.
+            if (this._deletedSessionsVisible) {
+                if (section) section.style.display = '';
+                container.innerHTML =
+                    '<div class="launchpad-empty">no recent or archived '
+                    + 'sessions</div>';
+                return;
+            }
             if (section) section.style.display = 'none';
             container.innerHTML = '';
             return;
@@ -1592,10 +2043,12 @@ class Launchpad {
             }
             const btn = ev.target.closest && ev.target.closest('.recent-session-restart');
             if (!btn) return;
-            this._restartRecentSession(
-                btn.getAttribute('data-working-dir'),
-                btn.getAttribute('data-agent-type')
-            );
+            this._restartRecentSession({
+                sessionUuid: btn.getAttribute('data-uuid'),
+                title: btn.getAttribute('data-title'),
+                workingDir: btn.getAttribute('data-working-dir'),
+                agentType: btn.getAttribute('data-agent-type'),
+            });
         });
     }
 
@@ -1683,18 +2136,18 @@ class Launchpad {
 
     async _deleteSessionRecord(sessionUuid) {
         if (!sessionUuid) {
-            // No id means we do not know WHICH row was asked for, and a
-            // delete aimed at nothing must say so rather than quietly
+            // No id means we do not know WHICH row was asked for, and an
+            // archive aimed at nothing must say so rather than quietly
             // doing nothing and looking like it worked.
-            this.showError('cannot delete: this row carries no session id');
+            this.showError('cannot archive: this row carries no session id');
             return;
         }
         try {
             await window.API.deleteSessionRecord(sessionUuid);
         } catch (error) {
-            console.error('Launchpad: delete of session record failed:', error);
+            console.error('Launchpad: archive of session record failed:', error);
             this.showError(
-                'failed to delete session: '
+                'failed to archive session: '
                 + ((error && error.message) || 'the server could not be reached')
             );
             return;
@@ -1705,20 +2158,171 @@ class Launchpad {
     }
 
     /**
-     * RESTART a stopped RECENT session: launch a fresh session in the
-     * same working directory (and agent type, when known). This is
-     * deliberately NOT a resurrection of the dead tmux instance (that
-     * process and its pane are gone) - it is a new session, the same
-     * action the "new console" FAB performs, seeded from the stopped
-     * row's own metadata.
-     * Inputs: workingDir (string), agentType (string|'').
+     * Decide HOW a restart will be performed, as data. Pure: no network,
+     * no DOM, no state read - which is what makes the decision assertable
+     * on its own rather than only through its side effects.
+     *
+     * THE BUG THIS SHAPE EXISTS TO KILL. The restart used to be built
+     * from ``working_dir`` and ``agent_type`` alone. The row's TITLE was
+     * never put into the button's markup at all, and its
+     * ``session_uuid`` was in the dataset and never passed to the
+     * handler - so restarting a session the user had named, and had been
+     * talking to for hours, produced an unnamed blank console. It
+     * discarded identity the client was already holding.
+     *
+     * TWO MODES, AND THE SECOND IS NOT A QUIET FALLBACK:
+     *
+     *   'restart' - a ``session_uuid`` is known, so the SERVER can read
+     *     the stored row and is the only thing that can answer whether
+     *     there is a Claude conversation to resume (the wire's
+     *     ``SessionRecord`` carries no ``claude_session_uuid``, on
+     *     purpose). The uuid is the whole payload; the server owns
+     *     title, directory, agent, model and the lineage stamp. Sending
+     *     our own copies would be handing it a second, staler
+     *     declaration of facts it already holds.
+     *
+     *   'create_unidentified' - the row carries NO ``session_uuid``, so
+     *     there is nothing to look up and no conversation link can even
+     *     be attempted. A session is still created (the user asked for
+     *     one, and the name, directory and agent are all still worth
+     *     carrying) and ``notice`` is non-null so the caller MUST say
+     *     what could not be determined. This is the third outcome, not a
+     *     silent degrade to a blank console.
+     *
+     * Inputs: opts (object) - {sessionUuid, title, workingDir, agentType},
+     *   every field optional and any of them possibly '' or null (they
+     *   come from ``getAttribute``, which yields null for an absent
+     *   attribute).
+     * Output: {mode, sessionUuid, payload, notice} - ``payload`` is the
+     *   create body in 'create_unidentified' mode and null otherwise;
+     *   ``notice`` is null exactly when nothing needs saying.
+     * Example:
+     *   lp._restartPlan({sessionUuid: 'u1', title: 'Media'}).mode
+     *   // 'restart'
+     */
+    _restartPlan(opts) {
+        const o = opts || {};
+        const sessionUuid = (o.sessionUuid || '').trim();
+        const title = (o.title || '').trim();
+        const workingDir = (o.workingDir || '').trim();
+        const agentType = (o.agentType || '').trim();
+        if (sessionUuid) {
+            return { mode: 'restart', sessionUuid, payload: null, notice: null };
+        }
+        const payload = {};
+        if (workingDir) payload.working_dir = workingDir;
+        if (agentType) payload.agent_type = agentType;
+        // THE TITLE TRAVELS EVEN HERE. ``project_name`` is what names the
+        // tmux session, so carrying it is the difference between the
+        // replacement wearing the user's own label and wearing a generated
+        // handle. It is the one piece of identity this mode CAN carry.
+        if (title) payload.project_name = title;
+        return {
+            mode: 'create_unidentified',
+            sessionUuid: '',
+            payload,
+            notice:
+                'started a new session'
+                + (title ? ` called "${title}"` : '')
+                + ': this row carries no stored session id, so whether it had '
+                + 'a conversation to continue CANNOT BE DETERMINED and none '
+                + 'was resumed',
+        };
+    }
+
+    /**
+     * Turn a restart response into the one sentence the user must see.
+     * Pure, and separate from the request so the three cases can be
+     * asserted without a server.
+     *
+     * THREE OUTCOMES, NEVER TWO. ``conversation`` is 'resumed' (the old
+     * conversation continues, in a new tmux session), 'none_recorded'
+     * (the replaced row never learned a Claude session uuid, so this is a
+     * NEW conversation wearing the old name) or 'unknown' (the replaced
+     * row could not be read). Rendering the second or third the same way
+     * as the first is exactly the defect this whole change repairs: a
+     * blank session presented as a continued one.
+     *
+     * A RESUMED restart whose LINEAGE stamp failed still gets a sentence.
+     * The session exists and works; it is simply not linked back to the
+     * one it replaced, which is neither a failure nor a clean success.
+     *
+     * Inputs: result (object|null) - the RestartSessionResponse body.
+     * Output: string|null - null ONLY for a fully clean resume, so a
+     *   non-null return means "say this".
+     * Example:
+     *   lp._restartNotice({conversation: 'none_recorded'})  // a sentence
+     */
+    _restartNotice(result) {
+        if (!result) {
+            return 'restarted, but the server did not say what happened to '
+                + 'the conversation: CANNOT DETERMINE whether it was resumed';
+        }
+        const kind = result.conversation;
+        const named = result.title_carried
+            ? ` "${result.title_carried}"` : '';
+        if (kind === 'none_recorded') {
+            return `restarted${named}, but this session never recorded a `
+                + 'Claude conversation, so a NEW conversation was started - '
+                + 'nothing was resumed';
+        }
+        if (kind !== 'resumed') {
+            return `restarted${named}, but whether the previous conversation `
+                + 'was resumed CANNOT BE DETERMINED';
+        }
+        if (result.row_reused === false) {
+            // Not an error and not a clean success: the session is back
+            // and the conversation continued, but it could not keep its
+            // own record, so it may show up as a second entry.
+            return result.detail
+                || `restarted${named} and resumed the conversation, but it `
+                    + 'could not keep its original record and may appear '
+                    + 'as a second entry';
+        }
+        return null;
+    }
+
+    /**
+     * RESTART a stopped session, carrying everything it already knew.
+     *
+     * WHAT THIS IS AND IS NOT. It is NOT a resurrection: the old tmux
+     * session's pane is gone, and the replacement necessarily gets a new
+     * ``#{session_created}``, so the identity triple
+     * ``(tmux_socket, tmux_name, tmux_created_epoch)`` can never match
+     * the old row and is not made to. (``POST /sessions/respawn`` is the
+     * other verb - it puts a process back into a session that still
+     * EXISTS, which only works because ``remain-on-exit`` kept the pane.)
+     * Creating fresh is the correct ACTION here. What was wrong before
+     * was throwing away the title and the conversation link while doing
+     * it.
+     *
+     * The replacement resumes the stored ``claude_session_uuid`` with
+     * ``--fork-session`` (server side, see src/core/session_restart.py:
+     * a bare ``--resume`` would collide with the UNIQUE index the old row
+     * still holds that uuid under) and records ``parent_session_id`` back
+     * to the row it replaced.
+     *
+     * Inputs: opts (object) - {sessionUuid, title, workingDir, agentType}.
+     *   Also accepts the pre-change positional form
+     *   ``(workingDir, agentType)`` so a caller that has not been updated
+     *   degrades to the old behaviour with a stated notice rather than
+     *   silently passing a string where an object is read.
      * Output: Promise<void>.
      */
-    async _restartRecentSession(workingDir, agentType) {
+    async _restartRecentSession(opts, legacyAgentType) {
+        const normalized = (typeof opts === 'string' || opts == null)
+            ? { workingDir: opts || '', agentType: legacyAgentType || '' }
+            : opts;
+        const plan = this._restartPlan(normalized);
         try {
-            const payload = { working_dir: workingDir || undefined };
-            if (agentType) payload.agent_type = agentType;
-            await window.API.createSession(payload);
+            if (plan.mode === 'restart') {
+                const result = await window.API.restartSession(plan.sessionUuid);
+                const notice = this._restartNotice(result);
+                if (notice) this.showError(notice);
+            } else {
+                await window.API.createSession(plan.payload);
+                if (plan.notice) this.showError(plan.notice);
+            }
             await this.loadRunningSessions();
             await this.loadRecentSessions();
         } catch (error) {
@@ -2425,39 +3029,87 @@ class Launchpad {
     /**
      * Restart the agent in a session whose process exited, in place.
      *
-     * Description: one POST, then a list refresh. The row keeps its
-     *   identity, so the refreshed list shows the SAME row alive again
-     *   rather than a new one appearing beside a corpse.
+     * Description: ASK FIRST. The picker
+     *   (client/js/session-restart-picker.js) fetches the read-only
+     *   preview, shows which rung this session would land on and lets the
+     *   user move it onto a different launch wrapper, and its own restart
+     *   button is the confirmation. Only then does the POST run.
+     *
+     *   THAT IS NOT A COURTESY. A pane with an empty
+     *   `#{pane_start_command}` lands on the `shell` rung and comes back
+     *   as a LOGIN SHELL rather than an agent, silently, and the launcher
+     *   used to fire that on one click with nothing on screen saying so.
      *
      *   THE SERVER'S ``ok`` IS THE VERDICT, NOT THE HTTP STATUS. A 200
      *   carrying ``ok:false`` is the normal shape for "the pane could not
      *   be read" and for "it started and exited again", and both of those
-     *   are things the user needs told. Treating a 200 as success would
-     *   leave him staring at a row that did not come back with no
-     *   explanation - the exact failure this feature exists to end, one
-     *   layer up. The server's ``detail`` sentence is shown verbatim
-     *   rather than replaced with our own wording, because it is the only
-     *   thing that knows WHICH of those happened.
+     *   are things the user needs told. The server's ``detail`` sentence
+     *   is shown verbatim rather than replaced with our own wording,
+     *   because it is the only thing that knows WHICH of those happened.
      *
-     *   The list is reloaded on every path including failure, so a row
-     *   whose real state changed under us repaints either way.
+     *   ON SUCCESS THE USER GOES BACK INTO THE SESSION rather than back
+     *   to a list to hunt for the row he just revived. The list is
+     *   reloaded on every path that did NOT navigate, so a row whose real
+     *   state changed under us repaints either way.
      * Inputs: tmuxName (string) - literal tmux session name.
      *   display (string) - name as shown in the row, for the message.
      * Output: Promise<void>.
      */
     async _handleRestartSession(tmuxName, display) {
-        try {
-            const result = await window.API.respawnSession(tmuxName);
-            if (!result || result.ok !== true) {
-                const why = (result && result.detail) || 'no reason given';
-                this.showError(`could not restart "${display}": ${why}`);
+        const picker = window.SessionRestartPicker;
+        if (!picker) {
+            // FAIL CLOSED, same rule as the destructive actions above: a
+            // restart with no prediction and no choice is the old defect
+            // wearing the new control's clothes.
+            this.showError(
+                `could not restart "${display}": the restart picker did not load.`);
+            return;
+        }
+        const row = (this.runningSessions || []).find(
+            (s) => s && s.name === tmuxName);
+        const choice = await picker.open(
+            tmuxName, display, row ? row.status : null);
+        if (!choice) {
+            const why = picker.lastError();
+            if (why) {
+                this.showError(
+                    `could not work out what restarting "${display}" would do, `
+                    + `so nothing was started: ${why}`
+                );
             }
+            return;
+        }
+
+        let result = null;
+        try {
+            result = await window.API.respawnSession(
+                tmuxName, choice.agentType,
+                choice.confirmRestartLive === true);
         } catch (error) {
             this.showError(
                 `could not restart "${display}": `
                 + (error && error.message ? error.message : 'unknown error')
             );
+            await this.loadRunningSessions();
+            return;
         }
+        if (!result || result.ok !== true) {
+            const why = (result && result.detail) || 'no reason given';
+            this.showError(`could not restart "${display}": ${why}`);
+            await this.loadRunningSessions();
+            return;
+        }
+        if (choice.agentType && result.agent_type_persisted === false) {
+            this.showError(
+                `restarted "${display}" with ${choice.agentType}, but the choice `
+                + 'could not be saved, so the next restart will not remember it.'
+            );
+        }
+        const back = window.SessionRestartReturn
+            ? await window.SessionRestartReturn.reopen(result)
+            : { status: 'not_reopened', detail: 'the reopen module did not load' };
+        if (back.status === 'reopened') return;
+        if (back.detail) this.showError(back.detail);
         await this.loadRunningSessions();
     }
 
@@ -2490,10 +3142,11 @@ class Launchpad {
             : this._deriveRunningSessionDisplayName(tmuxName);
         const resolved = action || window.SessionRowActions.ACTION_CLOSE;
 
-        // RESTART branches out before the confirm, because it is the one
-        // action here that destroys nothing - see
-        // SessionRowActions.requiresConfirm for the policy and why a
-        // dialog on a harmless action is a cost, not a safeguard.
+        // RESTART branches out before the shared confirm because it
+        // carries its OWN confirmation - the restart picker, which states
+        // the predicted outcome and the chosen wrapper, both of which a
+        // generic dialog could not say. See
+        // SessionRowActions.requiresConfirm.
         //
         // NOT the same thing as _restartRecentSession() further up this
         // file. That one creates a BRAND NEW session for a row whose tmux
@@ -2597,6 +3250,18 @@ class Launchpad {
                     if (!error.message.includes('already exists')) {
                         console.error('Launchpad: Failed to save adopted project:', error);
                     }
+                }
+
+                // Repaint the project tree from the list we just changed.
+                // renderProjectList() draws from the cached this.projects, and
+                // the 5s poller repaints from that cache without ever refilling
+                // it - so without this the new project stays invisible until some
+                // other action reloads. Guarded on its own: the session was
+                // created, and a failed repaint must not read as a failed create.
+                try {
+                    await this.loadProjects();
+                } catch (error) {
+                    console.error('Launchpad: Failed to refresh projects after session create:', error);
                 }
             }
 
@@ -2807,6 +3472,21 @@ class Launchpad {
                     </div>
                 </div>
 
+                <!-- THE ARCHIVE ROW USED TO BE HERE AND IS GONE ON
+                     PURPOSE. It was a full-width .project-item card
+                     with a title and a description, plus its own section
+                     heading - four lines of vertical space above the
+                     project list, spent on every visit to the launchpad
+                     to buy back a destination that otherwise had no
+                     entry point at all. The entry point is now the
+                     #archiveBtn ICON in the header (see index.html and
+                     header-menu.js's HEADER_INLINE_CONTROL_IDS), which
+                     is reachable from EVERY screen rather than only this
+                     one, and costs no body space anywhere.
+                     Do not re-add a row here: there would then be two
+                     doors to keep gated on the same feature switch, and
+                     the launchpad one is the one that has to be
+                     rediscovered each time it drifts. -->
                 <div id="running-sessions-section" class="launchpad-section running-sessions-section" style="display:none;">
                     <div class="launchpad-section-title launchpad-section-title--row">
                         <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle" aria-expanded="true" aria-controls="running-sessions-list">
@@ -2831,6 +3511,19 @@ class Launchpad {
                             <span class="launchpad-section-title__text">recent</span>
                             <span class="launchpad-section-count" id="recent-sessions-count" data-state="ok"></span>
                         </button>
+                        <!-- SHOW-DELETED. The only route to a session
+                             record the user deleted. Without it those
+                             rows exist in the database and on the wire
+                             and are reachable from nowhere, which is how
+                             a deleted row took a live conversation with
+                             it on 2026-09-07. Same shape and same
+                             styling as the projects control beside it,
+                             different verb: a session's archive is a
+                             soft DELETE, not a shelf. -->
+                        <button type="button" class="launchpad-archived-toggle" id="recent-show-deleted-toggle" aria-pressed="false" title="show archived sessions">
+                            <span class="launchpad-archived-toggle__box" aria-hidden="true"></span>
+                            <span class="launchpad-archived-toggle__label">show archived</span>
+                        </button>
                     </div>
                     <div id="recent-sessions-list"></div>
                 </div>
@@ -2843,6 +3536,21 @@ class Launchpad {
                         <button type="button" class="launchpad-section-toggle" id="projects-section-toggle" aria-expanded="true" aria-controls="project-list">
                             <span class="launchpad-section-chevron" aria-hidden="true">►</span>
                             projects
+                        </button>
+                        <!-- SHOW-ARCHIVED. Permanently visible, never
+                             conditional on there BEING archived projects,
+                             and that is the whole discoverability
+                             guarantee: knowing whether any exist would
+                             need a second fetch of the very rows the
+                             toggle excludes, so the control announces
+                             itself instead. An archived project is
+                             therefore always exactly one click from
+                             being on screen, and one more from being
+                             restored - archive can never become a place
+                             work quietly disappears to. -->
+                        <button type="button" class="launchpad-archived-toggle" id="projects-show-archived-toggle" aria-pressed="false" title="show archived projects">
+                            <span class="launchpad-archived-toggle__box" aria-hidden="true"></span>
+                            <span class="launchpad-archived-toggle__label">show archived</span>
                         </button>
                     </div>
                     <div id="project-list" class="project-list">
@@ -2965,19 +3673,29 @@ class Launchpad {
     }
 
     /**
-     * Wire up the two launchpad section headings ("running sessions" and
-     * "projects") as real collapsible disclosures. Collapsed state
-     * persists per-section in localStorage under
+     * Wire up the launchpad section headings ("running sessions",
+     * "recent" and "projects") as real collapsible disclosures. Collapsed
+     * state persists per-section in localStorage under
      * `cloude.launchpad.collapsed`, following the same convention as
      * `cloude.theme` / `cloude.audio.volume`.
      *
-     * There used to be a third, "server management". Its one control now
+     * THE "recent" ENTRY WAS MISSING FROM THIS LIST. `#recent-sessions-toggle`
+     * has rendered as a real `<button>` with `aria-expanded` since b1365a2,
+     * but nothing ever attached a click listener to it - clicking it did
+     * literally nothing, which reads on screen as a chevron stuck open and
+     * a section that will not collapse. It was never a repaint clobbering
+     * a collapse; there was no collapse behavior to clobber. Fixed by
+     * listing it here like its two siblings, so it gets the exact same
+     * click handler, persistence and re-apply-on-render behavior they do.
+     *
+     * There used to be a fourth, "server management". Its one control now
      * lives in the home bar's server-controls menu.
      */
     initSectionDisclosures() {
         const collapsedState = this.getLaunchpadCollapsedState();
         const sections = [
             { id: 'running-sessions', toggleId: 'running-sessions-toggle', contentId: 'running-sessions-list' },
+            { id: 'recent-sessions', toggleId: 'recent-sessions-toggle', contentId: 'recent-sessions-list' },
             { id: 'recent-projects', toggleId: 'projects-section-toggle', contentId: 'project-list' },
         ];
 
@@ -2994,6 +3712,104 @@ class Launchpad {
                 this.setLaunchpadSectionCollapsed(id, !nowExpanded);
             });
         });
+
+        this.initArchivedVisibleToggle();
+        this.initDeletedSessionsToggle();
+    }
+
+    /**
+     * Wire the "show archived" control in the projects section heading.
+     *
+     * Flipping it persists the preference, then RE-FETCHES: the archived
+     * rows are not held client-side and filtered, they are asked for.
+     * That keeps one rule about what is on screen (whatever the last
+     * request returned) instead of two that can drift apart, and it means
+     * the toggle cannot show stale archived rows from an earlier fetch.
+     *
+     * The re-fetch happens on CLICK only. Nothing here runs on the 5s
+     * running-sessions poll, which re-renders the project list but does
+     * not re-request it.
+     */
+    initArchivedVisibleToggle() {
+        const btn = document.getElementById('projects-show-archived-toggle');
+        if (!btn) return;
+        this._applyArchivedVisibleToggleState(btn);
+        btn.addEventListener('click', async () => {
+            const next = !this._archivedVisible;
+            this._archivedVisible = next;
+            this.setArchivedVisiblePref(next);
+            this._applyArchivedVisibleToggleState(btn);
+            await this.loadProjects();
+        });
+    }
+
+    /**
+     * Wire the "show archived" control in the RECENT section heading.
+     *
+     * THE COPY SAYS ARCHIVED BECAUSE THE OPERATION IS ARCHIVING. Nothing
+     * in this app deletes a session: `session_store.archive_session`
+     * stamps `archived_at` and the row keeps every column it had, which
+     * is why an archived conversation can still be opened, grouped and
+     * restarted. Calling it "deleted" told the user his history was gone
+     * when it was one checkbox away, and it is the same word the
+     * projects control beside it already uses for the same thing.
+     *
+     * The element id, the preference key and the internal names still
+     * say "deleted" ON PURPOSE: changing the localStorage key would
+     * silently reset the preference for everyone who had set it, which
+     * is a real loss to buy a tidier identifier.
+     *
+     * Description: same shape as ``initArchivedVisibleToggle`` - persist,
+     *   repaint the control, then RE-FETCH, because deleted rows are
+     *   asked for rather than held client-side and filtered. One rule
+     *   about what is on screen: whatever the last request returned.
+     * Inputs: none.
+     * Output: undefined. No-op when the control is not mounted.
+     * Example: lp.initDeletedSessionsToggle()
+     */
+    initDeletedSessionsToggle() {
+        const btn = document.getElementById('recent-show-deleted-toggle');
+        if (!btn) return;
+        this._applyDeletedSessionsToggleState(btn);
+        btn.addEventListener('click', async () => {
+            const next = !this._deletedSessionsVisible;
+            this._deletedSessionsVisible = next;
+            this.setDeletedSessionsVisiblePref(next);
+            this._applyDeletedSessionsToggleState(btn);
+            await this.loadRecentSessions();
+        });
+    }
+
+    /**
+     * Paint the show-deleted button to match ``_deletedSessionsVisible``.
+     *
+     * Inputs: btn (HTMLElement) - the toggle.
+     * Output: undefined.
+     * Example: lp._applyDeletedSessionsToggleState(btn)
+     */
+    _applyDeletedSessionsToggleState(btn) {
+        const on = !!this._deletedSessionsVisible;
+        btn.setAttribute('aria-pressed', String(on));
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute(
+            'title',
+            on ? 'hide archived sessions' : 'show archived sessions'
+        );
+    }
+
+    /**
+     * Paint one show-archived button to match ``this._archivedVisible``.
+     *
+     * @param {HTMLElement} btn
+     */
+    _applyArchivedVisibleToggleState(btn) {
+        const on = !!this._archivedVisible;
+        btn.setAttribute('aria-pressed', String(on));
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute(
+            'title',
+            on ? 'hide archived projects' : 'show archived projects'
+        );
     }
 
     /**
@@ -3193,7 +4009,7 @@ class Launchpad {
      *   and returns the rows the tree must show but no live probe can
      *   name. Three filters, each load-bearing:
      *
-     *     archived_at        DELETED. The user pressed delete; it is off
+     *     archived_at        ARCHIVED. The user pressed archive; it is off
      *                        his screens. This is the ONE thing that
      *                        hides a row, and it hides it whatever its
      *                        lifecycle - including a row that is somehow
@@ -3227,11 +4043,40 @@ class Launchpad {
     _endedSessionsForTree() {
         if (!this.sessionAttributionListingOk) return [];
         const liveNames = new Set((this.runningSessions || []).map(s => s.name));
+        const records = this.sessionRecords || [];
+        // THE SAME EXCLUSION /sessions/recent APPLIES, for the same
+        // reason. A restart made before row reuse landed left this row
+        // behind and started a new one pointing back at it, so the pair
+        // rendered under one project TWICE - once running, once ended.
+        // The live-name check above cannot catch it: the two rows
+        // legitimately carry DIFFERENT tmux names ('Media_Compression'
+        // against 'cloude_Media_Compression').
+        //
+        // parent_session_id is a stored fact, not a classifier - when the
+        // successor is RUNNING this row is already on screen as that
+        // successor. Computed from `records`, which already carries both
+        // lifecycle and parent_session_id, so it needs no extra fetch.
+        const replacedByRunning = new Set();
+        for (const rec of records) {
+            if (!rec || rec.lifecycle !== 'running') continue;
+            const parent = rec.parent_session_id;
+            if (parent !== null && parent !== undefined && parent !== '') {
+                replacedByRunning.add(String(parent));
+            }
+        }
         const out = [];
-        for (const rec of (this.sessionRecords || [])) {
+        for (const rec of records) {
             if (!rec || rec.archived_at) continue;
             if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
             if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
+            if (rec.id !== null && rec.id !== undefined
+                && replacedByRunning.has(String(rec.id))) continue;
+            // A RESTARTED SESSION NO LONGER PRODUCES A SECOND ROW, so
+            // there is nothing here to fold away. A restart moves the
+            // existing row onto the new tmux instance and that row is
+            // simply `running` again - it leaves this list because it is
+            // no longer stopped, not because anything hid it. See
+            // src/core/session_restart.py: rebind_instance.
             out.push({
                 name: rec.tmux_name || '',
                 label: rec.title || null,
@@ -3247,6 +4092,9 @@ class Launchpad {
                 agent_family_source: rec.agent_family_source || null,
                 project_id: rec.project_id,
                 project_attribution: rec.project_attribution,
+                // The durable row id. Every other surface already carries
+                // this field under this name - see _renderSessionIdHtml.
+                session_row_id: (rec.id === undefined ? null : rec.id),
             });
         }
         return out;
@@ -3268,6 +4116,57 @@ class Launchpad {
      *   ``this.runningSessions`` entries).
      * Output: string - HTML for one ``.project-session-row``.
      */
+    /**
+     * Render one project group's session rows.
+     *
+     * Description: a flat render, deliberately. There used to be a fold
+     *   here that hid a restarted session's abandoned predecessor behind
+     *   a disclosure counting the earlier sessions it had superseded.
+     *   That mechanism existed to explain a duplicate the RESTART path
+     *   was creating: it inserted a second row and left the first one
+     *   behind carrying the same title, so a group listed it twice
+     *   and gained another entry on every restart.
+     *
+     *   A restart now reuses the session's own row (see
+     *   src/core/session_restart.py: rebind_instance), so there is no
+     *   predecessor, no duplicate, and nothing to disclose. The fix moved
+     *   to where the defect was.
+     * Inputs: sessions (object[]) - one group's rows, live and ended,
+     *   in display order.
+     * Output: string - the group's inner HTML.
+     * Example: lp._renderTreeSessionRowsHtml(children)
+     */
+    /**
+     * Description: the DOM attributes that make a project with NO
+     *   recorded work visibly distinct from one that was merely worked in
+     *   a long time ago. Both sit at the bottom of a list ordered by
+     *   ``work_at``, and without this they would be indistinguishable
+     *   there - which is the exact collapse (unknown rendered as "oldest")
+     *   the ordering change exists to undo.
+     *
+     *   ``work_at`` is MAX(sessions.last_work_at) across the project's
+     *   sessions and arrives on the project itself from GET /projects.
+     *   Null means no session under this project has ever been measured
+     *   working; it is never inferred from ``last_opened_at``, because
+     *   opening is not working.
+     * Inputs: project (object) - one row of ``this.projects``.
+     * Output: string - HTML attributes.
+     */
+    _projectWorkAttrs(project) {
+        const stamp = project && project.work_at;
+        if (stamp) {
+            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
+        }
+        return ' data-work="unrecorded" title="no work recorded in this'
+            + ' project yet - ordered below every project that has been'
+            + ' worked in"';
+    }
+
+    _renderTreeSessionRowsHtml(sessions) {
+        const list = Array.isArray(sessions) ? sessions : [];
+        return list.map((s) => this._renderTreeSessionRowHtml(s)).join('');
+    }
+
     _renderTreeSessionRowHtml(s) {
         if (s.ended) return this._renderEndedTreeSessionRowHtml(s);
         const owned = !!s.created_by_cloude;
@@ -3278,7 +4177,7 @@ class Launchpad {
             ? window.SessionStatusUI.dotHtml(s.status)
             : '';
         return `
-                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}" role="button" tabindex="0">
+                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">
                   ${statusDot}
                   <span class="project-session-row__name">${escapedDisplay}</span>
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
@@ -3302,12 +4201,12 @@ class Launchpad {
      *       one. A dead row that looks identical to a live one is worse
      *       than a hidden one, because he would click it and try to
      *       attach to a tmux session that does not exist.
-     *     - restart and delete instead, which are the only two things
+     *     - restart and archive instead, which are the only two things
      *       that CAN be done to a record with no process behind it.
      *       Restart is the same action RECENT already offers: a NEW
      *       session in the same working directory, never a resurrection.
      *
-     *   `data-uuid` carries ``session_uuid`` because delete is keyed on
+     *   `data-uuid` carries ``session_uuid`` because archive is keyed on
      *   it, never on the tmux name - tmux reuses names, and two rows can
      *   differ only by creation epoch.
      * Inputs: s (object) - one row from ``_endedSessionsForTree``.
@@ -3328,8 +4227,8 @@ class Launchpad {
                   <span class="badge badge-ended">ENDED</span>
                   <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
                   ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
-                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
-                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="delete this session from your lists (the record is kept)" aria-label="delete this session from your lists">delete</button>
+                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((s.title && String(s.title).trim()) || '')}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
+                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="archive this session from your lists (the record is kept)" aria-label="archive this session from your lists">archive</button>
                 </div>
             `;
     }
@@ -3352,7 +4251,7 @@ class Launchpad {
         if (!sessions || sessions.length === 0) return '';
         const nodeKey = '__no_project__';
         const collapsed = this._collapsedProjectNodes.has(nodeKey);
-        const rows = sessions.map(s => this._renderTreeSessionRowHtml(s)).join('');
+        const rows = this._renderTreeSessionRowsHtml(sessions);
         return `
                 <div class="project-node project-node--virtual" data-project-node="no-project">
                   <button type="button" class="project-node__header project-node__toggle" data-node-key="${nodeKey}" aria-expanded="${!collapsed}" aria-controls="project-node-sessions-${nodeKey}">
@@ -3498,10 +4397,12 @@ class Launchpad {
             if (row.dataset.ended === '1') {
                 const restart = e.target.closest('.ended-session-restart');
                 if (restart) {
-                    await this._restartRecentSession(
-                        restart.getAttribute('data-working-dir'),
-                        restart.getAttribute('data-agent-type')
-                    );
+                    await this._restartRecentSession({
+                        sessionUuid: restart.getAttribute('data-uuid'),
+                        title: restart.getAttribute('data-title'),
+                        workingDir: restart.getAttribute('data-working-dir'),
+                        agentType: restart.getAttribute('data-agent-type'),
+                    });
                     return;
                 }
                 const del = e.target.closest('.ended-session-delete');
@@ -3530,25 +4431,110 @@ class Launchpad {
      * the list, matching the three-outcome rule this whole screen
      * follows.
      */
+    /**
+     * Render the archived dimension's own status line - THREE OUTCOMES,
+     * never two.
+     *
+     * This exists because "there are no archived projects" and "the
+     * request that would have told you failed" render identically
+     * otherwise: both are an absence of archived rows on screen. The
+     * three states, read off ``this._archivedFetchOk``:
+     *
+     *   null  - the toggle is off, so nothing was asked. Renders NOTHING
+     *           at all. Silence here is correct: the user asked not to
+     *           see archived projects, and a line saying "unknown" about
+     *           a question nobody posed is furniture.
+     *   true  - the toggle is on and the server answered. Renders the
+     *           count of archived rows in the list, INCLUDING zero,
+     *           because "showing archived: 0" is a measured fact and is
+     *           exactly what distinguishes this state from the next one.
+     *   false - the toggle is on and the fetch FAILED. Renders CANNOT
+     *           DETERMINE, in words, and says the list below may be
+     *           stale. It never renders as zero.
+     *
+     * @returns {string} HTML, possibly empty
+     */
+    _renderArchivedNoticeHtml() {
+        if (this._archivedFetchOk === null) return '';
+        if (this._archivedFetchOk === false) {
+            return `
+                <div class="project-archived-notice project-archived-notice--unknown">
+                    CANNOT DETERMINE - archived projects could not be loaded.
+                    This is NOT a claim that there are none; the list below
+                    may be stale or incomplete.
+                </div>
+            `;
+        }
+        const archivedCount = (this.projects || [])
+            .filter(p => p && p.archived_at).length;
+        return `
+            <div class="project-archived-notice">
+                showing archived: ${archivedCount}
+            </div>
+        `;
+    }
+
+    /**
+     * Paint the project tree, but only when painting it would change it.
+     *
+     * Description: builds the markup, asks
+     *   ``window.ProjectListRenderGuard`` whether it is worth writing,
+     *   and writes plus re-binds only when the answer is yes. The three
+     *   reasons it says no - identical markup, launchpad not on screen,
+     *   user mid-interaction inside the list - are that module's, not
+     *   this one's, and every one of them leaves the stored signature
+     *   alone so the next tick reconsiders. Without the guard present
+     *   (module missing, load-order regression) it paints
+     *   unconditionally, which is exactly the old behaviour.
+     * Inputs: none; reads this.projects, this.projectPresence,
+     *   this.projectAuthority and the session groups.
+     * Output: void.
+     */
     renderProjectList() {
         const projectListEl = document.getElementById('project-list');
         if (!projectListEl) return;
+        const html = this._projectListHtml();
+        const guard = window.ProjectListRenderGuard;
+        const verdict = guard
+            ? guard.decide({
+                html,
+                lastSignature: this._lastProjectListSig,
+                container: projectListEl,
+            })
+            : { paint: true, signature: html };
+        if (!verdict.paint) return;
+        this._lastProjectListSig = verdict.signature;
+        projectListEl.innerHTML = html;
+        this._bindProjectListHandlers(projectListEl);
+    }
 
+    /**
+     * Build the project tree's markup, writing nothing.
+     *
+     * Description: split out of renderProjectList() so the guard above
+     *   can compare what WOULD be painted against what IS painted. It
+     *   has to stay pure for that comparison to mean anything: no DOM
+     *   writes, no fetches, no state mutation.
+     * Inputs: none.
+     * Output: string - the whole `#project-list` inner HTML.
+     * Example: const same = lp._projectListHtml() === lp._lastProjectListSig;
+     */
+    _projectListHtml() {
         // feat/db-is-authoritative - the provenance banner is drawn in
         // BOTH the empty and populated cases. An empty list is exactly
         // when the user most needs to know whether the datastore
         // answered, because "no projects" and "could not read your
         // projects" look identical without it.
         const authorityHtml = this._renderProjectAuthorityBannerHtml();
+        const archivedNoticeHtml = this._renderArchivedNoticeHtml();
 
         if (this.projects.length === 0) {
-            projectListEl.innerHTML = authorityHtml + `
+            return authorityHtml + archivedNoticeHtml + `
                 <div class="launchpad-empty">
                     no projects yet<br>
                     <small style="color: #666;">use + new to add one</small>
                 </div>
             `;
-            return;
         }
 
         const groups = this._buildProjectSessionGroups();
@@ -3597,9 +4583,20 @@ class Launchpad {
                     : 'reason unknown';
                 presenceBadge = `<div class="project-presence-badge project-presence-badge-unreachable">CANNOT DETERMINE - ${detail}</div>`;
             }
-            const itemClasses = isDisabled
-                ? `project-item project-presence-disabled project-presence-${presenceState}`
-                : 'project-item';
+            // ARCHIVED IS ITS OWN DIMENSION, orthogonal to presence. A
+            // project can be archived AND missing, and the two badges say
+            // different things: "I retired this" vs "the folder is gone".
+            // Archiving never disables a row - an archived project is
+            // still openable, and its sessions were never touched.
+            const isArchived = !!project.archived_at;
+            const archivedBadge = isArchived
+                ? `<div class="project-archived-badge">ARCHIVED</div>`
+                : '';
+            const itemClasses = [
+                'project-item',
+                isDisabled ? `project-presence-disabled project-presence-${presenceState}` : '',
+                isArchived ? 'project-item--archived' : '',
+            ].filter(Boolean).join(' ');
 
             // S8, revised by feat/db-is-authoritative - a project's row
             // id now arrives ON THE PROJECT ITSELF, from GET /projects,
@@ -3643,7 +4640,7 @@ class Launchpad {
                 ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle details for ${this._escapeHtml(project.name)}"${controlsAttr}><span class="project-node__chevron" aria-hidden="true">►</span>${countHtml}</button>`
                 : '';
             const sessionsHtml = hasChildren
-                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${children.map(s => this._renderTreeSessionRowHtml(s)).join('')}</div>`
+                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${this._renderTreeSessionRowsHtml(children)}</div>`
                 : '';
             // Item 43: the description is the part of the row that a
             // collapsed node sheds. Rendered with the collapse already
@@ -3654,15 +4651,30 @@ class Launchpad {
                 : '';
 
             return `
-                <div class="project-node" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}">
+                <div class="project-node${isArchived ? ' project-node--archived' : ''}" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
                   <div class="project-node__row">
-                    ${chevronHtml}
+                    <div class="project-node__gutter">${chevronHtml}</div>
                     <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
                         <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                        <button class="project-delete-btn" data-name="${project.name}" title="remove project from the launcher" aria-label="remove project from the launcher"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.trashIconSvg() : '&times;'}</button>
+                        <!-- THE ONLY DESTRUCTIVE-SHAPED CONTROL ON THIS ROW.
+                             A hard-delete trash button used to sit here
+                             too (DELETE /projects/{name}, a real row
+                             removal with a tombstone) - it is gone from
+                             the UI on the owner's instruction, 2026-09-08:
+                             "sessions and projects can be archived not
+                             deleted". The server route is untouched and
+                             still reachable directly; nothing in the
+                             client calls it any more. NOT disabled by
+                             presence. A project whose
+                             folder has gone missing is precisely one a
+                             user wants to archive, and refusing that
+                             would leave the row permanently stuck on the
+                             screen it is trying to leave. -->
+                        <button class="project-archive-btn" data-name="${project.name}" data-archived="${isArchived ? '1' : '0'}" title="${isArchived ? 'restore project to the list' : 'archive project - keeps it and its sessions, hides it from this list'}" aria-label="${isArchived ? 'restore project' : 'archive project'}">${isArchived ? '&#x21ba;' : '&#x1F5C4;'}</button>
                         <div class="project-name">» ${project.name}</div>
                         <div class="project-path">${project.path}</div>
                         ${descriptionHtml}
+                        ${archivedBadge}
                         ${presenceBadge}
                     </div>
                   </div>
@@ -3674,8 +4686,21 @@ class Launchpad {
         const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
         const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
 
-        projectListEl.innerHTML = authorityHtml + projectNodesHtml + noProjectHtml + attentionHtml;
+        return authorityHtml + archivedNoticeHtml + projectNodesHtml + noProjectHtml + attentionHtml;
+    }
 
+    /**
+     * Re-bind every handler the project tree's markup needs.
+     *
+     * Description: called ONLY after a real write, because innerHTML
+     *   destroys the nodes these listeners were attached to. The two
+     *   delegated binders below guard themselves against re-binding; the
+     *   per-row loops cannot, which is precisely why a repaint that
+     *   changes nothing is worth skipping.
+     * Inputs: projectListEl (Element) - the container just written to.
+     * Output: void.
+     */
+    _bindProjectListHandlers(projectListEl) {
         this._bindProjectNodeToggles();
         this._bindProjectSessionRowClicks();
 
@@ -3684,8 +4709,8 @@ class Launchpad {
         projectItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 // Don't open project if clicking an inline action button
-                if (e.target.classList.contains('project-delete-btn') ||
-                    e.target.classList.contains('project-edit-btn')) {
+                if (e.target.closest('.project-edit-btn') ||
+                    e.target.closest('.project-archive-btn')) {
                     return;
                 }
                 // MISSING and CANNOT DETERMINE rows refuse every action -
@@ -3712,13 +4737,17 @@ class Launchpad {
             });
         });
 
-        // Add click handlers for delete buttons
-        const deleteButtons = projectListEl.querySelectorAll('.project-delete-btn');
-        deleteButtons.forEach(btn => {
+        // Add click handlers for archive / unarchive buttons
+        const archiveButtons = projectListEl.querySelectorAll('.project-archive-btn');
+        archiveButtons.forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation(); // Prevent project selection
                 const projectName = btn.dataset.name;
-                await this.deleteProject(projectName);
+                if (btn.dataset.archived === '1') {
+                    await this.unarchiveProject(projectName);
+                } else {
+                    await this.archiveProject(projectName);
+                }
             });
         });
 
@@ -3737,43 +4766,63 @@ class Launchpad {
     }
 
     /**
-     * Delete a project
+     * ARCHIVE a project: retire it from the list, keep everything.
+     *
+     * THE ONLY DESTRUCTIVE-SHAPED CONTROL ON A PROJECT ROW. There used
+     * to be a hard-delete trash button beside this one; it is gone from
+     * the UI (owner's instruction, 2026-09-08: "sessions and projects
+     * can be archived not deleted"). This hides the row and is undone in
+     * one click, never removes it.
+     *
+     * IT DOES NOT TOUCH THE PROJECT'S SESSIONS. That is stated to the
+     * user, not just to the server: a user who believes archiving might
+     * take his running sessions with it will not use the feature, and a
+     * user who believes it will not when it does has lost work. The
+     * server writes only this project's ``archived_at`` - see
+     * src/core/project_archive.py.
+     *
+     * @param {string} projectName
+     * @returns {Promise<void>}
      */
-    async deleteProject(projectName) {
+    async archiveProject(projectName) {
         try {
-            // Show confirmation modal
-            // Trash means the same thing on a project row as on a session
-            // row: forget the entry, touch nothing on disk. The copy says
-            // so plainly rather than borrowing a "cannot be undone"
-            // warning this action does not earn.
             const confirmed = await this.showConfirmModal(
-                'remove project',
-                `remove "${projectName}" from the launcher?`,
-                'this only removes it from the launcher. the folder and its files on disk are not touched.',
-                'remove',
+                'archive project',
+                `archive "${projectName}"?`,
+                'it leaves this list but is kept in full. its sessions are NOT archived and keep working. the folder on disk is not touched. turn on "show archived" to bring it back.',
+                'archive',
                 'cancel'
             );
+            if (!confirmed) return;
 
-            if (!confirmed) {
-                return;
-            }
-
-            // Show loading state
-            this.updateStatus(`deleting ${projectName}...`);
-
-            // Delete project via API
-            await window.API.deleteProject(projectName);
-
-            console.log('Launchpad: Project deleted:', projectName);
-
-            // Reload projects list
+            await window.API.archiveProject(projectName);
             await this.loadProjects();
-
-            this.updateStatus('project deleted');
-
         } catch (error) {
-            console.error('Launchpad: Failed to delete project:', error);
-            this.showError('failed to delete project: ' + error.message);
+            console.error('Launchpad: failed to archive project:', error);
+            this.showError('failed to archive project: '
+                + (error && error.message ? error.message : 'the server could not be reached'));
+        }
+    }
+
+    /**
+     * UNARCHIVE a project: put it back in the default list.
+     *
+     * No confirm. Archiving is the destructive-shaped direction (it takes
+     * something off the screen); restoring only ever adds a row back, and
+     * a confirm on a harmless, self-evident, instantly-reversible action
+     * is friction that teaches people to click through dialogs.
+     *
+     * @param {string} projectName
+     * @returns {Promise<void>}
+     */
+    async unarchiveProject(projectName) {
+        try {
+            await window.API.unarchiveProject(projectName);
+            await this.loadProjects();
+        } catch (error) {
+            console.error('Launchpad: failed to restore project:', error);
+            this.showError('failed to restore project: '
+                + (error && error.message ? error.message : 'the server could not be reached'));
         }
     }
 
@@ -4263,6 +5312,18 @@ class Launchpad {
                 }
             }
 
+            // Repaint the project tree from the list we just changed.
+            // renderProjectList() draws from the cached this.projects, and
+            // the 5s poller repaints from that cache without ever refilling
+            // it - so without this the new project stays invisible until some
+            // other action reloads. Guarded on its own: the session was
+            // created, and a failed repaint must not read as a failed create.
+            try {
+                await this.loadProjects();
+            } catch (error) {
+                console.error('Launchpad: Failed to refresh projects after session create:', error);
+            }
+
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: { session }
             }));
@@ -4304,11 +5365,38 @@ class Launchpad {
             const modalTitle = agentType
                 ? `name this ${agentType} project`
                 : 'name this project';
-            const projectDetails = await this.showProjectNameModal({ title: modalTitle });
 
-            if (!projectDetails) {
-                console.log('Launchpad: Project creation cancelled');
-                return; // User cancelled
+            // The name has to be usable as a folder name, because it now
+            // IS one. An illegal name is refused and re-asked with what
+            // was typed still in the field - never silently rewritten,
+            // which would make a folder the user did not ask for.
+            let projectDetails = null;
+            let prefillName = '';
+            for (;;) {
+                projectDetails = await this.showProjectNameModal({
+                    title: modalTitle,
+                    defaultName: prefillName,
+                });
+                if (!projectDetails) {
+                    console.log('Launchpad: Project creation cancelled');
+                    return; // User cancelled
+                }
+                const nameVerdict = window.ProjectCreateFolder.validateName(projectDetails.name);
+                if (nameVerdict.ok) break;
+                this.showError(nameVerdict.message);
+                prefillName = projectDetails.name;
+            }
+
+            // The folder step. Until this shipped nothing asked where the
+            // project should live, so the server fell back to naming the
+            // directory after a random session id (".../ses_5a756046").
+            // Cancelling here cancels the launch: no session, no folder.
+            const folderChoice = await window.ProjectCreateFolder.choose({
+                name: projectDetails.name,
+            });
+            if (!folderChoice) {
+                console.log('Launchpad: Project folder selection cancelled');
+                return;
             }
 
             // Show loading state
@@ -4327,6 +5415,20 @@ class Launchpad {
                 auto_start_claude: true,
                 copy_templates: true,
                 project_name: projectDetails.name,
+                // The chosen PARENT, not the composed path. The server
+                // joins it to project_name itself and canonicalises with
+                // realpath, so the directory it creates and the row's
+                // working_dir carry the long spelling of a symlinked
+                // parent rather than whatever the client happened to
+                // display. See src/core/project_directory.py.
+                project_parent_dir: folderChoice.parent,
+                // ONE NAME, SET AT BIRTH. The server turns a non-empty
+                // label into `--name <label>` on the launch command, so
+                // the row title and the name claude calls itself are the
+                // same string from the first frame. Without it this flow
+                // launched claude with no name at all and the TUI status
+                // line showed the directory instead.
+                label: projectDetails.name,
                 ..._dims
             };
             // Only include agent_type when explicitly set, so the server's
@@ -4373,6 +5475,18 @@ class Launchpad {
                 if (!error.message.includes('already exists')) {
                     console.error('Launchpad: Failed to save project:', error);
                 }
+            }
+
+            // Repaint the project tree from the list we just changed.
+            // renderProjectList() draws from the cached this.projects, and
+            // the 5s poller repaints from that cache without ever refilling
+            // it - so without this the new project stays invisible until some
+            // other action reloads. Guarded on its own: the session was
+            // created, and a failed repaint must not read as a failed create.
+            try {
+                await this.loadProjects();
+            } catch (error) {
+                console.error('Launchpad: Failed to refresh projects after session create:', error);
             }
 
             // Trigger session-created event
@@ -4833,15 +5947,32 @@ class Launchpad {
      *   the duplicate-session regression (see openProjectByName()'s
      *   docstring) - but keeping the comparison here, in one function,
      *   means that stays true by construction instead of by coincidence.
+     * SYMMETRIC WITH THE DISPLAY TITLE TOO, not only the slug. The
+     * outbound URL this app builds (`App._syncSessionUrl`) always uses
+     * the tmux-derived slug, never the title - but a deep link built
+     * some other way (a pasted title, a fork label copied from the
+     * header: `<parent title>(fork)`, `src/core/session_fork.py`
+     * `fork_label`) names the SAME session and must resolve to it. Both
+     * `/sessions/attachable` and `/sessions/list` rows carry `label`
+     * (`AttachableSession.label` / `SessionInfo.session` - the row's
+     * `sessions.title`), so once the slug match misses, the title is
+     * checked against that field before giving up.
      * Inputs:
-     *   slug (string) - decoded, regex-validated name from the URL.
+     *   slug (string) - decoded, validated name from the URL. Despite
+     *     the parameter name this may be a slug OR a display title.
      * Output: the matching row from `this.runningSessions`, or
      *   `undefined` if none matches.
      */
     _findRunningSessionBySlug(slug) {
         const rows = this.runningSessions || [];
-        return rows.find(s => this._deriveRunningSessionDisplayName(s.name) === slug)
+        const bySlug = rows.find(s => this._deriveRunningSessionDisplayName(s.name) === slug)
             || rows.find(s => (this._deriveRunningSessionDisplayName(s.name) || '').toLowerCase() === String(slug).toLowerCase());
+        if (bySlug) return bySlug;
+
+        const wanted = String(slug).trim();
+        if (!wanted) return undefined;
+        return rows.find(s => typeof s.label === 'string' && s.label.trim() === wanted)
+            || rows.find(s => typeof s.label === 'string' && s.label.trim().toLowerCase() === wanted.toLowerCase());
     }
 
     /**
@@ -5133,6 +6264,11 @@ class Launchpad {
                 auto_start_claude: true,
                 copy_templates: false,
                 project_name: project.name,
+                // See _createNewSessionInner's identical comment: the
+                // label becomes claude's `--name` as well as the row
+                // title, so opening an existing project names the
+                // session on both sides at once.
+                label: project.name,
                 ..._dims
             };
             // Omit for claude (server default); set for an OpenRouter model.
@@ -5240,7 +6376,7 @@ class Launchpad {
                 `was not opened: its folder does not exist at ${path}.\n\n` +
                 `Nothing was started and nothing was changed. Either restore ` +
                 `the folder at that path, edit the project to point at where ` +
-                `it lives now, or delete the project.`
+                `it lives now, or archive the project.`
             );
             return;
         }

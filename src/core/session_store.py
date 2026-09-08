@@ -114,7 +114,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import structlog
 
-from src.core.db import table_exists
+from src.core.db import column_exists, table_exists
 from src.core.db_models import (
     DEFAULT_TMUX_SOCKET,
     SESSION_ATTRIBUTION_UNKNOWN,
@@ -122,6 +122,7 @@ from src.core.db_models import (
     SESSION_ORIGIN_OBSERVED,
     SESSION_OWNED_ORIGINS,
 )
+from src.core.session_kind import KIND_AUTOMATED as SESSION_KIND_AUTOMATED
 
 logger = structlog.get_logger()
 
@@ -247,6 +248,7 @@ def list_sessions(
     lifecycle: Optional[str] = None,
     include_archived: bool = True,
     include_lineage: bool = False,
+    include_automated: bool = True,
 ) -> List[Dict[str, Any]]:
     """Return session rows as plain dicts, newest first.
 
@@ -266,6 +268,12 @@ def list_sessions(
       which knows what a lineage row is. Rows written before lineage
       existed carry NULL here and are returned either way, because a NULL
       parent means "lineage root" and every one of them genuinely is one.
+      include_automated (bool) - whether to return rows classified
+      ``kind = 'automated'``, i.e. a scheduler run or a headless
+      ``claude -p`` probe. DEFAULTS TO TRUE, and that default is the
+      compatibility guarantee: a store function must not silently hide
+      rows from a caller that never asked it to. The USER-FACING lists
+      pass False; see :func:`listable_sessions` and the two list routes.
     Output: list[dict] - empty on a pre-v2 database.
     Example: list_sessions(conn, lifecycle='stopped', include_archived=False)
     """
@@ -300,6 +308,17 @@ def list_sessions(
         clauses.append(
             "(parent_session_id IS NULL OR tmux_created_epoch IS NOT NULL)"
         )
+    if not include_automated and column_exists(conn, "sessions", "kind"):
+        # EXCLUDE ON THE POSITIVE VALUE ONLY, never on "not
+        # interactive". NULL means the row was never classified and
+        # 'unknown' means a transcript was read and answered nothing;
+        # both keep their place, because not having looked is not
+        # evidence of automation. COALESCE rather than ``kind <>
+        # 'automated'`` because in SQL that comparison is NULL for a
+        # NULL kind, which would drop every unclassified row - the exact
+        # collapse this vocabulary exists to prevent.
+        clauses.append("COALESCE(kind, '') <> ?")
+        values.append(SESSION_KIND_AUTOMATED)
     query = "SELECT * FROM sessions"
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
@@ -342,7 +361,9 @@ def listable_sessions(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
       to tell those apart ask GET /sessions/import-status.
     Example: listable_sessions(conn)  # [{'session_uuid': 'u1', ...}]
     """
-    return list_sessions(conn, include_archived=False)
+    return list_sessions(
+        conn, include_archived=False, include_automated=False
+    )
 
 
 def archive_session(
@@ -412,6 +433,62 @@ def archive_session(
     logger.info(
         "session_archived", session_uuid=session_uuid, archived_at=stamp
     )
+    return True
+
+
+def unarchive_session(
+    conn: sqlite3.Connection,
+    session_uuid: str,
+    *,
+    now: Optional[str] = None,
+) -> bool:
+    """Bring an archived session record back onto the user's screens.
+
+    Description: clears ``archived_at``. Restarting an archived row
+      already does this as a side effect (``session_restart.rebind_
+      instance``), which is why the launchpad UI has never needed a
+      dedicated control for it - restart both recovers the row AND gets
+      it running again, and a bare unarchive would leave it stopped and
+      still needing that same restart. This function exists so the
+      capability is not gated behind having a live tmux to restart into
+      (a scripted cleanup, or a future UI, can restore the row on its
+      own), matching the parity ``project_archive.unarchive_project``
+      already gives projects. See that module's docstring for why an
+      archive with no way back is a delete wearing a friendlier label.
+
+      IDEMPOTENT, AND THE FIRST STAMP LOSS WINS: an already-live row
+      (``archived_at`` already NULL) returns False rather than touching
+      ``updated_at`` for a no-op.
+    Inputs: conn (sqlite3.Connection). session_uuid (str). now (str |
+      None) - ISO-8601 stamp for ``updated_at``; defaults to the current
+      UTC time. ``archived_at`` itself is cleared to NULL, not stamped.
+    Output: bool - True when this call performed the restore, False when
+      the row was not archived.
+    Raises: SessionNotFoundError - no row carries that uuid, so nothing
+      was restored and the caller must not report success.
+    Example: unarchive_session(conn, 'a1b2')  # True
+    """
+    from src.core.trail_entry import utc_now
+
+    if not sessions_table_ready(conn):
+        raise SessionNotFoundError(session_uuid)
+    row = conn.execute(
+        "SELECT archived_at FROM sessions WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(session_uuid)
+    if row["archived_at"] is None:
+        return False
+
+    stamp = now or utc_now()
+    conn.execute(
+        "UPDATE sessions SET archived_at = NULL, updated_at = ? "
+        "WHERE session_uuid = ? AND archived_at IS NOT NULL",
+        (stamp, session_uuid),
+    )
+    conn.commit()
+    logger.info("session_unarchived", session_uuid=session_uuid)
     return True
 
 

@@ -1,0 +1,34 @@
+{
+ "meta": {
+  "scope": {
+   "display_name": "Joe-MBP-M1",
+   "host_id": 1,
+   "kind": "host"
+  }
+ },
+ "result": [
+  {
+   "collected_at": "2026-08-30T16:01:00.308861Z",
+   "corpus_id": 1,
+   "corpus_key": "claude-projects",
+   "has_manifest": false,
+   "project_count": 71,
+   "root_path": "/Users/jsugamele/.claude/projects",
+   "transcript_count": 19548,
+   "unattributed_transcript_count": 0
+  },
+  {
+   "collected_at": "2026-08-30T16:01:45.993463Z",
+   "corpus_id": 2,
+   "corpus_key": "local-agent-mode-sessions",
+   "has_manifest": true,
+   "project_count": 5,
+   "root_path": "/Users/jsugamele/Library/Application Support/Claude/local-agent-mode-sessions",
+   "transcript_count": 14,
+   "unattributed_transcript_count": 5
+  }
+ ],
+ "result_status": "ok",
+ "scope_status": "resolved",
+ "unevaluated": []
+}

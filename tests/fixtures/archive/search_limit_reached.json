@@ -1,0 +1,95 @@
+{
+ "meta": {
+  "body_bytes_note": "body_bytes is a DEPRECATED alias for body_chars and counts UNICODE CODE POINTS, not bytes. Read body_chars.",
+  "body_bytes_units": "unicode_code_points",
+  "body_size_units": "unicode_code_points",
+  "offset_units": "unicode_code_points",
+  "offset_units_utf16_available": true,
+  "paging": {
+   "has_more": true,
+   "limit": 3,
+   "next_cursor": "eyJieXRlcyI6NjA5ODQyLCJsaW5lX25vIjoxNCwic2Nhbm5lZCI6MSwidF9pZCI6MTk1NDgsInRfaW5nZXN0ZWRfYXQiOiIyMDI2LTA4LTMwVDE2OjAxOjQ1LjAyMjMzMloiLCJ2IjoxfQ",
+   "returned": 3
+  },
+  "query": {
+   "case_sensitive": false,
+   "q": "restic"
+  },
+  "scan": {
+   "budget_bytes": 536870912,
+   "budget_transcripts": 2000,
+   "bytes_scanned": 609842,
+   "elapsed_seconds": 0.055676,
+   "resume_cursor": null,
+   "status": "limit_reached",
+   "transcripts_not_scanned": 3415,
+   "transcripts_scanned": 1
+  },
+  "scope": {
+   "kind": "project",
+   "project_id": 12,
+   "transcripts_in_scope": 3416
+  },
+  "snippet_gate": {
+   "guarantee": "best_effort",
+   "known_values_indexed": 739,
+   "layers": [
+    "body_secret_finding_count",
+    "detectors_over_window",
+    "known_credential_value_hash"
+   ],
+   "limitation": "A credential never detected anywhere in this corpus is not in the known-value index and is invisible to the detectors for the same reason it was never detected. Pass snippets=false for a response that carries no preview text at all.",
+   "withholding_never_suppresses_a_hit": true
+  }
+ },
+ "result": [
+  {
+   "body_bytes": 5347,
+   "body_chars": 5347,
+   "body_href": "/api/v1/archive/bodies/2433777",
+   "body_id": 2433777,
+   "line_no": 0,
+   "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjotMSwidiI6MX0",
+   "match_length": 6,
+   "match_offset": 2805,
+   "secret_finding_count": 0,
+   "session_ref": "agent-add459f16848bb276",
+   "snippet": "...spun up a throwaway lab box and pointed the restic client at the sandbox mirror endpoint, then timed how long a cold synthetic...",
+   "snippet_state": "included",
+   "transcript_id": 19548
+  },
+  {
+   "body_bytes": 27597,
+   "body_chars": 27597,
+   "body_href": "/api/v1/archive/bodies/2433779",
+   "body_id": 2433779,
+   "line_no": 2,
+   "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjoxLCJ2IjoxfQ",
+   "match_length": 6,
+   "match_offset": 3199,
+   "secret_finding_count": 0,
+   "session_ref": "agent-add459f16848bb276",
+   "snippet": "...catalog entries read: \\\"widget-count lib\\\", \\\"[demo/queue/\\\", \\\"sample rotation check\\\", \\\"restic sandbox coverage\\\", \\\"is nod...",
+   "snippet_state": "included",
+   "transcript_id": 19548
+  },
+  {
+   "body_bytes": 2946,
+   "body_chars": 2946,
+   "body_href": "/api/v1/archive/bodies/2433791",
+   "body_id": 2433791,
+   "line_no": 14,
+   "lines_href": "/api/v1/archive/transcripts/19548/lines?cursor=eyJsaW5lX25vIjoxMywidiI6MX0",
+   "match_length": 6,
+   "match_offset": 1800,
+   "secret_finding_count": 0,
+   "session_ref": "agent-add459f16848bb276",
+   "snippet": "...seven throwaway targets queued for the demo run (QUEUE_STUB idle, restic sandbox\\n> read-only, lab-zone snapshot capture, the...",
+   "snippet_state": "included",
+   "transcript_id": 19548
+  }
+ ],
+ "result_status": "ok",
+ "scope_status": "resolved",
+ "unevaluated": []
+}

@@ -86,6 +86,41 @@ database would render as "you have no projects". The block is re-probed on
 every request rather than served from the boot-time snapshot, because a
 snapshot taken at startup cannot notice the database being deleted at 3pm.
 
+``data.integrity`` IS A CACHE READ, NOT A CHECK. This route used to run
+``PRAGMA integrity_check`` inside the coroutine on every request. The
+Electron tray polls it every 20 seconds and the pragma walks every page of
+the file, so on a 4.5 GB cloude.db the event loop was blocked for most of
+every 20-second window, growing with the database. The full check now runs
+daily in a worker thread and publishes a verdict to disk
+(src/core/db_integrity.py); this block reports that verdict AND ITS AGE:
+
+    "integrity": {
+      "verdict": "ok" | "failed" | "cannot_determine",
+      "freshness": "current" | "stale" | "never_ran" | "cannot_determine",
+      "age_seconds": 3601.2,       # null when no age could be measured
+      "stale_after_seconds": 172800,
+      "checked_at": "2026-09-07T09:00:00Z",   # null when never checked
+      "last_run_status": "ok",     # null when never checked
+      "duration_seconds": 14.31,
+      "detail": null,              # the pragma's complaint when it failed
+      "reason": "...",             # one sentence naming which state it is
+      "enabled": true,             # false when the checker is switched off
+      "interval_seconds": 86400,
+      "artifact": "/.../db-integrity/latest.json"
+    }
+
+TWO FIELDS, BECAUSE THERE ARE TWO FACTS. ``verdict`` is what the check
+found; ``freshness`` is whether anybody has looked recently. ``verdict`` is
+only ever "ok" when a check actually ran AND its result is inside the
+freshness window, so "never checked" reports ``cannot_determine`` and can
+never be mistaken for a clean bill of health. That collapse would be a
+false green manufactured by the check meant to prevent one.
+
+A cached ``failed`` verdict ALSO degrades ``data.status`` to
+``degraded_db_unreadable``, exactly as the per-request pragma used to. A
+``cannot_determine`` verdict does not touch ``data.status`` at all: not
+having looked is not a fault.
+
 Each line is suffixed with the age of ``checked_at``, for example
 "checked 2 hours ago", so nobody reads a week-old answer as fresh.
 """
@@ -98,6 +133,10 @@ from fastapi import APIRouter, Depends
 
 from src.api.auth import require_auth
 from src.core.db_health import live_state
+from src.core.db_integrity_status import (
+    integrity_block,
+    unresolvable_integrity_block,
+)
 from src.core.db_models import CURRENT_SCHEMA_VERSION
 from src.core.db_state import DatastoreState
 from src.core.update_check import UpdateChecker
@@ -146,6 +185,11 @@ def _datastore_block() -> dict:
     Description: never raises - a status endpoint that 500s tells the user
       less than one that says "I could not read it". Any unexpected error
       is converted by live_state into the named unreachable verdict.
+
+      THE RE-PROBE IS CHEAP ON PURPOSE: one connect, one small SELECT and
+      one read of a small JSON file. No pragma walks the database here.
+      The ``integrity`` sub-block is the cached verdict of the daily
+      background check plus its age - see this module's docstring.
     Inputs: none.
     Output: dict - see this module's docstring for the shape.
     """
@@ -174,8 +218,16 @@ def _datastore_block() -> dict:
             ),
             "detail": str(exc),
             "failed_entry_uuid": None,
+            "integrity": unresolvable_integrity_block(
+                "the state directory could not be resolved, so the "
+                "cached integrity verdict could not even be looked for"
+            ),
         }
-    return live_state(_datastore_state, state_dir, CURRENT_SCHEMA_VERSION).to_dict()
+    block = live_state(
+        _datastore_state, state_dir, CURRENT_SCHEMA_VERSION
+    ).to_dict()
+    block["integrity"] = integrity_block(state_dir)
+    return block
 
 
 @router.get("/version", dependencies=[Depends(require_auth)])

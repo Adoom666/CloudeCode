@@ -1,0 +1,499 @@
+/* Archive reader: the transcript reading surface.
+ *
+ * SCOPE. This file styles the reader shell (client/js/archive-reader.js),
+ * its rows (client/js/archive-line-render.js) and the gate/refusal
+ * blocks those rows produce. It does NOT define what an outcome block
+ * looks like - archive-outcome-view.js owns that vocabulary and another
+ * stylesheet owns its base look. The few `.archive-outcome` rules at the
+ * bottom of this file are placement inside the reader only.
+ *
+ * NO HARDCODED COLOURS. Every colour is one of the app's existing custom
+ * properties, so all 23 themes get a reader that matches them without a
+ * per-theme override in here.
+ *
+ * MEANING IS NEVER CARRIED BY COLOUR ALONE, AND NEVER BY RADIUS AT ALL.
+ * `terminal`, `gameboy` and `legacy_apple` deliberately zero every radius
+ * token, so a state that reads as "different" only because it is rounded
+ * is a state those three themes cannot express. Every state here is
+ * already distinguished by its rendered TEXT, its `data-body-state`
+ * attribute and which buttons exist in its subtree, before any of these
+ * rules apply. What is below is emphasis, not information.
+ *
+ * BREAKPOINTS. 700px is where the row's metadata line wraps under the
+ * body. It is reused rather than invented: 700px is already the most
+ * common breakpoint in client/css/.
+ */
+
+.archive-reader {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    color: var(--color-fg);
+    background: var(--color-bg);
+}
+
+.archive-reader__header {
+    flex: 0 0 auto;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-elevated);
+}
+
+.archive-reader__title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.archive-reader__facts {
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+}
+
+/* The status region holds idle, loading and every outcome block. It is
+ * empty and inert when the reader is in `ok`. */
+.archive-reader__status:empty {
+    display: none;
+}
+
+.archive-reader__status {
+    flex: 0 0 auto;
+    padding: 1rem;
+}
+
+.archive-reader__idle-head {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+/* `Live session: NOT CHECKED` is a verbatim, load-bearing string. It is
+ * given weight so it is not skimmed past as decoration: this build does
+ * not correlate archived transcripts with live sessions, and it is not
+ * asserting that there are none. */
+.archive-reader__idle-live {
+    margin: 0 0 0.25rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--color-fg);
+}
+
+.archive-reader__idle-note,
+.archive-reader__deadline {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+}
+
+.archive-reader__loading {
+    margin: 0 0 0.25rem;
+    font-weight: 600;
+}
+
+/* ---- the scroller ------------------------------------------------ */
+
+/* `overflow-anchor: none` is required, not cosmetic. Browser scroll
+ * anchoring would fight the anti-jump compensation in archive-reader.js:
+ * both would try to correct the same displacement and the sum would be
+ * double. The reader's own compensation is the one that knows which rows
+ * are above the viewport. */
+.archive-reader__scroller {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overflow-anchor: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* The spacer's height is the virtual list's running sum of estimates and
+ * measurements. It is set from JS and never from a rule here, because a
+ * height in CSS would be a claim about a document nobody measured. */
+.archive-reader__spacer {
+    position: relative;
+    width: 100%;
+}
+
+.archive-reader__window {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    will-change: transform;
+}
+
+/* A partial spine ends in this, never in a silent stop. */
+.archive-reader__sentinel {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    color: var(--color-fg-muted);
+    border-top: 1px dashed var(--color-border);
+}
+
+/* ---- rows -------------------------------------------------------- */
+
+.archive-row {
+    display: block;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.archive-row__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.archive-row__lineno {
+    color: var(--color-fg-faint);
+    min-width: 4ch;
+    text-align: right;
+}
+
+.archive-row__role {
+    font-weight: 600;
+    color: var(--color-fg);
+}
+
+.archive-row__type {
+    color: var(--color-fg-muted);
+}
+
+/* NULL role on 44.93% of bodies, NULL ts on 33,480. Both fall back to a
+ * literal string rather than to a blank cell, and the fallback is styled
+ * so it reads as a stated absence rather than as a value. */
+.archive-row[data-role-source="none"] .archive-row__role {
+    font-style: italic;
+    color: var(--color-fg-muted);
+    font-weight: 400;
+}
+
+.archive-row__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+}
+
+.archive-row__badge {
+    padding: 0 0.35rem;
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+}
+
+/* Subagent lineage and compaction are facts about the transcript's
+ * fidelity, so they get a border the eye can find. The words are still
+ * spelled out in full inside the badge. */
+.archive-row__badge--sidechain,
+.archive-row__badge--agent {
+    border-color: var(--color-accent-border);
+    color: var(--color-accent);
+}
+
+.archive-row__badge--compact {
+    border-color: var(--color-warning-border);
+    color: var(--color-warning);
+}
+
+.archive-row__body {
+    margin-top: 0.35rem;
+}
+
+.archive-row__text {
+    margin: 0;
+    padding: 0.4rem 0.5rem;
+    max-height: 40vh;
+    max-height: 40dvh;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+}
+
+/* Rendered whenever archive-mask.js replaced anything. The archive on
+ * disk is byte-exact; this view is not, and a reader who is not told
+ * will read the marker as stored content. */
+.archive-row__masked-note {
+    margin: 0.25rem 0 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--color-warning);
+}
+
+.archive-row__placeholder,
+.archive-row__loading {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--color-fg-muted);
+    font-style: italic;
+}
+
+/* ---- gates and refusals ------------------------------------------ */
+
+/* Every one of these already differs by its text and by which buttons
+ * exist. The border-left is a fourth channel on top of that, and it is
+ * deliberately a WIDTH as well as a colour so it survives a monochrome
+ * theme. */
+.archive-row__gate-label,
+.archive-row__refusal-label {
+    margin: 0 0 0.2rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.archive-row__gate,
+.archive-row__refusal {
+    margin: 0 0 0.4rem;
+    font-size: 0.78rem;
+    color: var(--color-fg-muted);
+    overflow-wrap: anywhere;
+}
+
+.archive-row__body[data-body-state="gated-soft"] {
+    border-left: 3px solid var(--color-warning);
+    padding-left: 0.6rem;
+}
+
+.archive-row__body[data-body-state="gated-soft"] .archive-row__gate-label {
+    color: var(--color-warning);
+}
+
+/* The hard gate and the server's own withholding are both refusals to
+ * render, so they share the weight of a danger border. Note there is no
+ * "render anyway" button in either subtree: that ABSENCE is the real
+ * guarantee, and nothing in this file can restore it. */
+.archive-row__body[data-body-state="gated-hard"],
+.archive-row__body[data-body-state="withheld-server"],
+.archive-row__body[data-body-state="mask-refused"] {
+    border-left: 4px solid var(--color-danger);
+    padding-left: 0.6rem;
+}
+
+.archive-row__body[data-body-state="gated-hard"] .archive-row__gate-label,
+.archive-row__body[data-body-state="withheld-server"] .archive-row__gate-label,
+.archive-row__body[data-body-state="mask-refused"] .archive-row__refusal-label {
+    color: var(--color-danger);
+}
+
+.archive-row__action {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.2rem 0.6rem;
+    margin-right: 0.4rem;
+    cursor: pointer;
+    color: var(--color-fg);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+}
+
+.archive-row__action:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent-border);
+}
+
+.archive-row__action:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* ---- collapsed progress runs ------------------------------------- */
+
+/* 917,436 rows, 37.49% of all bodies. Collapsed by default, counted in
+ * the chip, one click from expanded, and NEVER hidden: a filter that
+ * silently removes 37% of a byte-exact archive is a client-side lie
+ * about the file's contents. */
+.archive-row--progress-run {
+    background: var(--color-bg-elevated);
+}
+
+.archive-row__chip {
+    padding: 0 0.4rem;
+    font-weight: 600;
+    color: var(--color-fg-muted);
+    border: 1px solid var(--color-border);
+}
+
+.archive-row__range {
+    color: var(--color-fg-faint);
+}
+
+.archive-row__progress-children {
+    margin-top: 0.4rem;
+    border-left: 2px solid var(--color-border);
+    padding-left: 0.6rem;
+}
+
+.archive-row__progress-children .archive-row {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* ---- families ---------------------------------------------------- */
+
+/* A conversation turn is the thing a person came to read, so it gets the
+ * accent rail. Tool, note and meta rows are quieter. None of this is
+ * load bearing: the family is also on `data-family`, and the record type
+ * is spelled out in the row head. */
+.archive-row--turn {
+    border-left: 3px solid var(--color-accent-border);
+}
+
+.archive-row--tool {
+    border-left: 3px solid var(--color-border);
+}
+
+.archive-row--meta .archive-row__role,
+.archive-row--note .archive-row__role {
+    font-weight: 400;
+    color: var(--color-fg-muted);
+}
+
+/* ---- outcome blocks, placement only ------------------------------ */
+
+.archive-reader .archive-outcome {
+    margin: 0;
+}
+
+/* A per-row could-not-evaluate is inset so it reads as belonging to that
+ * line rather than to the whole reader. Its label, prose, data-outcome
+ * and actions come from archive-outcome-view.js untouched. */
+.archive-row .archive-outcome {
+    margin-top: 0.3rem;
+    font-size: 0.78rem;
+}
+
+/* ---- narrow viewport --------------------------------------------- */
+
+@media (max-width: 700px) {
+    .archive-row {
+        padding: 0.5rem 0.6rem;
+    }
+
+    .archive-row__head {
+        gap: 0.35rem;
+    }
+
+    /* The metadata line drops under the head rather than competing with
+     * it for width. */
+    .archive-row__meta {
+        flex-direction: column;
+        gap: 0.1rem;
+    }
+
+    .archive-row__text {
+        max-height: 50vh;
+        max-height: 50dvh;
+        font-size: 0.74rem;
+    }
+
+    /* NORMATIVE: gate and refusal copy does NOT shrink into an icon on a
+     * small screen. Compressing a refusal into a glyph reintroduces the
+     * exact indistinguishability this design exists to prevent, on the
+     * viewport where a person is most likely to be skimming. */
+    .archive-row__gate,
+    .archive-row__refusal {
+        font-size: 0.78rem;
+    }
+
+    .archive-row__action {
+        display: block;
+        width: 100%;
+        margin: 0 0 0.3rem;
+    }
+}
+
+/* Reduced motion: there is no animation in this file to disable, and the
+ * anti-jump scroll correction is deliberately NOT motion - it is the
+ * absence of motion. It stays in every mode. */
+
+/* THE PAGER, THE SELECTED ROW AND THE HELP PANEL, added with the fix for
+ * "only the first 500 lines are reachable". All three obey this file's
+ * contract: colour from custom properties only, and MEANING NEVER CARRIED
+ * BY RADIUS (`terminal`, `gameboy` and `legacy_apple` zero every radius
+ * token). Each state is already distinguished by rendered TEXT or by an
+ * assertable attribute before any of these rules apply. The pager replaced
+ * a bare, buttonless sentence and sits under `.archive-reader__sentinel`,
+ * which states how many lines are loaded. */
+.archive-reader__more {
+    display: block;
+    margin: 0.5rem auto 1.5rem;
+    padding: 0.5rem 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--color-accent-contrast);
+    background: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+.archive-reader__more:hover:not([disabled]) {
+    background: var(--color-accent-strong);
+}
+.archive-reader__more:focus-visible {
+    outline: 2px solid var(--color-accent-border-strong);
+    outline-offset: 2px;
+}
+
+/* IN-FLIGHT IS NOT JUST A DIMMER BUTTON: the label changes and `aria-busy`
+ * is set. A disabled pager that never cleared would be a dead end looking
+ * exactly like the end of the transcript, which is why the JS clears it on
+ * BOTH resolve and reject. */
+.archive-reader__more[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+/* THE KEYBOARD SELECTION. `data-selected="true"` marks exactly one
+ * rendered row; the roving tabindex moves with it. The left bar is the
+ * primary signal: it survives a radius-flattening theme and is independent
+ * of the row background, which varies by record type. */
+.archive-reader__row[data-selected="true"] {
+    background: var(--color-accent-bg-faint);
+    box-shadow: inset 3px 0 0 0 var(--color-accent);
+}
+.archive-reader__row:focus-visible {
+    outline: 2px solid var(--color-accent-border-strong);
+    outline-offset: -2px;
+}
+
+/* The `?` help panel. `.modal-overlay`/`.modal-content` already carry the
+ * app's dialog chrome from styles.css; this only sizes the table. */
+.archive-help__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.archive-help__table th,
+.archive-help__table td {
+    padding: 0.35rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+}
+.archive-help__table th {
+    color: var(--color-fg-muted);
+    font-weight: 600;
+}
+.archive-help__table td:first-child {
+    font-family: var(--font-mono);
+    color: var(--color-accent);
+    white-space: nowrap;
+}

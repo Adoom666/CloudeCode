@@ -102,7 +102,7 @@ test('the authenticated marker is ABSENT by default - fail closed', () => {
         'merely loading the module must not assert authentication');
 });
 
-test('only launchpad and terminal are authenticated screens', () => {
+test('only launchpad, terminal and archive are authenticated screens', () => {
     const { ScreenChrome } = loadScreenChrome();
     // Compared as a joined string, not deepEqual: the module is
     // evaluated in a vm realm, so its Array is a different intrinsic and
@@ -110,7 +110,12 @@ test('only launchpad and terminal are authenticated screens', () => {
     assert.equal(
         Array.prototype.slice.call(ScreenChrome.AUTHENTICATED_SCREENS)
             .sort().join(','),
-        'launchpad,terminal');
+        // 'archive' joined the allowlist when the message browser screen
+        // was registered. This is an EXACT comparison on purpose: a
+        // `contains` check would let an unreviewed screen name in, and
+        // the whole point of this module is that the list is short and
+        // deliberate.
+        'archive,launchpad,terminal');
 });
 
 test('apply() marks the authenticated screens and clears auth', () => {

@@ -1,0 +1,36 @@
+{
+  "result": [
+    {
+      "host_id": 1,
+      "machine_id": "F95816BC-2819-53B5-98E9-72450A37AADF",
+      "machine_id_scheme": "platform_uuid",
+      "display_name": "Joe-MBP-M1",
+      "hostname": "Joe-MBP-M1",
+      "platform": "Darwin 25.6.0",
+      "first_seen_at": "2026-08-30T16:01:00.290244Z",
+      "corpus_count": 2,
+      "transcript_count": 19562
+    },
+    {
+      "host_id": 2,
+      "machine_id": "726E10C9-E70D-5F9E-ACA6-F5CB0D79BA40",
+      "machine_id_scheme": "platform_uuid",
+      "display_name": "Joseph\u2019s Mac mini (2)",
+      "hostname": "mac-mini-m4.local",
+      "platform": "Darwin 25.6.0",
+      "first_seen_at": "2026-08-30T16:02:34.230512Z",
+      "corpus_count": 1,
+      "transcript_count": 1477
+    }
+  ],
+  "result_status": "ok",
+  "scope_status": "resolved",
+  "unevaluated": [],
+  "meta": {
+    "totals": {
+      "hosts": 2,
+      "transcripts_attributed_to_a_host": 21039,
+      "transcripts_with_no_host_id": 0
+    }
+  }
+}

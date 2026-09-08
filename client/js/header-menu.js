@@ -53,7 +53,20 @@
 
 console.log('[HeaderMenu Module] Loading...');
 
-/** Ids of the controls the overflow owns, in their canonical order. */
+/**
+ * Ids of the controls the overflow owns, in their canonical order.
+ *
+ * `archiveBtn` USED TO BE FIRST HERE AND IS NOT ANY MORE. It was folded
+ * in on the argument that the inline slots are for controls used
+ * constantly and a message browser is not one of them. The owner asked
+ * for the opposite and the reason is worth keeping: reaching the archive
+ * cost a tap on an unlabelled kebab plus a read of a three-item menu,
+ * and the launchpad's compensating entry point was a full-width row with
+ * a title and a description sitting in the body, spending vertical space
+ * on every visit to buy back a destination nobody could find. One 36px
+ * icon beside the file-editor icon costs neither. See
+ * HEADER_INLINE_CONTROL_IDS below.
+ */
 const HEADER_MENU_CONTROL_IDS = [
     'logoutBtn',
     'settingsBtn'
@@ -63,8 +76,27 @@ const HEADER_MENU_CONTROL_IDS = [
  * Ids that must stay inline in the header at every width. Asserted by
  * tests: this is the "we keep editor very accessible" requirement, and
  * it is easier to defend as data than as a comment.
+ *
+ * `archiveBtn` sits beside `configEditorBtn` deliberately: they are the
+ * app's two BROWSERS, one over your files and one over your transcripts,
+ * and putting them next to each other is the whole reason the archive
+ * icon reads as what it is without a label.
+ *
+ * IT IS STILL GATED. Being inline changes WHERE the control lives, not
+ * WHETHER it exists: `_wireArchive()` below hides it at wire time and
+ * reveals it only once `ArchiveEntry.ensure()` has MEASURED the server
+ * as having the archive switched on. `disabled` and `unknown` both leave
+ * it hidden. Moving a control out of a menu must not turn a measured
+ * gate into an always-on door.
+ *
+ * A THIRD INLINE CONTROL IS A LAYOUT FACT, not just a list entry. The
+ * home header centres its title against `--home-header-flank-w`, which
+ * mirrors `.controls`' real width; styles.css now widens that token
+ * under `:has(#archiveBtn:not([hidden]))` so the flank tracks whether
+ * this button is actually showing. Adding a fourth means updating it
+ * again.
  */
-const HEADER_INLINE_CONTROL_IDS = ['configEditorBtn'];
+const HEADER_INLINE_CONTROL_IDS = ['archiveBtn', 'configEditorBtn'];
 
 class HeaderMenu {
     constructor() {
@@ -95,6 +127,7 @@ class HeaderMenu {
 
         this._buildChrome();
         this._wireEvents();
+        this._wireArchive();
         this.applyLayout();
         console.log('[HeaderMenu] initialized');
     }
@@ -117,24 +150,15 @@ class HeaderMenu {
         toggle.setAttribute('aria-haspopup', 'true');
         toggle.setAttribute('aria-expanded', 'false');
         toggle.setAttribute('aria-controls', 'header-menu-panel');
-        // GLYPH WEIGHT IS LOAD BEARING. The original kebab drew three
-        // r=1.5 dots into a 16px box: 3 CSS pixels each, about 7 percent
-        // of the button's interior in ink, against 16 percent for the
-        // file-editor icon beside it and 37 percent for the conversations
-        // toggle. It was the faintest control in the header by a factor
-        // of two to five, and the user reported it as "an empty button" -
-        // which it very nearly is at that weight. Rendering the same
-        // 16-unit viewBox into a 20px box at r=2 roughly doubles the ink
-        // and puts the kebab in the same visual band as its siblings,
-        // with the dots still separated. scripts/verify_login_chrome.py
-        // measures that ink against a floor so this cannot silently
-        // regress back to a bordered blank square.
-        toggle.innerHTML =
-            '<svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
-            '<circle cx="8" cy="3" r="2" fill="currentColor"/>' +
-            '<circle cx="8" cy="8" r="2" fill="currentColor"/>' +
-            '<circle cx="8" cy="13" r="2" fill="currentColor"/>' +
-            '</svg>';
+        // THE GLYPH LIVES IN client/js/kebab-icon.js NOW, because the
+        // conversations sidebar draws the same mark on every row and the
+        // owner asked for it "like in main sites top right" - the same
+        // control, so one definition. The ink-weight reasoning that used
+        // to sit here moved with it, including why the size is 20 and
+        // why scripts/verify_login_chrome.py has a floor for it.
+        // KebabIcon.svg(20) is byte-identical to the literal this line
+        // replaced, asserted by tests/test_kebab_icon_shared.node.mjs.
+        toggle.innerHTML = window.KebabIcon.svg(window.KebabIcon.DEFAULT_SIZE);
 
         const panel = document.createElement('div');
         panel.id = 'header-menu-panel';
@@ -181,6 +205,67 @@ class HeaderMenu {
         this.panel.addEventListener('click', (e) => {
             if (e.target === this.panel) return;
             this.close();
+        });
+    }
+
+    /**
+     * Description: wire the archive destination.
+     *
+     *   Wired HERE rather than in app.js's setupEventListeners, and never
+     *   as an inline onclick: src/main.py stamps `script-src 'self'` on
+     *   every response, so an inline handler is silently refused - the
+     *   element stays present, sized and clickable while doing nothing,
+     *   which no DOM test can see (this is exactly how #logoutBtn was
+     *   dead from the initial commit; see its comment in index.html).
+     *
+     *   It calls window.ArchiveEntry, the ONE navigation into the
+     *   archive, which the launchpad row also calls. Two copies of a
+     *   navigation is two copies that can drift.
+     *
+     *   Idempotent via a data attribute rather than a member flag,
+     *   because init() is idempotent by way of `if (this.panel) return`
+     *   and a second HeaderMenu instance would not see the flag.
+     *
+     *   The attribute is read and written with get/setAttribute rather
+     *   than through `dataset`, which the node test harness
+     *   (tests/mini-dom.mjs) does not implement - relying on it threw
+     *   `Cannot read properties of undefined` and took 17 unrelated
+     *   assertions down with it. get/setAttribute is the API every DOM
+     *   in this project actually has.
+     * Inputs: none.
+     * Output: void.
+     */
+    _wireArchive() {
+        const btn = document.getElementById('archiveBtn');
+        if (!btn || btn.getAttribute('data-archive-wired') === '1') return;
+        btn.setAttribute('data-archive-wired', '1');
+        // HIDDEN UNTIL MEASURED. The message archive is off by default
+        // (src/core/message_archive_flag.py), and with it off there is no
+        // archive screen to reach - the server redirects /archive to the
+        // launchpad and every /api/v1/archive/* route 404s. So the
+        // control is hidden here, at wire time, and revealed only once
+        // ArchiveEntry.ensure() has measured the server as ENABLED.
+        //
+        // It is hidden from JS rather than by a class in index.html for
+        // two reasons: index.html is not this feature's to edit, and a
+        // control that is present-but-hidden in the markup is invisible
+        // to the DOM-presence assertions that already guard this button.
+        // Hiding it here keeps the hide and the reveal in one place.
+        //
+        // 'unknown' leaves it hidden. A failed probe is not permission.
+        btn.style.display = 'none';
+        btn.hidden = true;
+        if (window.ArchiveEntry &&
+            typeof window.ArchiveEntry.ensure === 'function') {
+            window.ArchiveEntry.ensure().then((state) => {
+                if (state !== window.ArchiveEntry.STATE_ENABLED) return;
+                btn.style.display = '';
+                btn.hidden = false;
+            });
+        }
+        btn.addEventListener('click', () => {
+            if (window.ArchiveEntry) window.ArchiveEntry.open();
+            else console.warn('[HeaderMenu] ArchiveEntry is not loaded');
         });
     }
 

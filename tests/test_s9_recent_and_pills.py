@@ -501,7 +501,13 @@ def test_recent_route_defends_against_a_non_stopped_row_even_if_the_query_did_no
     monkeypatch.setattr(type(_routes_settings()), "get_state_dir", lambda self: tmp_path)
     (tmp_path / "cloude.db").touch()
 
-    def _fake_list_sessions(conn, *, lifecycle=None, include_archived=True):
+    def _fake_list_sessions(
+        conn,
+        *,
+        lifecycle=None,
+        include_archived=True,
+        include_automated=True,
+    ):
         return [
             {
                 "session_uuid": "stopped-1",
@@ -543,3 +549,134 @@ class _NullConn:
 
     def close(self):
         return None
+
+
+# =========================================================================== #
+# PART 2b - RECENT excludes a row that its RUNNING successor already shows.    #
+# =========================================================================== #
+
+
+def test_recent_excludes_a_row_replaced_by_a_running_session(
+    monkeypatch, tmp_path
+):
+    """A SESSION APPEARS IN EXACTLY ONE LIST.
+
+    Restarts made before row reuse landed left an abandoned row behind
+    and started a new one pointing back at it with parent_session_id. The
+    abandoned row is stopped, so it lands in RECENT, while its successor
+    is running and lands in RUNNING - the same session, listed twice.
+
+    The client cannot fix this by comparing names: the two rows carry
+    DIFFERENT tmux names, which is measured here rather than assumed by
+    giving them different names on purpose.
+    """
+    from src.core.db import connect, db_path_for, transaction
+    from src.core.db_migration import ensure_db_migrated
+    from src.core.trail_entry import utc_now
+
+    monkeypatch.setattr(
+        type(_routes_settings()), "get_state_dir", lambda self: tmp_path
+    )
+    ensure_db_migrated(tmp_path, 4, "test")
+    conn = connect(db_path_for(tmp_path), create=True)
+    try:
+        with transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO sessions (session_uuid, origin, tmux_socket,"
+                " tmux_name, tmux_created_epoch, lifecycle, title,"
+                " created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                ("s-old", "created", "cloude", "Media_Compression", 1000,
+                 SESSION_LIFECYCLE_STOPPED, "Media Compression",
+                 utc_now(), utc_now()),
+            )
+            abandoned_id = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO sessions (session_uuid, origin, tmux_socket,"
+                " tmux_name, tmux_created_epoch, lifecycle, title,"
+                " parent_session_id, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("s-live", "created", "cloude", "cloude_Media_Compression",
+                 2000, "running", "Media Compression", abandoned_id,
+                 utc_now(), utc_now()),
+            )
+            # An UNRELATED finished session, which must still be listed.
+            conn.execute(
+                "INSERT INTO sessions (session_uuid, origin, tmux_socket,"
+                " tmux_name, tmux_created_epoch, lifecycle, title,"
+                " created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                ("s-done", "created", "cloude", "cloude_Old_Thing", 3000,
+                 SESSION_LIFECYCLE_STOPPED, "Old Thing",
+                 utc_now(), utc_now()),
+            )
+    finally:
+        conn.close()
+
+    client = _recent_client(_HealthManager(ProbeHealth(ok=True)))
+    body = client.get("/api/v1/sessions/recent").json()
+    assert body["state"] == "ok"
+    names = [s["tmux_name"] for s in body["sessions"]]
+    assert "Media_Compression" not in names, (
+        "the abandoned row is already on screen as its running successor"
+    )
+    # POSITIVE CONTROL: the filter must remove that row and nothing else.
+    # Without this, a filter that emptied RECENT would pass the assertion
+    # above while deleting the section's whole purpose.
+    assert "cloude_Old_Thing" in names, (
+        "an unrelated finished session was dropped from RECENT"
+    )
+    assert len(names) == 1
+
+
+def test_recent_keeps_a_row_whose_successor_is_no_longer_running(
+    monkeypatch, tmp_path
+):
+    """The exclusion is about being ON SCREEN, not about having a child.
+
+    Once the successor stops, the older row is no longer represented
+    anywhere, so hiding it would make it unreachable - which is the one
+    thing a list filter must never do.
+    """
+    from src.core.db import connect, db_path_for, transaction
+    from src.core.db_migration import ensure_db_migrated
+    from src.core.trail_entry import utc_now
+
+    monkeypatch.setattr(
+        type(_routes_settings()), "get_state_dir", lambda self: tmp_path
+    )
+    ensure_db_migrated(tmp_path, 4, "test")
+    conn = connect(db_path_for(tmp_path), create=True)
+    try:
+        with transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO sessions (session_uuid, origin, tmux_socket,"
+                " tmux_name, tmux_created_epoch, lifecycle, title,"
+                " created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                ("s-old", "created", "cloude", "Media_Compression", 1000,
+                 SESSION_LIFECYCLE_STOPPED, "Media Compression",
+                 utc_now(), utc_now()),
+            )
+            abandoned_id = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO sessions (session_uuid, origin, tmux_socket,"
+                " tmux_name, tmux_created_epoch, lifecycle, title,"
+                " parent_session_id, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("s-dead", "created", "cloude", "cloude_Media_Compression",
+                 2000, SESSION_LIFECYCLE_STOPPED, "Media Compression",
+                 abandoned_id, utc_now(), utc_now()),
+            )
+    finally:
+        conn.close()
+
+    client = _recent_client(_HealthManager(ProbeHealth(ok=True)))
+    names = [
+        s["tmux_name"]
+        for s in client.get("/api/v1/sessions/recent").json()["sessions"]
+    ]
+    assert "Media_Compression" in names, (
+        "a row was hidden even though nothing on screen represents it"
+    )
+    assert len(names) == 2

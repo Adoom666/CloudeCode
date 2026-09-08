@@ -51,7 +51,8 @@ console.log('[SessionDetail Module] Loading...');
     var ORIGIN_LABELS = {
         created: 'Started by Cloude Code',
         adopted: 'Adopted from tmux',
-        observed: 'External - started outside Cloude Code'
+        observed: 'External - started outside Cloude Code',
+        imported: 'Imported from a transcript'
     };
 
     /**
@@ -62,7 +63,11 @@ console.log('[SessionDetail Module] Loading...');
     var ORIGIN_DETAILS = {
         created: 'This app created the tmux session.',
         adopted: 'Started outside this app, then claimed. It is yours for good.',
-        observed: 'Seen on this socket and never claimed.'
+        observed: 'Seen on this socket and never claimed.',
+        // NOT ours, and that is honest rather than harsh: there is no
+        // tmux session to own. Restarting one CREATES a session for the
+        // conversation - see src/core/session_imported_restart.py.
+        imported: 'A conversation rebuilt from its transcript. It has no tmux session.'
     };
 
     /**

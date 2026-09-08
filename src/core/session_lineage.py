@@ -57,12 +57,25 @@ WHAT A FORK IS, AND WHY WE DO NOT HAVE TO GUESS
         anchor has no uuid        -> BOUND      (bind it, no fork)
         uuid already known here   -> CONTINUED  (idempotent no-op)
         uuid differs from head    -> FORKED     (new row, parent = head)
+          ... unless the source is a process BOOT, which is
+                                  -> SIBLING    (logged, stored nowhere)
 
     Reading it this way makes ``compact`` correct for free - it presents
     the uuid the head already carries, so it lands on CONTINUED without
     any rule naming it - and it keeps working if a sixth source value
     appears, which would be stored as fork_kind 'unknown' rather than
     guessed at.
+
+    THE ONE THING ``source`` IS EVIDENCE OF, ADDED 2026-09-08. A uuid
+    change measures that A conversation changed, not WHOSE. Everything
+    launched under a tmux pane inherits the pane's hook token and session
+    id from the tmux session environment, so a second claude process here
+    reports a fresh uuid over our endpoint and looks exactly like a fork.
+    ``startup`` and ``resume`` mean a new PROCESS came up; ``fork``,
+    ``clear`` and ``compact`` are emitted by the process already holding
+    our conversation. Only the latter three are evidence of lineage. See
+    session_lineage_divergence for the split, the measured incident and
+    the trade-off in refusing.
 
 WHAT REOPENING NEEDS
     ``claude --resume <session-uuid>`` run in the conversation's own
@@ -94,12 +107,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import structlog
 
 from src.core.db_models import (
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
     SESSION_FORK_KIND_BACKGROUND,
     SESSION_FORK_KIND_FORK,
     SESSION_FORK_KIND_UNKNOWN,
     SESSION_FORK_KINDS,
     SESSION_LIFECYCLE_STOPPED,
     SESSION_LIFECYCLE_SOURCE_TMUX_LIST,
+)
+from src.core.session_lineage_divergence import (
+    classify_uuid_divergence,
+    mints_a_row,
 )
 from src.core.session_store import get_instance, sessions_table_ready
 from src.core.trail_entry import utc_now
@@ -125,6 +143,13 @@ LINEAGE_CONTINUED = "continued"
 #: and ``fork_kind`` recording how.
 LINEAGE_FORKED = "forked"
 
+#: SUCCESS, AND A NO-OP. The uuid provably changed, but the SessionStart
+#: that carried it came from a process BOOT rather than from the process
+#: holding this pane's conversation - so it is a second Claude session
+#: running under the same pane environment, not a fork of ours. Logged,
+#: stored nowhere. See src/core/session_lineage_divergence.py.
+LINEAGE_SIBLING = "sibling"
+
 #: COULD NOT EVALUATE. Not a failure of the session and not a success:
 #: we were told about a Claude session and could not work out which row it
 #: belongs to. Reasons are carried in ``detail``. NEVER report this as
@@ -134,20 +159,25 @@ LINEAGE_UNRESOLVED = "unresolved"
 
 #: The outcomes under which the table was left untouched. Spelled once so
 #: a caller cannot test two of them and treat the third as a write.
-LINEAGE_NO_WRITE: Tuple[str, ...] = (LINEAGE_CONTINUED, LINEAGE_UNRESOLVED)
+LINEAGE_NO_WRITE: Tuple[str, ...] = (
+    LINEAGE_CONTINUED,
+    LINEAGE_SIBLING,
+    LINEAGE_UNRESOLVED,
+)
 
 
 @dataclass(frozen=True)
 class LineageResult:
     """What one :func:`record_claude_session` call did to the table.
 
-    Description: an explicit four-name, three-class outcome so a caller
+    Description: an explicit five-name, three-class outcome so a caller
       can tell a bind from a fork from a no-op from a could-not-evaluate.
       A bare bool here would make "we could not find the row" and "nothing
       needed doing" the same answer, which is the exact collapse that
       turns missing lineage into invisible missing lineage.
     Inputs (constructor): outcome (str) - one of ``LINEAGE_BOUND``,
-      ``LINEAGE_CONTINUED``, ``LINEAGE_FORKED``, ``LINEAGE_UNRESOLVED``.
+      ``LINEAGE_CONTINUED``, ``LINEAGE_FORKED``, ``LINEAGE_SIBLING``,
+      ``LINEAGE_UNRESOLVED``.
       row_id (int | None) - the sessions.id the uuid now lives on; None
       only when unresolved. parent_row_id (int | None) - set only on a
       fork. fork_kind (str | None) - set only on a fork. detail (str |
@@ -344,8 +374,10 @@ def record_claude_session(
       conversation is in this tmux session". Does NOT commit - the caller
       owns the transaction, matching ``session_identity.record_instance``.
 
-      Four outcomes across three classes; see the module docstring for the
-      uuid-transition rule that picks between them.
+      Five outcomes across three classes; see the module docstring for the
+      uuid-transition rule that picks between them, and
+      session_lineage_divergence for the one case where ``source`` is
+      evidence rather than a label.
 
       WHAT IT NEVER DOES: it never rewrites an anchor row's tmux identity
       triple, never changes an ``origin``, and never inserts a row that
@@ -434,9 +466,10 @@ def record_claude_session(
 
     if not head_uuid:
         conn.execute(
-            "UPDATE sessions SET claude_session_uuid = ?, updated_at = ? "
+            "UPDATE sessions SET claude_session_uuid = ?, "
+            "claude_session_uuid_source = ?, updated_at = ? "
             "WHERE id = ?",
-            (claude_uuid, stamp, int(head["id"])),
+            (claude_uuid, SESSION_CLAUDE_UUID_SOURCE_HOOK, stamp, int(head["id"])),
         )
         _record_claude_title(conn, head, title, stamp)
         logger.info(
@@ -454,6 +487,36 @@ def record_claude_session(
     # recorded anywhere. That is a measured divergence: a new Claude
     # session exists and the one before it is still on disk and still
     # resumable, so it keeps its row and this one gets its own.
+    #
+    # A DIVERGENCE IS NOT AUTOMATICALLY A FORK. Everything started under
+    # this pane inherits the pane's hook token and session id from the
+    # tmux session environment, so a second claude process running here -
+    # a ``claude -p`` from a tool call, an agent shelling out, a split -
+    # POSTs a SessionStart that is indistinguishable from ours BY UUID
+    # and is not our lineage at all. The source says which it was; see
+    # session_lineage_divergence for the split and the incident.
+    divergence = classify_uuid_divergence(source)
+    if not mints_a_row(divergence):
+        # No title write either: this is someone else's conversation, and
+        # its name must not land in our row's claude_title.
+        logger.info(
+            "claude_sibling_session_ignored",
+            row_id=int(head["id"]),
+            tmux_name=name,
+            source=source,
+            head_claude_uuid=head_uuid,
+            sibling_claude_uuid=claude_uuid,
+        )
+        return LineageResult(
+            outcome=LINEAGE_SIBLING,
+            row_id=int(head["id"]),
+            detail=(
+                f"session {claude_uuid} arrived under source '{source}', a "
+                "process boot, so it is another claude running in this pane "
+                f"rather than a fork of {head_uuid}"
+            ),
+        )
+
     fork_kind = classify_fork_kind(source)
     if fork_kind == SESSION_FORK_KIND_FORK and not pane_left_previous:
         # A FORK THE PANE DID NOT FOLLOW. Claude's /branch and its /fork
@@ -495,6 +558,7 @@ def record_claude_session(
         "agent_family",
         "agent_family_source",
         "claude_session_uuid",
+        "claude_session_uuid_source",
         "parent_session_id",
         "fork_kind",
         "lifecycle",
@@ -520,6 +584,7 @@ def record_claude_session(
         anchor.get("agent_family"),
         anchor.get("agent_family_source"),
         claude_uuid,
+        SESSION_CLAUDE_UUID_SOURCE_HOOK,
         int(head["id"]),
         fork_kind,
         SESSION_LIFECYCLE_STOPPED,
