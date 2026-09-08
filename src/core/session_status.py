@@ -219,84 +219,17 @@ def resolve_pane_status(
 
 
 # ---------------------------------------------------------------------------
-# Listing liveness: EXISTENCE IS NOT LIVENESS.
+# Listing liveness USED TO LIVE HERE, and it has moved.
 #
-# A tmux session can exist with nothing alive inside it. ``remain-on-exit``
-# holds a pane open after its foreground process exits, so ``has-session``
-# keeps returning rc=0 forever and a husk reads as a healthy session. That
-# is the false green this resolver exists to end: the running list used to
-# gate on existence alone, so a session whose pane had died stayed listed
-# as running indefinitely while the red dot beside it - which reads
-# ``#{pane_dead}`` - correctly said otherwise.
+# ``resolve_listing_liveness`` and the ``LIVENESS_*`` vocabulary are now in
+# ``src/core/session_liveness.py``, because the answer it gives is no longer
+# a status STRING (which is what this file is the single source of truth
+# for) - it is a four-valued verdict about whether a row is drawn at all,
+# and it has to name pane states, which ``src/core/session_respawn.py``
+# already spells. Splitting ``gone`` into ``pane_dead`` and ``session_gone``
+# is what stopped a session whose process died from vanishing out of the
+# sidebar instead of painting the ``dead`` light this file defines.
 #
-# THREE OUTCOMES, per CLAUDE.md. "The pane is dead" and "I could not ask
-# tmux" are different answers and must not render the same way. Dropping an
-# unmeasurable session from the list would assert it ENDED; keeping it as
-# running would assert it is ALIVE. Neither was measured, so the caller
-# keeps the row and renders it ``unknown``.
+# Nothing is re-exported from here. A second spelling of the same
+# vocabulary is exactly the drift that split would have re-introduced.
 # ---------------------------------------------------------------------------
-
-#: The backend exists and something is alive in it.
-LIVENESS_LIVE: str = "live"
-
-#: Measured absence: the session is gone, or it exists as a dead husk.
-#: Either way it is not running and must not be listed as running.
-LIVENESS_GONE: str = "gone"
-
-#: Could not evaluate. NOT a synonym for either of the above.
-LIVENESS_UNKNOWN: str = "unknown"
-
-
-def resolve_listing_liveness(
-    exists: Optional[bool], pane_status: Optional[str]
-) -> str:
-    """Decide whether a session belongs in the running list.
-
-    Description: Combines the backend's EXISTENCE answer with tmux's
-        pane-level LIVENESS answer into one three-valued verdict. Pure
-        function, no I/O, so the rule is testable without a tmux binary.
-        Callers pass the pane status they already hold from the bulk
-        ``list_pane_status_all()`` probe - this adds no subprocess call.
-
-    Inputs:
-        exists: The backend's own existence answer (``is_alive()``), or
-            None when that could not be determined. For tmux this is
-            ``has-session``, which says the session EXISTS and says
-            nothing about whether its pane still has a live process.
-        pane_status: A ``resolve_pane_status()`` value for this session's
-            pane, or None when pane introspection does not APPLY to this
-            backend at all (PTYBackend has no pane; there, existence of
-            the child process genuinely is liveness). None means "not
-            applicable", which is different from ``STATUS_UNKNOWN``,
-            which means "asked, and could not tell".
-
-    Output:
-        str: ``LIVENESS_LIVE``, ``LIVENESS_GONE`` or ``LIVENESS_UNKNOWN``.
-
-    Example:
-        >>> resolve_listing_liveness(True, STATUS_DEAD)
-        'gone'
-        >>> resolve_listing_liveness(True, STATUS_IDLE)
-        'live'
-        >>> resolve_listing_liveness(True, STATUS_UNKNOWN)
-        'unknown'
-        >>> resolve_listing_liveness(None, STATUS_IDLE)
-        'unknown'
-    """
-    if exists is None:
-        return LIVENESS_UNKNOWN
-    if not exists:
-        # A definite "no session here" from the backend itself.
-        return LIVENESS_GONE
-    if pane_status is None:
-        # No pane to introspect (PTYBackend). The process check IS the
-        # liveness check for that backend, and it said yes.
-        return LIVENESS_LIVE
-    if pane_status == STATUS_DEAD:
-        # THE HUSK. tmux is holding a corpse open via remain-on-exit.
-        return LIVENESS_GONE
-    if pane_status == STATUS_UNKNOWN:
-        # The session exists but the pane probe could not answer. We do
-        # not get to call that running, and we do not get to call it over.
-        return LIVENESS_UNKNOWN
-    return LIVENESS_LIVE

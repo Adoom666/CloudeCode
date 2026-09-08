@@ -58,10 +58,14 @@ from src.core.hook_token_recovery import (
     SupersededHookTokens,
 )
 from src.core.session_status import (
-    LIVENESS_GONE,
-    LIVENESS_LIVE,
-    LIVENESS_UNKNOWN,
+    STATUS_DEAD,
     STATUS_UNKNOWN,
+)
+from src.core.session_liveness import (
+    LIVENESS_ALIVE,
+    LIVENESS_PANE_DEAD,
+    LIVENESS_UNKNOWN,
+    keeps_row,
     resolve_listing_liveness,
 )
 from src.core.session_activity import (
@@ -4366,7 +4370,7 @@ class SessionManager:
         Output: str - one of ``session_startup_gate.ALL_STARTUP_GATES``.
         Example: self._startup_gate_for(session_id='ses_1',
             backend=b, tmux_name='cloude_a', row=row,
-            liveness=LIVENESS_LIVE)
+            liveness=LIVENESS_ALIVE)
         """
         if not tmux_name:
             return GATE_UNKNOWN
@@ -4378,13 +4382,21 @@ class SessionManager:
         )
         first_hook_at = self._startup_gate_ledger.first_hook_at(tmux_name)
 
-        # LIVENESS_GONE never reaches here (the caller returns before
-        # this point), so the pane is either measured live or unmeasured.
-        # `unknown` must stay None rather than collapsing to False: a
-        # pane we could not read is not a pane we watched die.
-        pane_alive: Optional[bool] = (
-            True if liveness == LIVENESS_LIVE else None
-        )
+        # THREE INPUTS, NOT TWO. ``LIVENESS_SESSION_GONE`` still never
+        # reaches here (the caller returns before this point), but
+        # ``LIVENESS_PANE_DEAD`` now does, and it is a MEASUREMENT: tmux
+        # said `#{pane_dead}` is 1. That must arrive as False, not None -
+        # ``resolve_startup_gate`` answers ``ready`` for a pane measured
+        # not-alive (a corpse is certainly not waiting for a keypress)
+        # and ``should_capture_tail`` refuses anything that is not True,
+        # so a dead row costs no ``capture-pane`` and raises no startup
+        # toast. `unknown` must stay None rather than collapsing to
+        # False: a pane we could not read is not a pane we watched die.
+        pane_alive: Optional[bool] = None
+        if liveness == LIVENESS_ALIVE:
+            pane_alive = True
+        elif liveness == LIVENESS_PANE_DEAD:
+            pane_alive = False
 
         age_seconds: Optional[float] = None
         if epoch is not None:
@@ -4487,8 +4499,32 @@ class SessionManager:
             exists=backend.is_alive(),
             pane_status=raw_tmux_status if tmux_session_name else None,
         )
-        if liveness == LIVENESS_GONE:
+        # A ROW THAT DISAPPEARS IS WORSE THAN A ROW THAT SAYS DEAD, and
+        # until this split both outcomes dropped it. See
+        # ``src/core/session_liveness.py`` for the full account: the old
+        # single ``gone`` verdict covered BOTH "tmux has no such session"
+        # and "tmux still holds the session, its pane is a husk", and
+        # ``/sessions/attachable`` cannot catch either (routes.py filters
+        # out every name in ``active_tmux_names()``), so a session whose
+        # process died vanished off every live surface while ``dead`` sat
+        # unreachable in the LED vocabulary.
+        if not keeps_row(liveness):
+            # LIVENESS_SESSION_GONE. There is no tmux session, so there
+            # is no pane to paint and nothing a respawn could land in.
+            # The registration is dropped exactly as before and the
+            # stored row reaches ``GET /sessions/recent`` as ended via
+            # ``reconcile_lifecycle``, where a restart is a resume.
             return None
+        if liveness == LIVENESS_PANE_DEAD:
+            # THE HUSK, AND IT STAYS. tmux is holding the corpse open
+            # under ``remain-on-exit``, which is the same fact that makes
+            # ``respawn-pane`` able to revive it - so the row keeps its
+            # place in the sidebar and the running list, painted dead,
+            # offering restart and remove, until the user acts.
+            # ``session_activity.resolve`` checks STATUS_DEAD before it
+            # reads any hook state, so this overrides a stale ``working``
+            # heartbeat: tmux is the only thing that can see a pane die.
+            raw_tmux_status = STATUS_DEAD
         if liveness == LIVENESS_UNKNOWN:
             # THE THIRD OUTCOME. Dropping the row would assert the
             # session ENDED; keeping a fallback status would let it read
@@ -4526,7 +4562,7 @@ class SessionManager:
             # pane was measured LIVE - a measured death and an
             # unmeasurable pane both keep what was measured, or the
             # honest absence of a measurement.
-            if restored and liveness == LIVENESS_LIVE:
+            if restored and liveness == LIVENESS_ALIVE:
                 activity_status = restored
         else:
             # THE SETTLED VALUE, stamped where the inputs are real. The
@@ -4534,11 +4570,16 @@ class SessionManager:
             # to UNKNOWN once the heartbeat expires and correctly declines
             # to guess, so without this line a session's row keeps the
             # `working` written mid-turn and never settles to idle.
-            self._persist_settled_activity_state(
-                tmux_session_name,
-                activity_status,
-                row.get("created_at_epoch") if row else None,
-            )
+            # NOT ON A DEAD PANE. ``dead`` is a reading tmux re-takes
+            # for free on every poll, and the restore path already
+            # refuses to hand one back, so writing it buys nothing and
+            # would put a perishable measurement in durable storage.
+            if liveness != LIVENESS_PANE_DEAD:
+                self._persist_settled_activity_state(
+                    tmux_session_name,
+                    activity_status,
+                    row.get("created_at_epoch") if row else None,
+                )
 
         # punchlist 19 - has this session even STARTED, or is it parked on
         # a folder-trust / login prompt nobody on a phone can see? Every

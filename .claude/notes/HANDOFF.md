@@ -604,13 +604,27 @@ push - no migration, no backfill, nothing to run against `cloude.db`.
    log line that only reports what the deploy script believed) before
    trusting anything in this file that says "deployed" for `e7a212e`,
    `cc885d6`, or `6934965`.
-2. **Run the real-hook LED integration test once it is on the branch.**
-   As of `6934965` it is UNTRACKED work in progress by another agent
-   (`tests/test_led_real_hooks.py`, `tests/real_hook_app.py`,
-   `tests/real_hook_harness.py`, `tests/led_state_for.node.mjs`) - find
-   out whether it landed, and if so run it with
-   `CLOUDE_REAL_HOOK_TESTS=1` against a real `claude` binary at least
-   once before trusting its skip-by-default gate in CI going forward.
+2. **The real-hook LED integration test is DONE, landed and run.**
+   Commit `3af3a3d` ("test(status): assert the led against hooks a real
+   claude actually fired") adds `tests/test_led_real_hooks.py`,
+   `tests/real_hook_harness.py`, `tests/real_hook_app.py`,
+   `tests/real_hook_assertions.py`, and `tests/led_state_for.node.mjs`,
+   pushed to `origin/v1.1`. Run with
+   `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 -m pytest -q
+   tests/test_led_real_hooks.py` (needs claude, tmux, and node on PATH;
+   without the env var every test in the file skips, naming what went
+   unmeasured). Real run: 9 passed in 49.5s, driving a real
+   `SessionManager` plus real routes plus a real `/ws/terminal` under
+   uvicorn, a real claude fed the production `_build_hook_block()` via a
+   temp settings file, and every assertion piping `GET /sessions/list`
+   through the shipped `client/js/status-led.js` under node. It measured
+   two new open defects, added to the punchlist in step 5 below and
+   spelled out in `TODO.md`'s "real-hook led integration test closed
+   out, 3af3a3d" section: (a) `SubagentStop` re-arms `working` after
+   `Stop` on a turn with no subagent, stealing the `finished_unread`
+   window down to about 1.5s; (b) a dead pane reaches no live endpoint,
+   so the led's `dead` state is unreachable from live data and a killed
+   session just vanishes from the sidebar instead of showing dead.
 3. **Get the owner's sign-off on the LED gallery states**, now against
    the SECOND recalibration. Reference artifact:
    https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627 -
@@ -644,7 +658,13 @@ push - no migration, no backfill, nothing to run against `cloude.db`.
    re-measure whether polling is still the real cost once the event loop
    and render-guard work is further along). Full definitions in
    `TODO.md`'s "Session and agent identity" / "Attention, toasts and
-   sidebar" sections and this final round's closing entry.
+   sidebar" sections and this final round's closing entry. **Also add**
+   the two defects the real-hook led test measured (item 2 above):
+   `SubagentStop` re-arming `working` after `Stop` on a subagent-less
+   turn, and a dead pane being unreachable from any live endpoint so the
+   led's `dead` state has nothing to render against - full detail in
+   `TODO.md`'s "real-hook led integration test closed out, 3af3a3d"
+   section.
 6. **Then the infra debt**, lowest urgency: INFRA-49 (tests against the
    live `cloude` socket are measured FLAKY, not just risky - one test in
    this final round's own baseline run flaked this way, see `TODO.md`'s
@@ -667,7 +687,11 @@ commits, `117823d..6934965`) is in `TODO.md`'s dated 2026-09-08 "final
 round closed out" section, including the re-measured test baseline
 (5274 passed / 3 failed / 12 skipped, matching `6934965`'s own commit
 message) and a correction to the node test file count (185 tracked
-files, not the 190 `cc885d6`'s commit message claimed).
+files, not the 190 `cc885d6`'s commit message claimed). **That 12
+figure is now stale**: `3af3a3d` (the real-hook led integration test,
+step 2 above) landed 9 opt-in tests that skip without
+`CLOUDE_REAL_HOOK_TESTS=1`, so the current baseline is 5274 passed / 3
+failed / 21 skipped.
 
 Full commit-by-commit list and item mapping for the late round (12 commits,
 `455d692..8ee40d1`) is in `TODO.md`'s dated 2026-09-08 "late round closed out"

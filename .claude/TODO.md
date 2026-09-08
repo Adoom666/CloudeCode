@@ -2863,3 +2863,173 @@ owner note at "2026-09-08 owner note: clean up database backups when the
 row repairs are done" earlier in this file: keep exactly one verified
 full backup until a restart has proven the repaired rows work, then
 delete the rest.
+
+### 2026-09-08 real-hook led integration test closed out, 3af3a3d
+
+Closes the item logged above at "the real-hook led integration test is IN
+PROGRESS, not built" - it is now built, committed, and run for real.
+
+- [x] **The real-hook led integration test is DONE.** Commit `3af3a3d`
+  ("test(status): assert the led against hooks a real claude actually
+  fired") adds `tests/test_led_real_hooks.py`,
+  `tests/real_hook_harness.py`, `tests/real_hook_app.py`,
+  `tests/real_hook_assertions.py`, and `tests/led_state_for.node.mjs`,
+  and is pushed to origin/v1.1. Opt in with `CLOUDE_REAL_HOOK_TESTS=1`
+  plus claude, tmux, and node on PATH - without it, every test skips
+  naming what went unmeasured. The harness runs a real `SessionManager`,
+  real routes, and a real `/ws/terminal` under uvicorn on a free port
+  (not `src.main.app`, whose lifespan touches live config and db), feeds
+  a real claude the production `_build_hook_block()` via a temp settings
+  file passed as `claude --settings` (nothing written near
+  `~/.claude/settings.json`), runs tmux through `tests/socket_guard` on a
+  per-process socket, and asserts every state by piping
+  `GET /sessions/list` rows through the shipped `client/js/status-led.js`
+  under node.
+  Real run: 9 passed in 49.5s. Timeline: startup gate
+  `awaiting_startup_prompt` (waiting-input/active) at +20s, trust
+  answered, `SessionStart` at +23.2s gate `ready`, `working` on
+  `PreToolUse` at +30.9s, `Stop` at +39.8s `finished_unread`
+  (done/unread), `SubagentStop` at +41.5s back to `working`, ws bind
+  clears the halo, a real `PermissionRequest` at +48.6s `question`
+  (waiting-permission/active) made deterministic by a `permissions.ask
+  ["Bash"]` rule in the run's own settings file, a bogus token 403 leaves
+  state byte-identical, and a killed pane leaves the list.
+  Full suite after: `5274 passed / 3 failed / 21 skipped` (same three
+  pre-existing environmental failures; skipped rose from 12 to 21 because
+  these 9 real-hook tests skip without the env var). `node --check`
+  clean.
+  Also measured, recorded in the harness header:
+  `--dangerously-skip-permissions` does not clear the trust dialog (adds
+  a bypass-acceptance dialog instead); `CLAUDE_CONFIG_DIR` relocates
+  trust but loses auth; pre-seeding `~/.claude.json` is refused because
+  every live claude read-modify-writes it; binary ws frames sent before
+  the resize handshake are dropped by design.
+
+- [x] **New defect found by the real-hook test: `SubagentStop` re-arms
+  `working` after `Stop` on a turn with no subagent.** DONE - see the
+  closing entry at the end of this file. Measured in the
+  9-pass run above: `SubagentStop` lands about 1.5s after `Stop` even
+  when no subagent ran, and `session_activity.record_event` stamps
+  `last_tool_event_ts` on it - the same timestamp `Stop` had just
+  cleared. A finished session therefore repaints `working` for the full
+  120-second heartbeat window; `finished_unread` is visible for only
+  about 1.5s and `idle` is unreachable in between. This is a light
+  claiming work nothing can see, arriving through the hook stream rather
+  than the tmux fallback. Fix direction: `SubagentStop` must not count as
+  tool activity - either never stamp `last_tool_event_ts` from it, or
+  only stamp it when a matching `SubagentStart` is actually open.
+
+- [ ] **New defect found by the real-hook test: a dead pane reaches no
+  live endpoint, so the led's dead/off state is unreachable from live
+  data.** `_session_info_for` drops a dead pane on `LIVENESS_GONE`
+  (deliberate, commented in code) and `/sessions/attachable` does not
+  carry it either, so a killed session simply vanishes from the sidebar
+  instead of rendering as dead. Decision needed, not yet made: either
+  make a dead row visible somewhere in live data so the led's `dead`
+  state has something to render against, or accept that in this app
+  dead means gone and drop `dead` from what the live endpoints are
+  expected to ever show.
+
+
+## 2026-09-08 - punchlist item 4 closed: a closing hook event is not a heartbeat
+
+- [x] **Punchlist 4 ("activity lights: `activity_state` reads `working`
+  for about four minutes after a resume, then self-corrects") is CLOSED,
+  with its root cause found rather than guessed.** It was not a resume
+  and it was not four minutes: it was
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` (120s) being re-armed after the
+  turn ended. `tests/test_led_real_hooks.py` measured it twice on claude
+  2.1.265 - on a turn with NO SUBAGENT ANYWHERE IN IT, `SubagentStop`
+  arrives about 1.5s AFTER `Stop`, and `record_event` stamped
+  `last_tool_event_ts` on it, the field `Stop` had just cleared to say
+  the turn was over. `finished_unread` was visible for about a second and
+  a half and `idle` was UNREACHABLE for the rest of the window.
+
+- [x] **The rule shipped: a CLOSING event stamps the heartbeat only when
+  something was open for it to close.** `SubagentStop` needs
+  `subagent_depth > 0`, which is already the exact record of an unmatched
+  `SubagentStart`; at zero it decrements nothing, stamps nothing, moves
+  no state, and logs `subagent_stop_without_start` at debug. A
+  `SubagentStop` that closes a real subagent still decrements (floored)
+  and stamps exactly as before - that negative control is the
+  load-bearing test, because a guard that refused every `SubagentStop`
+  would pass the defect tests perfectly and delete `working_subagent`'s
+  exit heartbeat.
+
+- [x] **The same trap was closed for `PostToolUse`, narrowly.** A tool
+  result from a turn that already ended is not evidence of work now, but
+  there is no counter to key on (parallel tool calls, and a droppable
+  `PreToolUse`, would desynchronise one), so it keys on a `turn_open`
+  boolean that every OPENING event sets and `Stop` clears. It is refused
+  ONLY when a `Stop` has POSITIVELY been seen for the session and nothing
+  has opened since: never having seen a `Stop` - a fresh session, a
+  server restarted mid-turn - is not evidence the turn is over, so that
+  case still stamps. Hook payloads carry no timestamp of their own, so
+  the ordering measured is arrival order at the server; the narrowing is
+  what makes that safe.
+
+- [x] **`tests/test_led_real_hooks.py` test 5 INVERTED, not loosened**,
+  as its own docstring instructed. It now waits for the stray
+  `SubagentStop` to LAND and re-reads after it, which is the only
+  ordering that can tell the fix from the 1.5s gap. Test 6 additionally
+  asserts the dot reaches `idle` once the halo clears - the state
+  punchlist 4 made unreachable, so that is the live proof.
+
+- [x] **Measured on a live run, 2026-09-08** (`CLOUDE_REAL_HOOK_TESTS=1`,
+  claude 2.1.265, 8 of 9 passed): Stop+38.30s -> `finished_unread`
+  (`done`/`unread`), SubagentStop+39.71s -> STILL `finished_unread`, and
+  binding a terminal -> `idle` (`done`/`steady`). The hook ledger for
+  that run contains no `SubagentStart` at all, so the depth was 0 and the
+  refusal is the branch that was exercised. The one failure is the
+  dead-pane test, which belongs to the concurrent liveness work.
+
+- [ ] STILL OPEN, unchanged by this: the dead-pane entry above
+  (`_session_info_for` drops a dead pane on `LIVENESS_GONE`, so the LED's
+  `dead` state is unreachable from live data). Being worked separately.
+
+
+## 2026-09-08 - a dead session keeps its row
+
+- [x] **A DEAD SESSION NOW KEEPS ITS ROW** (closes the dead-pane entry
+  left open above). `resolve_listing_liveness` answered ONE verdict,
+  `LIVENESS_GONE`, for two different facts - the tmux session is gone
+  (`exists` False) and the tmux session is there with a corpse in its
+  pane (`#{pane_dead}` = 1, `remain-on-exit`) - and `_session_info_for`
+  dropped the row for both. `/sessions/attachable` cannot catch either,
+  because the route filters out every name bound to a live backend. So a
+  killed pane vanished off the sidebar and the running list while
+  `dead`/`off` and `actionsFor('dead')` waited for a row that never came.
+
+- [x] **The split lives in `src/core/session_liveness.py`**, moved out of
+  `session_status.py` rather than duplicated there: `alive` /
+  `pane_dead` / `session_gone` / `unknown`, with the pane words imported
+  from `session_respawn.py` so a listing verdict and a restart preview
+  cannot disagree about one measurement. `pane_dead` keeps the row and
+  forces `activity_status` to `dead`; `session_gone` drops it exactly as
+  before and the reaper files the stored row into the recent list.
+  Existence is read BEFORE the pane, so a stale `dead` cannot keep a
+  session tmux no longer has on screen. `keeps_row` is an allow-list of
+  what SURVIVES, not a deny-list of what drops.
+
+- [x] **Two guards stopped being freebies and are now exercised.** The
+  restore branch's `liveness == LIVENESS_ALIVE` used to be unreachable
+  for a dead pane (the row returned first); it is now the only thing
+  keeping a persisted `idle` from overwriting a measured `dead`. And
+  `_startup_gate_for` gets its first `pane_alive=False` caller: it
+  answers `ready`, raises no toast, and captures no scrollback, so a dead
+  row costs nothing per poll.
+
+- [x] **`tests/test_led_real_hooks.py` test 8 INVERTED**, as its own
+  docstring instructed, and a ninth added. `RealHookApp` grew a second
+  kill mode: `kill_agent` SIGKILLs the process (the `pane_dead` case, row
+  survives saying `dead`), `kill_session` removes the tmux session (the
+  `session_gone` case, row correctly leaves). New:
+  `tests/test_session_liveness_split.py` (vocabulary shape, the
+  disagreeing-probes negative control, the reaper's half) and
+  `tests/test_dead_row_renders_dead.node.mjs` (the shipped sidebar merge
+  into the shipped LED and action builder).
+
+- [ ] STILL OPEN: nothing prunes a `pane_dead` row on its own. That is
+  deliberate - the owner's model is that it stays until the user restarts
+  or removes it - but it means a box left alone accumulates dead rows,
+  and no one has measured what that looks like after a week.

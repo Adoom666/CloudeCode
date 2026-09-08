@@ -372,8 +372,10 @@ claude - a resolver that always finds something is worse than useless.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
   2026-09-08 after the status-split and hook-token-recovery round
-  (`117823d..6934965`), is 5274 passed / 3 failed / 12 skipped; the three
-  failures are the same ones as before, environmental and pre-existing:
+  (`117823d..6934965`), is 5274 passed / 3 failed / 21 skipped (the extra
+  nine are `tests/test_led_real_hooks.py`, skipping because
+  `CLOUDE_REAL_HOOK_TESTS=1` is not set); the three failures are the same
+  ones as before, environmental and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
@@ -781,6 +783,50 @@ is the user showing up. On the LED, `question` is inner
 is `waiting-input`, shared with the startup gate - both mean "come and
 look", neither means "approve this". Summary priority is
 **permission > input > working > unread > done > dead > unknown**.
+
+**A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
+punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
+2.1.265: on a turn with NO SUBAGENT IN IT, `SubagentStop` arrives about
+1.5s AFTER `Stop`. `Stop` had just cleared `last_tool_event_ts` to say the
+turn was over, `record_event` stamped it again, and a finished session
+painted `working` for the full 120s - `finished_unread` lasted a second
+and a half and `idle` was UNREACHABLE. The rule now: an event that CLOSES
+something stamps only when something was open for it to close.
+`SubagentStop` needs `subagent_depth > 0` (at zero it moves nothing and
+logs `subagent_stop_without_start` at debug); `PostToolUse` keys on a
+`turn_open` boolean that every OPENING event sets and `Stop` clears, and
+is refused ONLY when a `Stop` was POSITIVELY seen and nothing has opened
+since - never having seen a `Stop` is not evidence the turn ended.
+
+**A DEAD SESSION KEEPS ITS ROW.** `dead` was unreachable from live data
+until 2026-09-08: `resolve_listing_liveness` answered ONE verdict, `gone`,
+for two different facts - "the backend says there is no such tmux session"
+and "the session is there and its pane is a corpse" - and
+`_session_info_for` dropped the row for both, while `/sessions/attachable`
+filters out every name bound to a live backend. So a killed pane VANISHED
+off the sidebar and the running list, with `dead`/`off` sitting in
+`status-led.js` and restart + remove sitting in `actionsFor('dead')`,
+never delivered a row to paint. `src/core/session_liveness.py` splits it
+four ways, borrowing the pane words from `session_respawn.py`:
+`alive` / `pane_dead` / `session_gone` / `unknown`. `pane_dead` KEEPS the
+row and says `dead`, because `remain-on-exit` holding the corpse open is
+the same fact that lets `respawn-pane` revive it; `session_gone` drops it
+exactly as before and the reaper files the stored row into the recent
+list, where a restart is a resume. Existence is read BEFORE the pane, so a
+stale `dead` row cannot keep a session tmux no longer has on screen.
+`keeps_row` is an ALLOW-LIST of what survives, so a verdict added later
+cannot silently inherit "make the row vanish".
+
+THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
+than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
+pipe-pane a corpse, so it raises and the pass (which gathers with
+`return_exceptions=True`) simply does not hold that session. The row does
+not disappear: with no live backend bound to the name,
+`/sessions/attachable` lists it and decorates it with
+`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
+surfaced a husk. The two are complementary - bound to a backend, the
+session says `dead` on `/sessions/list`; unbound, it says `dead` on
+`/sessions/attachable` - and after this change they finally agree.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an

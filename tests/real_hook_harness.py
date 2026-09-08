@@ -92,12 +92,15 @@ ASSERT_TIMEOUT_SECONDS: float = 30.0
 
 #: Poll interval while waiting for a state.
 #:
-#: 0.25s rather than something lazier because one of the states this file
-#: measures is only visible for about a second and a half. Measured on
-#: claude 2.1.265: ``Stop`` lands, and ``SubagentStop`` follows it 1.50s
-#: later on a turn with no subagent in it. ``finished_unread`` exists only
-#: in that gap, so a slower poll would report a state that had already
-#: moved and the test would be measuring luck.
+#: 0.25s rather than something lazier because these states are measured
+#: against a live agent and some of them are short. It was originally set
+#: here because ``finished_unread`` existed for only about a second and a
+#: half: measured on claude 2.1.265, ``Stop`` lands and ``SubagentStop``
+#: follows it 1.50s later on a turn with no subagent in it, and the stray
+#: used to re-arm the working heartbeat. That is punchlist item 4 and it
+#: is fixed, so ``finished_unread`` now persists - but the fast poll is
+#: what makes a REGRESSION visible as a wrong reading rather than as a
+#: state that had already moved on before anyone looked.
 POLL_INTERVAL_SECONDS: float = 0.25
 
 

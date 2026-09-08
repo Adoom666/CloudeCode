@@ -36,6 +36,41 @@ Claude Code gives no delivery guarantee):
   - ``SubagentStop`` floors ``subagent_depth`` at 0 rather than going
     negative, so a duplicate/late Stop can never wedge depth negative and
     starve a later, legitimate SubagentStart of the "still nested" signal.
+  - A CLOSING EVENT ONLY COUNTS AS WORK IF SOMETHING IS OPEN FOR IT TO
+    CLOSE. See the section below - this is the rule that stops a finished
+    turn painting ``working`` for two minutes.
+A CLOSING EVENT IS NOT A HEARTBEAT ON ITS OWN (measured 2026-09-08, and
+it is punchlist item 4). ``tests/test_led_real_hooks.py`` put a real
+claude 2.1.265 in a real pane and watched what it POSTs: on a turn with
+NO SUBAGENT ANYWHERE IN IT, ``SubagentStop`` arrives about 1.5s AFTER
+``Stop`` (Stop+38.96s / SubagentStop+40.46s, reproduced twice). ``Stop``
+had just set ``last_tool_event_ts`` to None precisely to say the turn was
+over, and ``SubagentStop`` stamped it again - so the heartbeat re-armed
+and ``resolve`` reported ``working`` for the full 120s on a session
+sitting at an empty prompt. ``finished_unread`` lasted about a second and
+a half and ``idle`` was UNREACHABLE in between: the light claiming work
+nothing can see, arriving through the hook stream this time rather than
+through the tmux fallback that was fixed for the same lie.
+
+The rule now: an event that CLOSES something (``SubagentStop``,
+``PostToolUse``) stamps the heartbeat only when there was something open
+for it to close. ``SubagentStop`` needs ``subagent_depth > 0``, which is
+already the exact record of an unmatched ``SubagentStart``.
+``PostToolUse`` has no counter (tool calls run in parallel and a dropped
+``PreToolUse`` would desynchronise one), so it keys on ``turn_open``.
+OPENING events (``UserPromptSubmit``, ``PreToolUse``, ``SubagentStart``)
+still stamp unconditionally - they cannot be late, because there is
+nothing they could be late for.
+
+THE REFUSAL IS NARROW ON PURPOSE, and the narrowing is what makes it a
+measurement rather than a guess. ``PostToolUse`` is refused ONLY when a
+``Stop`` has POSITIVELY been seen for this session and no opening event
+has landed since. Never having seen a ``Stop`` (a fresh session, a server
+restart mid-turn) is not evidence the turn is over, so that case still
+stamps. The remaining hole - a turn whose ``UserPromptSubmit`` AND
+``PreToolUse`` were both dropped, leaving only a ``PostToolUse`` - costs
+one under-claimed ``working``, corrected by the next opening event.
+
   - A missing ``Stop`` (the process died mid-turn, no clean shutdown) is
     handled by the HEARTBEAT TIMEOUT below, not by trying to detect the
     death from the hook stream (hooks cannot see a dead process either -
@@ -48,6 +83,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
+
+import structlog
 
 from src.core.session_status import (
     STATUS_DEAD,
@@ -112,6 +149,8 @@ KNOWN_EVENTS: frozenset[str] = frozenset(
 WORKING_HEARTBEAT_TIMEOUT_SECONDS: int = 120
 
 _HEARTBEAT_TIMEOUT = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
+
+logger = structlog.get_logger(__name__)
 
 
 def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
@@ -214,9 +253,21 @@ class SessionActivitySignal:
     #: Floored at 0 (see module docstring) so a duplicate/out-of-order
     #: SubagentStop can never make this negative.
     subagent_depth: int = 0
-    #: Wall-clock time of the most recent Stop, for observability only
-    #: (not consulted by ``resolve`` - the persisted unread flag is the
-    #: durable record of "a Stop happened and nobody's looked").
+    #: True while the hook stream shows a turn IN PROGRESS. Set by every
+    #: OPENING event (UserPromptSubmit / PreToolUse / SubagentStart),
+    #: cleared by ``Stop``. It exists so a CLOSING event can tell "this
+    #: tool result belongs to the turn running right now" from "this is a
+    #: straggler from the turn that already ended", which is the whole of
+    #: punchlist item 4. A boolean rather than a counter deliberately:
+    #: parallel tool calls and a droppable ``PreToolUse`` would make a
+    #: counter drift, and a drifting counter is a worse lie than a coarse
+    #: one. Read TOGETHER WITH ``last_stop_ts`` - see ``record_event``.
+    turn_open: bool = False
+    #: Wall-clock time of the most recent Stop. Consulted by
+    #: ``record_event`` (a Stop we have POSITIVELY seen is what licenses
+    #: refusing a late ``PostToolUse``); not consulted by ``resolve`` -
+    #: the persisted unread flag is the durable record of "a Stop happened
+    #: and nobody's looked".
     last_stop_ts: Optional[datetime] = None
 
 
@@ -279,6 +330,11 @@ class SessionActivityTracker:
         elif kind == EVENT_USER_PROMPT_SUBMIT:
             state.permission_open = False
             state.notice_open = False
+            # An OPENING event: a prompt was submitted, so a turn is live
+            # again even though this event stamps no heartbeat of its own
+            # (a turn that calls no tool never paints ``working``, which
+            # is correct - nothing is running that the user cannot see).
+            state.turn_open = True
         elif kind == EVENT_PRE_TOOL_USE:
             # Tool activity starting implies the user answered yes (or no
             # permission was needed) and has plainly seen the session -
@@ -287,18 +343,47 @@ class SessionActivityTracker:
             # same reason: the user showing up is what resolves either.
             state.permission_open = False
             state.notice_open = False
+            state.turn_open = True
             state.last_tool_event_ts = now
         elif kind == EVENT_POST_TOOL_USE:
-            state.last_tool_event_ts = now
+            # A CLOSING event. It is a heartbeat only while a turn is
+            # open, or while we have never seen a Stop for this session
+            # at all - not having looked is not evidence the turn ended,
+            # so a fresh session and a server restarted mid-turn both
+            # still stamp. Refused, it moves NOTHING: no timestamp, no
+            # flag, so applying it twice is the same no-op as applying it
+            # once, and it cannot reorder anything.
+            if state.turn_open or state.last_stop_ts is None:
+                state.last_tool_event_ts = now
+            else:
+                logger.debug(
+                    "tool_result_after_stop",
+                    session_id=session_id,
+                    last_stop_ts=state.last_stop_ts.isoformat(),
+                )
         elif kind == EVENT_SUBAGENT_START:
             state.subagent_depth += 1
+            state.turn_open = True
             state.last_tool_event_ts = now
         elif kind == EVENT_SUBAGENT_STOP:
-            # Floored at 0 - see module docstring. A late/duplicate Stop
-            # after depth is already 0 is a safe no-op instead of going
-            # negative and permanently hiding a later legitimate Start.
-            state.subagent_depth = max(0, state.subagent_depth - 1)
-            state.last_tool_event_ts = now
+            # A CLOSING event, and ``subagent_depth`` is already the exact
+            # record of how many SubagentStarts are unmatched. At depth 0
+            # there is no subagent to close, so this closes nothing and
+            # claims nothing: it does not decrement (the floor, unchanged
+            # - a negative depth would permanently hide a later legitimate
+            # Start) and, the fix for punchlist item 4, IT DOES NOT STAMP
+            # THE HEARTBEAT. claude fires one of these after every Stop
+            # on a turn with no subagent in it; stamping it re-armed
+            # ``working`` for 120s on a finished session.
+            if state.subagent_depth > 0:
+                state.subagent_depth -= 1
+                state.last_tool_event_ts = now
+            else:
+                logger.debug(
+                    "subagent_stop_without_start",
+                    session_id=session_id,
+                    turn_open=state.turn_open,
+                )
         elif kind == EVENT_STOP:
             # Turn ended cleanly: nothing blocking, nothing asking for
             # attention, no in-flight tool work, no in-flight subagent. A
@@ -307,6 +392,7 @@ class SessionActivityTracker:
             state.notice_open = False
             state.subagent_depth = 0
             state.last_tool_event_ts = None
+            state.turn_open = False
             state.last_stop_ts = now
 
     def resolve(

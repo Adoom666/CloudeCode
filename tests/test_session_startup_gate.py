@@ -491,7 +491,11 @@ def test_toast_copy_is_lowercase_plain_and_actionable():
 from pathlib import Path  # noqa: E402
 
 from src.core.session_manager import SessionManager  # noqa: E402
-from src.core.session_status import LIVENESS_LIVE, LIVENESS_UNKNOWN  # noqa: E402
+from src.core.session_liveness import (  # noqa: E402
+    LIVENESS_ALIVE,
+    LIVENESS_PANE_DEAD,
+    LIVENESS_UNKNOWN,
+)
 from src.models import Session, SessionStatus  # noqa: E402
 
 
@@ -577,7 +581,7 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
                 backend=mgr.backends["ses1"],
                 tmux_name="cloude_proj",
                 row=row,
-                liveness=LIVENESS_LIVE,
+                liveness=LIVENESS_ALIVE,
             )
         )
 
@@ -607,7 +611,7 @@ def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
             backend=mgr.backends["ses1"],
             tmux_name="cloude_proj",
             row=row,
-            liveness=LIVENESS_LIVE,
+            liveness=LIVENESS_ALIVE,
         )
         == GATE_READY
     )
@@ -667,7 +671,7 @@ def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
         backend=mgr.backends["ses1"],
         tmux_name="cloude_proj",
         row=row,
-        liveness=LIVENESS_LIVE,
+        liveness=LIVENESS_ALIVE,
     )
     # FILTERED BY `lines`, NOT COUNTED WHOLE, and the distinction is the
     # point of the DRY refactor: capture_pane_tail now has TWO callers -
@@ -692,3 +696,55 @@ def test_manager_forgets_the_gate_when_the_session_is_wiped(
 
     mgr._wipe_session_state("ses1")
     assert mgr._startup_gate_ledger.first_hook_at("cloude_proj") is None
+
+
+def test_manager_reads_a_dead_pane_as_ready_and_never_toasts_it(
+    monkeypatch, tmp_path
+):
+    """THE NEW CALLER. ``LIVENESS_PANE_DEAD`` reaches this method now.
+
+    Before the liveness split, a husk's row was dropped before the gate
+    was ever consulted, so this branch had no caller at all - the exact
+    shape of the untested guard CLAUDE.md warns about. Now that the row
+    survives, a dead pane arrives here and the claim is threefold:
+
+      - it answers ``ready``, because a corpse is certainly not waiting
+        for a keypress. ``ready`` is a narrow claim, not a health claim;
+        ``activity_status`` is the field that says it died.
+      - it raises NO toast. "needs a keypress" pointed at a dead pane
+        would be a false alarm the user cannot act on.
+      - it costs NO ``capture-pane``. The tail is the one expensive
+        input, and a dead pane is not a session anyone is waiting on.
+
+    A tail that WOULD match is stubbed in deliberately: if the gate ever
+    started reading the scrollback before checking liveness, this test
+    goes red on the verdict rather than passing for the wrong reason.
+    """
+    mgr = _manager(monkeypatch, tmp_path)
+    _register(mgr, "ses1", "cloude_proj", tmp_path)
+
+    calls = []
+
+    def _record(**kwargs):
+        calls.append(kwargs)
+        return TRUST_PROMPT_TAIL
+
+    monkeypatch.setattr("src.core.session_manager.capture_pane_tail", _record)
+
+    row = {"created_at_epoch": int(time.time()) - 600, "pid": 4321}
+    verdict = mgr._startup_gate_for(
+        session_id="ses1",
+        backend=mgr.backends["ses1"],
+        tmux_name="cloude_proj",
+        row=row,
+        liveness=LIVENESS_PANE_DEAD,
+    )
+
+    assert verdict == GATE_READY
+    assert mgr._pending_startup_toasts == []
+    assert mgr.get_toasts("ses1") == []
+    gate_calls = [c for c in calls if c.get("lines") == STARTUP_TAIL_LINES]
+    assert gate_calls == [], (
+        "a dead pane paid for a capture-pane; the tail is gated on a pane "
+        f"measured ALIVE and must stay that way: {gate_calls}"
+    )

@@ -389,12 +389,17 @@ def test_duplicate_notification_is_a_safe_noop():
 
 def test_subagent_stop_before_any_start_floors_at_zero():
     """Out-of-order delivery: a SubagentStop arrives before its Start (or
-    a duplicate Stop after a legitimate pair) must not go negative."""
+    a duplicate Stop after a legitimate pair) must not go negative.
+
+    It also must not CLAIM anything. There is no unmatched SubagentStart,
+    so these two events closed nothing and are not evidence of work -
+    hence idle rather than working. Punchlist item 4."""
     t = _t()
     t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
     t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING  # depth 0, not negative
-    # A legitimate Start after the stray Stops still registers correctly.
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
+    # A legitimate Start after the stray Stops still registers correctly,
+    # which is what proves the depth never went negative.
     t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING_SUBAGENT
 
@@ -407,6 +412,154 @@ def test_out_of_order_user_prompt_submit_then_notification():
     t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
     t.record_event("s1", EVENT_NOTIFICATION, now=T0)
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
+
+
+# ---- punchlist 4: a closing event is not a heartbeat on its own ------------
+#
+# MEASURED on claude 2.1.265 by tests/test_led_real_hooks.py, twice: a
+# SubagentStop lands about 1.5s after Stop on a turn with no subagent in
+# it. Stamping it re-armed the working heartbeat for the full 120s on a
+# finished session, so finished_unread flashed for a second and a half
+# and idle was unreachable. These pin the fix from every direction the
+# hook stream can deliver it: duplicated, reversed, and interleaved.
+
+
+def test_a_trailing_subagent_stop_leaves_a_finished_turn_finished():
+    """THE DEFECT ITSELF. Stop, then the SubagentStop claude sends after
+    it, on a turn that never had a subagent. The session must stay
+    finished_unread rather than painting working for two minutes."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    trailing = T0 + timedelta(seconds=1.5)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
+    assert (
+        t.resolve("s1", STATUS_RUNNING, unread=True, now=trailing)
+        == STATUS_FINISHED_UNREAD
+    )
+
+
+def test_a_trailing_subagent_stop_leaves_idle_reachable():
+    """The other half of the same defect: once the user has looked, the
+    session must be able to reach idle. It could not before - the re-armed
+    heartbeat outranks the idle branch for the whole 120s window."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    trailing = T0 + timedelta(seconds=1.5)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=trailing) == STATUS_IDLE
+
+
+def test_a_subagent_stop_that_closes_a_real_subagent_still_stamps():
+    """THE NEGATIVE CONTROL, and it is the load-bearing one. A guard that
+    refused every SubagentStop would pass both tests above and silently
+    delete working_subagent's exit heartbeat."""
+    t = _t()
+    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
+    later = T0 + timedelta(seconds=30)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=later)
+    # depth 1 -> 0, and the stamp moved to ``later``: still working at a
+    # moment the T0 heartbeat alone would already have expired.
+    check = later + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS - 5)
+    assert t.resolve("s1", STATUS_RUNNING, now=check) == STATUS_WORKING
+
+
+def test_subagent_start_then_stop_then_subagent_stop_does_not_re_arm():
+    """A real subagent, then the turn ends, then the trailing stray. Stop
+    has already floored the depth, so the stray closes nothing and the
+    floored decrement is a no-op that claims no work."""
+    t = _t()
+    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    trailing = T0 + timedelta(seconds=1.5)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=trailing) == STATUS_IDLE
+    # And a later legitimate Start still registers - the depth is 0, not -1.
+    t.record_event("s1", EVENT_SUBAGENT_START, now=trailing)
+    assert (
+        t.resolve("s1", STATUS_RUNNING, now=trailing) == STATUS_WORKING_SUBAGENT
+    )
+
+
+def test_duplicate_trailing_subagent_stops_are_a_safe_noop():
+    """Hooks are duplicated. Applying the refusal twice is the same
+    refusal - nothing to converge, because nothing moved."""
+    t = _t()
+    t.record_event("s1", EVENT_STOP, now=T0)
+    for _ in range(3):
+        t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
+
+
+def test_reversed_order_subagent_stop_then_stop_still_converges():
+    """Hooks are unordered. The stray arriving BEFORE the Stop it followed
+    converges on the same finished state: the SubagentStop closes nothing,
+    and the Stop clears everything regardless."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
+
+
+def test_a_new_turn_after_the_trailing_stray_paints_working_again():
+    """The refusal must not wedge the session. The next turn's opening
+    events re-open it and the light works normally."""
+    t = _t()
+    t.record_event("s1", EVENT_STOP, now=T0)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
+    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+# ---- punchlist 4, the same trap for a late tool result ---------------------
+
+
+def test_a_post_tool_use_after_a_stop_does_not_re_arm():
+    """Same shape as the SubagentStop stray: a tool result from a turn
+    that already ended is not evidence of work happening now."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    late = T0 + timedelta(seconds=2)
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=late)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=late) == STATUS_IDLE
+
+
+def test_a_post_tool_use_with_no_stop_ever_seen_still_stamps():
+    """THE NEGATIVE CONTROL. Never having seen a Stop is not evidence the
+    turn is over - a fresh session, or a server restarted mid-turn, has
+    no Stop on record and must still be allowed to paint working."""
+    t = _t()
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+def test_a_post_tool_use_in_the_turn_after_a_stop_still_stamps():
+    """A Stop on record only refuses while the turn stays closed. The next
+    UserPromptSubmit re-opens it, and a tool result then counts again even
+    if its PreToolUse was dropped."""
+    t = _t()
+    t.record_event("s1", EVENT_STOP, now=T0)
+    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
+
+
+def test_duplicate_late_post_tool_use_is_a_safe_noop():
+    """Applying the refused event twice changes nothing, twice."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
 
 
 def test_missing_stop_does_not_wedge_forever_dead_still_overrides():

@@ -371,16 +371,39 @@ class RealHookApp:
     def kill_agent(self) -> None:
         """SIGKILL the pane's process, leaving a DEAD pane behind.
 
-        Description: the backend sets ``remain-on-exit on``, so killing
-          the process is what makes ``#{pane_dead}`` true - the only
-          signal that can report ``dead``. Killing the SESSION instead
-          would remove the row rather than change its status, which
-          measures nothing.
+        Description: THE FIRST OF TWO KILL MODES, and they measure
+          different things - see :meth:`kill_session` for the other. The
+          backend sets ``remain-on-exit on``, so killing the PROCESS is
+          what makes ``#{pane_dead}`` true while the tmux session itself
+          stays. That is the ``pane_dead`` case in
+          ``src/core/session_liveness.py``: the row must SURVIVE, saying
+          ``dead``, because the pane is still there and
+          ``respawn-pane`` can revive it.
         Inputs: none. Output: None.
         """
         pid = self.agent_pid()
         if pid is not None:
             subprocess.run(["kill", "-9", str(pid)], capture_output=True, check=False)
+
+    def kill_session(self) -> None:
+        """``kill-session`` the whole tmux session, pane and all.
+
+        Description: THE SECOND KILL MODE. This is the ``session_gone``
+          case: there is no pane left to paint and nothing a respawn
+          could land in, so the row correctly LEAVES ``/sessions/list``
+          and the stored row belongs in the recent list as ended. Kept
+          distinct from :meth:`kill_agent` because folding the two is
+          exactly the conflation the liveness split undid - a test that
+          killed the session while claiming to test a dead pane would
+          measure the wrong half and look green either way.
+
+          Runs on this run's guarded test socket only, never ``-L
+          cloude``.
+        Inputs: none. Output: None.
+        """
+        name = self.resolve_tmux_name()
+        if name:
+            self.tmux("kill-session", "-t", name)
 
     # -- input, over the app's own terminal socket --------------------- #
 

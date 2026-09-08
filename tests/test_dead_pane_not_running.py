@@ -1,4 +1,5 @@
-"""A tmux session that EXISTS is not a session that is ALIVE.
+"""A tmux session that EXISTS is not a session that is ALIVE - and a
+session that is not alive is not necessarily GONE.
 
 ``remain-on-exit`` keeps a pane open after its foreground process exits,
 so ``has-session`` returns rc=0 for a husk forever. The running list used
@@ -6,11 +7,18 @@ to gate on exactly that, so a finished session stayed listed as running
 indefinitely while the red dot beside it - which reads ``#{pane_dead}`` -
 told the truth the whole time.
 
-These tests pin the three outcomes the fix introduced, and each one is
-written so it CAN fail: the dead case and the live case are asserted
-against the same code path with only the pane measurement differing, so a
-fix that simply hides sessions fails the live case just as loudly as the
-old code fails the dead one.
+THE OVERCORRECTION, AND WHAT THIS FILE NOW PINS. The first fix answered
+that by DROPPING the husk's row, and it dropped it through the same
+verdict it used for a session tmux no longer has at all. Those are two
+different events. A husk still has a pane, still has a
+``#{pane_start_command}``, and is exactly what ``respawn-pane`` revives -
+so the row belongs on screen, painted dead, offering restart and remove.
+A ROW THAT DISAPPEARS IS WORSE THAN A ROW THAT SAYS DEAD.
+``src/core/session_liveness.py`` splits the verdict; these tests pin all
+four outcomes, and each one is written so it CAN fail: the dead case and
+the live case are asserted against the same code path with only the pane
+measurement differing, so a fix that simply hides sessions fails the live
+case just as loudly as the old code fails the dead one.
 
 Run with:
     ./venv/bin/python3 -m pytest tests/test_dead_pane_not_running.py -v
@@ -36,15 +44,18 @@ if str(ROOT) not in sys.path:
 
 # ruff: noqa: E402
 from src.core.session_manager import SessionManager
-from src.core.session_status import (
-    LIVENESS_GONE,
-    LIVENESS_LIVE,
+from src.core.session_liveness import (
+    LIVENESS_ALIVE,
+    LIVENESS_PANE_DEAD,
+    LIVENESS_SESSION_GONE,
     LIVENESS_UNKNOWN,
+    resolve_listing_liveness,
+)
+from src.core.session_status import (
     STATUS_DEAD,
     STATUS_IDLE,
     STATUS_RUNNING,
     STATUS_UNKNOWN,
-    resolve_listing_liveness,
 )
 from src.models import Session, SessionStatus
 
@@ -125,31 +136,55 @@ def _row(name: str, status: str):
 # ======================================================================= #
 
 
-def test_resolver_dead_pane_is_gone():
-    assert resolve_listing_liveness(True, STATUS_DEAD) == LIVENESS_GONE
+def test_resolver_dead_pane_is_a_husk_not_an_absence():
+    """THE SPLIT. A dead pane inside a session tmux still holds."""
+    verdict = resolve_listing_liveness(True, STATUS_DEAD)
+    assert verdict == LIVENESS_PANE_DEAD
+    assert verdict != LIVENESS_SESSION_GONE, (
+        "a husk and a session tmux no longer has are different events and "
+        "must not share a verdict - that conflation is what made a killed "
+        "pane vanish instead of painting dead"
+    )
 
 
-def test_resolver_live_pane_is_live():
-    assert resolve_listing_liveness(True, STATUS_IDLE) == LIVENESS_LIVE
-    assert resolve_listing_liveness(True, STATUS_RUNNING) == LIVENESS_LIVE
+def test_resolver_missing_session_is_session_gone():
+    assert resolve_listing_liveness(False, None) == LIVENESS_SESSION_GONE
+
+
+def test_resolver_live_pane_is_alive():
+    assert resolve_listing_liveness(True, STATUS_IDLE) == LIVENESS_ALIVE
+    assert resolve_listing_liveness(True, STATUS_RUNNING) == LIVENESS_ALIVE
 
 
 def test_resolver_unmeasurable_pane_is_its_own_outcome():
-    """Not gone, not live. The third outcome must be distinguishable."""
+    """Not gone, not dead, not alive. The third outcome stays its own."""
     verdict = resolve_listing_liveness(True, STATUS_UNKNOWN)
     assert verdict == LIVENESS_UNKNOWN
-    assert verdict != LIVENESS_LIVE
-    assert verdict != LIVENESS_GONE
+    assert verdict != LIVENESS_ALIVE
+    assert verdict != LIVENESS_PANE_DEAD
+    assert verdict != LIVENESS_SESSION_GONE
 
 
 def test_resolver_unknown_existence_is_unknown():
     assert resolve_listing_liveness(None, STATUS_IDLE) == LIVENESS_UNKNOWN
 
 
+def test_resolver_a_gone_session_never_reads_as_a_husk():
+    """THE NEGATIVE CONTROL for the split.
+
+    A stale ``dead`` row can outlive the tmux session it described. If
+    existence were not tested first, that stale row would downgrade a
+    measured absence to the husk verdict and keep a row on screen for a
+    session tmux does not have - a restart control pointed at nothing.
+    """
+    assert resolve_listing_liveness(False, STATUS_DEAD) == LIVENESS_SESSION_GONE
+    assert resolve_listing_liveness(False, STATUS_IDLE) == LIVENESS_SESSION_GONE
+
+
 def test_resolver_pty_backend_has_no_pane_and_existence_is_liveness():
     """pane_status=None means NOT APPLICABLE, not 'could not tell'."""
-    assert resolve_listing_liveness(True, None) == LIVENESS_LIVE
-    assert resolve_listing_liveness(False, None) == LIVENESS_GONE
+    assert resolve_listing_liveness(True, None) == LIVENESS_ALIVE
+    assert resolve_listing_liveness(False, None) == LIVENESS_SESSION_GONE
 
 
 # ======================================================================= #
@@ -157,13 +192,26 @@ def test_resolver_pty_backend_has_no_pane_and_existence_is_liveness():
 # ======================================================================= #
 
 
-def test_dead_pane_session_is_not_listed_as_running(mgr, tmp_path):
-    """THE BUG. tmux session exists; its pane is a corpse."""
+def test_dead_pane_session_stays_listed_and_says_dead(mgr, tmp_path):
+    """THE OWNER'S MODEL. tmux session exists; its pane is a corpse.
+
+    It must NOT read as running, and it must NOT vanish. The row keeps
+    its place carrying ``dead``, which is what ``ledStateFor`` paints as
+    dead/off and what ``actionsFor('dead')`` turns into restart + remove.
+    """
     _register(mgr, "husk", "cloude_ses_husk", tmp_path)
     info = mgr._session_info_for(
         "husk", status_map=_row("cloude_ses_husk", STATUS_DEAD)
     )
-    assert info is None, "a dead husk must not appear in the running list"
+    assert info is not None, (
+        "a dead husk vanished from the running list; the user cannot "
+        "restart or remove a row that is not on screen"
+    )
+    assert info.activity_status == STATUS_DEAD, (
+        "a dead husk must say dead, not read as running: "
+        f"{info.activity_status}"
+    )
+    assert info.tmux_session == "cloude_ses_husk"
 
 
 def test_live_pane_session_is_still_listed_as_running(mgr, tmp_path):
@@ -181,7 +229,13 @@ def test_live_pane_session_is_still_listed_as_running(mgr, tmp_path):
 
 
 def test_missing_tmux_session_is_still_dropped(mgr, tmp_path):
-    """A backend that says the session is gone is a measured absence."""
+    """A backend that says the session is gone is a measured absence.
+
+    THE CONTRAST TO THE HUSK, and the reason the split is not just a
+    rename: there is no pane here to paint and nothing a respawn could
+    land in, so the registration goes and the stored row belongs in
+    ``GET /sessions/recent`` as ended.
+    """
     _register(mgr, "gone", "cloude_ses_gone", tmp_path, exists=False)
     assert mgr._session_info_for("gone", status_map={}) is None
 
@@ -215,13 +269,13 @@ def test_persisted_idle_cannot_overwrite_a_measured_dead(mgr, tmp_path, monkeypa
     ``idle`` is trusted indefinitely. Without the guard it overwrites a
     tmux-MEASURED ``dead`` and resurrects a husk.
 
-    MEASURED NOTE: with the liveness gate in place this outcome is
-    guaranteed by the GATE - a dead pane returns before the restore block
-    is reached - so this test alone does not exercise the guard. The
-    guard is independently load-bearing on the unmeasurable path
-    (``test_persisted_state_does_not_manufacture_a_status_when_unmeasurable``,
-    which is the one that goes red when the guard is removed). Both are
-    kept: this pins the user-visible behaviour, that one pins the guard.
+    MEASURED NOTE: this test STOPPED being a freebie when the husk's row
+    started surviving. Before the split a dead pane returned before the
+    restore block was ever reached, so the gate did the work and the
+    guard was never exercised here. Now the row runs the whole way
+    through with a stored ``idle`` in hand, and only
+    ``liveness == LIVENESS_ALIVE`` on the restore branch keeps that
+    stored value from overwriting a pane tmux watched die.
     """
     _register(mgr, "husk", "cloude_ses_husk", tmp_path)
     monkeypatch.setattr(mgr, "_restored_activity_state", lambda *a, **k: STATUS_IDLE)
@@ -229,8 +283,10 @@ def test_persisted_idle_cannot_overwrite_a_measured_dead(mgr, tmp_path, monkeypa
     info = mgr._session_info_for(
         "husk", status_map=_row("cloude_ses_husk", STATUS_DEAD)
     )
-    assert info is None, (
-        "a persisted idle must not resurrect a pane tmux measured as dead"
+    assert info is not None, "the husk's row must stay on screen"
+    assert info.activity_status == STATUS_DEAD, (
+        "a persisted idle resurrected a pane tmux measured as dead: "
+        f"{info.activity_status}"
     )
 
 
