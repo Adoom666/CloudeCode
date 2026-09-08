@@ -394,10 +394,14 @@ claude - a resolver that always finds something is worse than useless.
   chasing it. Node: 185 tracked files (re-counted 2026-09-08; the earlier
   "169" figure undercounted and predates this round), only the pre-existing
   `test_archive_full_page_mode.node.mjs` fails. `tests/led_state_for.node.mjs`
-  and `tests/test_led_real_hooks.py` are untracked work in progress as of
-  this commit (a real-hook LED integration harness) - `led_state_for.node.mjs`
-  is a piped-stdin CLI helper, not a standalone test, and exits non-zero when
-  run with no input; that is expected, not a failure.
+  is a piped-stdin CLI helper for that harness, not a standalone test, and
+  exits non-zero when run with no input; that is expected, not a failure.
+- **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
+  launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
+  against hooks it actually fired. It is off by default because it spends real
+  Claude turns and about 50 seconds; without the variable (or without tmux /
+  claude / node) every test in it skips with a reason naming what went
+  unmeasured.
 - **`node --check`** every JS file you touch, before you claim it works.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
