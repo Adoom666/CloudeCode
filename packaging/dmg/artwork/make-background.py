@@ -39,6 +39,7 @@ Requires rsvg-convert (brew install librsvg) and tiffutil (ships with macOS).
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import json
 import subprocess
@@ -164,35 +165,27 @@ def read_version(repo_root: Path) -> str:
 
 
 def cloud_mark() -> str:
-    """Return SVG markup for the cloud-and-bird mark from the app icon.
+    """Return SVG markup for the app icon, embedded as a data URI.
 
-    The icon is a pale cloud with a blocky coral bird's head rising out of
-    it. Emoji do not render predictably through librsvg and the .icns cannot
-    be embedded as vector, so the mark is redrawn here from primitives: the
-    bird first, then the cloud over its lower half, so the head reads as
-    emerging rather than pasted on.
+    This is the REAL icon (``macOS/assets/AppIcon-1024.png``), not a
+    redrawing of it. An earlier version approximated the mark with circles
+    and rects because the ``.icns`` cannot be embedded as vector, but a PNG
+    can ride in a data URI, which librsvg renders fine and which cannot
+    drift from the icon the app actually ships.
 
     Returns:
-        An SVG ``<g>`` fragment drawn in a 0..120 x 0..76 local box.
+        An SVG ``<image>`` fragment drawn in a 0..120 x 0..76 local box,
+        square and centred, or the empty string if the icon is missing.
     """
+    icon = Path(__file__).resolve().parents[3] / "macOS" / "assets" / "AppIcon-1024.png"
+    if not icon.is_file():
+        return ""
+    data = base64.b64encode(icon.read_bytes()).decode("ascii")
+    # Square, fitted to the box height, centred across its width.
     return (
-        # Bird head: a squared-off block with a stepped brow, drawn BEFORE the
-        # cloud so the cloud overlaps its chin. It has to clear the cloud's
-        # top lobe by a good margin or it reads as a smudge rather than a
-        # head, which is the whole recognisable half of the mark.
-        '<g fill="url(#birdFill)">'
-        '<rect x="45" y="0" width="32" height="44" rx="3"/>'
-        '<rect x="39" y="9" width="8" height="26" rx="2"/>'
-        "</g>"
-        f'<rect x="53" y="14" width="6" height="9" fill="{BIRD_EYE}"/>'
-        f'<rect x="67" y="14" width="6" height="9" fill="{BIRD_EYE}"/>'
-        # Cloud: overlapping lobes filling as one silhouette.
-        '<g fill="url(#cloudFill)">'
-        '<circle cx="32" cy="52" r="18"/>'
-        '<circle cx="60" cy="46" r="22"/>'
-        '<circle cx="88" cy="52" r="19"/>'
-        '<rect x="28" y="50" width="62" height="21" rx="10"/>'
-        "</g>"
+        f'<image x="22" y="0" width="76" height="76" '
+        f'href="data:image/png;base64,{data}" '
+        f'preserveAspectRatio="xMidYMid meet"/>'
     )
 
 
