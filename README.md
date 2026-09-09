@@ -1,12 +1,18 @@
 <div align="center">
 
-<img src="docs/assets/logo-wordmark.png" alt="Cloude Code logo — a white 3D cloud icon with a coral pixel-art face next to the wordmark 'Cloude Code' in coral text on a black background." width="520">
+<img src="docs/assets/logo.png" alt="Cloude Code logo: a white 3D cloud with a coral pixel-art face." width="180">
+
+# Cloude Code
 
 ### Your Mac keeps coding. You keep the remote.
 
 **Drive your Mac's live Claude Code sessions from your phone. Real terminal, real keystrokes, real control — while the session runs in tmux whether you're watching or not.**
 
-![Version](https://img.shields.io/badge/version-0.8.1-d77757)
+### [Download Cloude Code 1.0.36 for macOS](https://github.com/Adoom666/CloudeCode/releases/download/v1.0.36/Cloude.Code-1.0.36-arm64.dmg)
+
+Apple Silicon, macOS 13+. Open the DMG and drag the app to Applications. That is the whole install.
+
+![Version](https://img.shields.io/badge/version-1.0.36-d77757)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20(Apple%20Silicon)-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
@@ -334,11 +340,11 @@ Three rules for these:
 
 ```bash
 # 1. Download
-curl -LO https://github.com/Adoom666/CloudeCodeDev/releases/download/v1.0.35/Cloude.Code-1.0.35-arm64.dmg
+curl -LO https://github.com/Adoom666/CloudeCode/releases/download/v1.0.36/Cloude.Code-1.0.36-arm64.dmg
 
 # 2. Verify
-shasum -a 256 Cloude.Code-1.0.35-arm64.dmg
-# expected: f3d2f13fc20192758196f8e844239adec4de08785993e0b3141c4ba493e844c4
+shasum -a 256 Cloude.Code-1.0.36-arm64.dmg
+# expected: 5256fb2d3251e95dfa60269c45a90865de629e916046d98738c7b100d94f3db1
 ```
 
 3. Open the DMG, drag **Cloude Code** to `/Applications`, and launch it. The first run provisions the venv, installs dependencies, generates your secrets, and pops a QR window — scan it with your authenticator app.

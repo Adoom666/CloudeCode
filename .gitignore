@@ -189,7 +189,3 @@ scripts/verify/.terminal-opacity-shots/
 !.claude/
 .claude/*
 !.claude/commands/
-
-# internal engineering notes, dev-only
-CLAUDE.md
-AGENTS.md
