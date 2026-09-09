@@ -105,11 +105,28 @@ test('there is exactly ONE definition of the mark in the client', () => {
         `these files draw their own kebab instead of calling KebabIcon: ${offenders}`);
 });
 
-test('both consumers actually call the shared builder', () => {
+test('the one remaining consumer actually calls the shared builder', () => {
+    // THERE USED TO BE TWO. The conversation rows drew this mark for
+    // their own overflow menu until 2026-09-08, when the owner asked for
+    // the three dots to go and pin/close to come back as inline icons.
+    // The extraction is kept for the header alone: the ink measurement in
+    // the module's docblock is the reason this mark is not a literal, and
+    // that reason has nothing to do with how many callers there are.
     assert.ok(clientJs('header-menu.js').includes('window.KebabIcon.svg('),
         'the header overflow must render the shared mark');
-    assert.ok(clientJs('session-row-menu.js').includes('window.KebabIcon.svg('),
-        'the sidebar row kebab must render the shared mark');
+});
+
+test('NO CONVERSATION ROW DRAWS A KEBAB ANY MORE', () => {
+    // The removal, asserted rather than assumed. A row builder that
+    // started emitting a three-dot control again would be re-opening a
+    // menu whose items were deleted, so it would paint an empty panel.
+    for (const name of ['session-sidebar-rows.js', 'launchpad.js']) {
+        const src = clientJs(name);
+        assert.ok(!src.includes('KebabIcon'),
+            `${name} must not draw a kebab on a session row`);
+        assert.ok(!src.includes('SessionRowMenu'),
+            `${name} must not reach for the deleted row overflow menu`);
+    }
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

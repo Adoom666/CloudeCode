@@ -2,8 +2,9 @@
  *
  * Its own file because client/css/styles.css is long past the repo's
  * 500-line guideline and must not grow; wired into client/index.html
- * after styles.css the same way session-row-menu.css is, so it inherits
- * the theme tokens declared there and its own rules win on a tie.
+ * after styles.css the same way every other split-out stylesheet is, so
+ * it inherits the theme tokens declared there and its own rules win on a
+ * tie.
  *
  * WHAT IT HAS TO SIT NEXT TO. `.running-session-badges` is a 6px flex
  * strip carrying, in order: the TMUX/EXTERNAL ownership badge, the

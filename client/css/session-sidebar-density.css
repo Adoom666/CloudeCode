@@ -120,11 +120,6 @@
     padding: 0 3px;
 }
 
-.session-sidebar-panel[data-density="compact"] .mark-unread-toggle {
-    width: 16px;
-    height: 16px;
-}
-
 /* ---- cozy (default) -------------------------------------------------
  * The row exactly as it shipped: 10px padding on both axes. */
 
@@ -189,8 +184,11 @@
 }
 
 /* ---- Per-row pin -----------------------------------------------------
- * Sized and coloured to match .session-sidebar-row-delete and
- * .mark-unread-toggle, so the row's controls read as one set. */
+ * Sized and coloured to match .session-sidebar-row-delete, so the row's
+ * two inline controls read as one set. Both were folded into an overflow
+ * kebab for a round and are back on the row as of 2026-09-08: "move the
+ * pin and close icons back to the inline icons ... and the three dots
+ * now that they're not needed". */
 
 .session-sidebar-row-pin {
     display: inline-flex;

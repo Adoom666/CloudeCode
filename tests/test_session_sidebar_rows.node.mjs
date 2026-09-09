@@ -85,47 +85,31 @@ function makeSandbox() {
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
-    // The row's action controls MOVED into the overflow menu. The module
-    // that builds them from a row's kebab is loaded here so the
-    // invariants below can still be asserted over what a row OFFERS,
-    // rather than quietly narrowing to what a row happens to draw inline.
-    vm.runInContext(readClientJs('session-row-menu.js'), context);
 
     return {
         Rows: fakeWindow.SessionSidebarRows,
         StatusUI: fakeWindow.SessionStatusUI,
         RowActions: fakeWindow.SessionRowActions,
-        RowMenu: fakeWindow.SessionRowMenu,
     };
 }
 
-const { Rows, RowActions, RowMenu } = makeSandbox();
+const { Rows, RowActions } = makeSandbox();
 
 /**
- * Description: everything a row OFFERS the user - its own markup PLUS
- *   the markup of the menu its kebab opens. Pin, mark-unread and
- *   close/restart/remove are behind that kebab now, so an invariant
- *   about what a row offers has to read both halves or it silently
- *   becomes an invariant about nothing.
+ * Description: everything a row OFFERS the user. That is now the row's
+ *   own markup and nothing else: pin and close/restart/remove came back
+ *   out of the overflow menu on 2026-09-08 and are inline again, so
+ *   there is no second half to concatenate.
  *
- *   The kebab's attributes are parsed back OUT of the rendered row
- *   rather than rebuilt from the fixture, so this exercises the real
- *   chain: rowHtml -> kebab attributes -> menu contents. A kebab that
- *   stopped carrying the row's state would fail here.
+ *   KEPT AS A FUNCTION RATHER THAN INLINED. It exists to name the
+ *   distinction between what a row DRAWS and what a row OFFERS, and the
+ *   two were different for a whole release. Assertions written against
+ *   this name stay correct if a control is ever folded away again.
  * Inputs: r (object) - one row fixture.
- * Output: string - row HTML concatenated with its menu's HTML.
+ * Output: string - the row's HTML.
  */
 function offeredHtml(r) {
-    const html = Rows.rowHtml(r);
-    const tag = (html.match(/<button[^>]*class="session-sidebar-row-kebab"[^>]*>/) || [])[0];
-    assert.ok(tag, 'the row must paint a kebab to hang its actions off');
-    const stub = {
-        getAttribute(name) {
-            const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
-            return m ? m[1] : null;
-        },
-    };
-    return html + RowMenu.controlHtmlFor(stub).join('');
+    return Rows.rowHtml(r);
 }
 
 /** One ordinary row fixture. Inputs: overrides (object). Output: object. */
@@ -169,18 +153,11 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     // Scoped to the attributes and text session-sidebar-rows.js writes
     // itself: data-name, data-session-id, and the visible row name.
     //
-    // KNOWN, PRE-EXISTING, OUT OF SCOPE: SessionStatusUI.markUnreadHtml()
-    // interpolates the same name into `data-mark-unread="..."` WITHOUT
-    // escaping it, so a name containing a double quote breaks out of that
-    // attribute. That sink lives in client/js/session-status-ui.js and is
-    // reached identically from the launchpad, so it is not this module's
-    // to fix and is reported separately rather than patched here.
-    //
-    // The slice used to stop at 'mark-unread-toggle', the first thing on
-    // the row this module did not write. That control moved into the
-    // overflow menu, so the boundary moved with it: the kebab is now the
-    // last thing rowHtml() emits from another module's builder, and
-    // client/js/session-row-menu.js escapes its own attributes.
+    // The slice used to stop at the unread envelope, the first thing on
+    // the row this module did not write. That control is gone entirely -
+    // the status light says unread now - and the boundary is the inline
+    // pin and action control, which escape their own attributes in
+    // pinButtonHtml and client/js/session-row-actions.js.
     const html = Rows.rowHtml(row({ name: 'evil" onclick="x', session_id: 'a" onload="y' }));
     assert.ok(!html.includes('onclick="'), 'attribute injection must not survive escaping');
     assert.ok(!html.includes('onload="'));
@@ -189,39 +166,88 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     assert.ok(!/<script/i.test(scripted));
 });
 
-test('the row itself draws ONE kebab and no loose action icons', () => {
-    // The fold, asserted as a fact rather than as an absence: exactly one
-    // trigger, and none of the three controls it swallowed still sitting
-    // on the line beside it.
+test('the row draws its pin and its action INLINE, and no kebab', () => {
+    // The unfold, asserted as a fact rather than as an absence: "move the
+    // pin and close icons back to the inline icons ... and the three dots
+    // now that they're not needed". Exactly one pin and exactly one
+    // destructive control on the line, and no trigger for a menu that no
+    // longer exists.
     for (const status of ['working', 'dead', 'idle', 'question', 'unknown']) {
         const html = Rows.rowHtml(row({ status, is_pinned: true, unread: true }));
-        assert.equal(
-            (html.match(/data-row-menu=/g) || []).length, 1,
-            `status ${status} must paint exactly one kebab`);
-        assert.equal((html.match(/data-pin-session=/g) || []).length, 0,
-            'the pin toggle must not also be drawn inline');
+        assert.equal((html.match(/data-row-menu=/g) || []).length, 0,
+            `status ${status} must paint no kebab`);
+        assert.ok(!html.includes('session-sidebar-row-kebab'),
+            `status ${status} must not carry the kebab's class either`);
+        assert.equal((html.match(/data-pin-session=/g) || []).length, 1,
+            `status ${status} must paint exactly one inline pin`);
         assert.equal((html.match(/data-mark-unread=/g) || []).length, 0,
-            'the mark-unread toggle must not also be drawn inline');
+            'the mark-unread toggle is gone from the app entirely');
         assert.equal((html.match(/data-group-pick=/g) || []).length, 0,
-            'the group chip must not also be drawn inline - it is gone from '
-            + 'the row entirely, folded action and all, into the kebab menu');
-        assert.equal(
-            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 0,
-            'the close/remove control must not also be drawn inline');
+            'the group picker item went with the menu - filing is reached '
+            + 'by drag, by `g` on a focused row, or by Alt+Arrow');
+        assert.ok(
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length >= 1,
+            `status ${status} must draw the shared action control inline`);
     }
-    // The kebab must carry the row's state, or the menu opens stale.
-    const pinned = Rows.rowHtml(row({ is_pinned: true, unread: true, status: 'dead' }));
-    assert.ok(pinned.includes('data-row-pinned="1"'));
-    assert.ok(pinned.includes('data-row-unread="1"'));
-    assert.ok(pinned.includes('data-row-status="dead"'));
+    // The row carries the status the picker reads, now that the kebab
+    // that used to hold it is gone.
+    const dead = Rows.rowHtml(row({ is_pinned: true, status: 'dead' }));
+    assert.ok(dead.includes('data-row-status="dead"'));
+    assert.ok(!dead.includes('data-row-pinned='),
+        'pinned state is carried by the pin button\'s aria-pressed, not a '
+        + 'second attribute that only the menu ever read');
+    assert.ok(!dead.includes('data-row-unread='));
+    assert.ok(Rows.rowHtml(row({ status: undefined })).includes('data-row-status="unknown"'),
+        'a row with no status says unknown out loud rather than saying nothing');
+});
+
+test('the pin keeps its accessible name and its pressed state inline', () => {
+    // Inside the menu these controls were given a visible text label from
+    // their own `title`. On the row they are icon-only again, so `title`
+    // and `aria-label` are the whole accessible story and both must be
+    // there. `aria-pressed` is what stops pinned from being shape-only.
+    const unpinned = Rows.rowHtml(row({ is_pinned: false }));
+    assert.ok(unpinned.includes('aria-pressed="false"'));
+    assert.ok(unpinned.includes('title="pin to top"'));
+    assert.ok(unpinned.includes('aria-label="Pin cloude_api to the top"'));
+    const pinned = Rows.rowHtml(row({ is_pinned: true }));
+    assert.ok(pinned.includes('aria-pressed="true"'));
+    assert.ok(pinned.includes('title="unpin"'));
+    assert.ok(pinned.includes('aria-label="Unpin cloude_api"'));
+});
+
+test('the inline action keeps its title and aria-label, on every status', () => {
+    for (const [status, label] of [
+        ['working', 'close session'],
+        ['unknown', 'close session'],
+        ['dead', 'remove from the list'],
+    ]) {
+        const html = Rows.rowHtml(row({ status }));
+        assert.ok(html.includes(`title="${label}"`),
+            `status ${status} must keep the hover tooltip "${label}"`);
+        assert.ok(html.includes(`aria-label="${label}"`),
+            `status ${status} must keep the accessible name "${label}"`);
+    }
+});
+
+test('the pin sits BEFORE the action, and both sit after the name', () => {
+    // Order is the muscle memory. Pre-kebab the line read name, then
+    // pin, then the destructive control on the far right, and putting a
+    // destructive control anywhere else would move it under a cursor
+    // that had learned where it was.
+    const html = Rows.rowHtml(row({ status: 'working' }));
+    const name = html.indexOf('session-sidebar-row-name');
+    const pin = html.indexOf('data-pin-session=');
+    const action = html.indexOf(`${RowActions.ATTR_ACTION}="close"`);
+    assert.ok(name < pin, 'the name column comes first and takes the slack');
+    assert.ok(pin < action, 'pin before the destructive control');
 });
 
 test('the group chip is removed, not commented out - no definition left behind', () => {
     // "no i dont need to see the group name in the item. its in the group
     // i can see the group on the sidebar." The chip's builder used to
-    // live here; its action moved to session-sidebar-group-actions.js
-    // .rowMenuItemHtml, which client/js/session-row-menu.js pulls into
-    // the kebab. Nothing chip-shaped should remain in THIS module.
+    // live here. Nothing chip-shaped should remain in THIS module, and
+    // nothing anywhere on the row opens the group picker now.
     const src = readClientJs('session-sidebar-rows.js');
     assert.ok(!src.includes('groupChipHtml'),
         'session-sidebar-rows.js must not still define the removed chip builder');
@@ -255,26 +281,23 @@ test('every row carries exactly one DESTRUCTIVE control, from the shared module'
         );
         const restarts =
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length;
-        // EXACTLY ONE, on every row whose state was MEASURED - dead or
-        // live. The reason the old blanket "never a restart" rule existed
-        // is that this module could not tell stopped from undetermined,
-        // and that reason still applies to `unknown`, which is covered
-        // below and is what actionsFor() actually refuses. A measured
-        // status is a different fact.
-        //
-        // A live row's restart opens the picker; it does not restart
-        // anything. The arm box, the confirm modal and the server's
-        // `confirm_restart_live` are the three gates in front of the
-        // kill - see tests/test_restart_live_gate.node.mjs.
-        assert.equal(restarts, 1, `status ${status} must offer exactly one restart`);
+        // ONE ON A DEAD ROW, NONE ANYWHERE ELSE. A live row briefly
+        // offered restart too; the owner removed that control on
+        // 2026-09-08 with the overflow menu it lived in. The dead row
+        // keeps it because a pane holding an exited process is the case
+        // restart exists for, and it is now the only surface in the app
+        // that reaches the respawn ladder.
+        assert.equal(restarts, status === 'dead' ? 1 : 0,
+            `status ${status} restart count`);
     }
 });
 
 test('an UNDETERMINED row is still offered no restart - the original rule, kept', () => {
-    // The half of the old prohibition that is still correct and still
-    // load-bearing: a row the attachable probe alone produced carries
-    // `unknown`, and offering to restart a session whose state we could
-    // not read is exactly the guess this app refuses to make.
+    // Still correct and still load-bearing, and for its OWN reason
+    // rather than the one that now also covers live rows: a row the
+    // attachable probe alone produced carries `unknown`, and offering to
+    // restart a session whose state we could not read is exactly the
+    // guess this app refuses to make.
     for (const status of ['unknown', undefined, null, '']) {
         const html = offeredHtml(row({ status }));
         assert.equal(

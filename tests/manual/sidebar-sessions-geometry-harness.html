@@ -403,11 +403,13 @@ window.__sidebarMeasure = function () {
                 band: owner ? owner.getAttribute('data-group') : null,
                 pinned: r.getAttribute('data-pinned'),
                 // The row's group chip is gone - "no i dont need to see
-                // the group name in the item". Its action lives in the
-                // row's kebab menu now ([data-group-pick] inside
-                // #session-row-menu-panel once the kebab is opened), not
-                // on the row itself, so there is nothing to measure here
-                // any more.
+                // the group name in the item". Its action moved into the
+                // row's overflow menu, and that menu was removed on
+                // 2026-09-08, so nothing on the row opens the group
+                // picker and there is nothing to measure here any more.
+                // The picker is reached by `g` on a focused row, by
+                // Alt+Arrow across a band edge, or by dragging onto a
+                // group header.
             };
         }),
         density: panel.getAttribute('data-density'),

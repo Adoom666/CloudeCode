@@ -73,6 +73,13 @@ logs/
 session_metadata.json
 pinned_themes.json
 unread_state.json
+# Project-scoped theme pin (v0.7.0+). The running app REWRITES this file in
+# whatever directory it opens, including this repo's own checkout, so a
+# tracked copy shows up permanently modified and every theme switch becomes
+# an accidental commit. src/core/session_manager.py::get_project_theme
+# returns None when it is absent and set_project_theme creates it on demand,
+# so a fresh clone needs no tracked copy.
+.cc.theme
 /claude-projects/
 
 # Image Uploads (per-session bucket — must never be committed)
@@ -182,3 +189,7 @@ scripts/verify/.terminal-opacity-shots/
 !.claude/
 .claude/*
 !.claude/commands/
+
+# internal engineering notes, dev-only
+CLAUDE.md
+AGENTS.md

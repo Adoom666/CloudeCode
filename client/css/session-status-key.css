@@ -1,0 +1,140 @@
+/* The status-light KEY - the foldable legend at the foot of the session
+ * sidebar. Markup comes from client/js/session-status-key.js.
+ *
+ * IT CARRIES NO COLOUR OF ITS OWN FOR THE LIGHTS. Every swatch in the
+ * list is a real `.status-led`, painted entirely by
+ * client/css/status-led.css off the two data attributes the component
+ * emits. If a rule in this file ever sets a colour, a size or a shape on
+ * a `.status-led`, the legend has started telling a different story from
+ * the sidebar it is a legend for - which is the whole thing this
+ * component exists not to do. Rules here size the ROW around the light,
+ * never the light.
+ *
+ * Everything else is a theme token, so the key follows the palette in
+ * dark and in both light themes with no per-theme rule.
+ *
+ * Sits where the old "N remembered positions are held" note sat, and
+ * borrows that note's quiet treatment: a hairline above it, subtle ink,
+ * small type. It is a reference, not a control panel.
+ *
+ * Loaded from client/index.html AFTER session-sidebar-density.css, which
+ * owns the note treatment this matches, and after status-led.css.
+ */
+
+.session-status-key {
+    margin: 6px 4px 2px 4px;
+    padding-top: 2px;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+/* A real button, so Tab reaches it and Enter/Space work with no key
+ * handler of our own. `aria-expanded` on it is the state; the chevron
+ * only draws it. */
+.session-status-key__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    /* Comfortably past the 44px touch target once the row's own line
+     * height is counted, without making a reference line look like a
+     * primary action. */
+    min-height: 26px;
+    padding: 4px 6px;
+    margin: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-subtle);
+    font-family: inherit;
+    font-size: 0.68em;
+    font-weight: bold;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.session-status-key__toggle:hover,
+.session-status-key__toggle:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-accent-bg-soft);
+    outline: none;
+}
+
+.session-status-key__toggle:focus-visible {
+    outline: 1px solid var(--color-accent-border);
+    outline-offset: -1px;
+}
+
+/* The chevron is the group headers' own glyph (see
+ * SessionSidebarGroups.chevronHtml), so the two folds in this panel look
+ * like one idea. The rotation is keyed off `aria-expanded` - the same
+ * attribute a screen reader announces - so the glyph cannot disagree
+ * with the state. */
+.session-status-key__toggle[aria-expanded="true"]
+    .session-sidebar-group__chevron {
+    transform: rotate(90deg);
+}
+
+.session-status-key__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-status-key__body {
+    padding: 2px 6px 6px 6px;
+}
+
+.session-status-key__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.session-status-key__item {
+    display: flex;
+    /* Start, not centre: a description that wraps to two lines at 330px
+     * must keep its light beside the FIRST line, not floating in the
+     * middle of the pair. */
+    align-items: flex-start;
+    gap: 8px;
+    padding: 3px 0;
+}
+
+/* A FIXED COLUMN FOR THE LIGHT, so every sentence starts at the same x
+ * whatever the light is doing. The width is the widest thing a LED can
+ * paint (its halo box, 1.7 x the 9px dot) rounded up, and the halo is a
+ * pseudo-element that does not affect layout, so without this the
+ * sentences would sit hard against a 9px dot and the ring would overlap
+ * them. Nothing here sizes the LED itself. */
+.session-status-key__swatch {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    /* Matches the line box of the text beside it, so the light reads as
+     * being on the same line as its first word. */
+    height: 1.35em;
+}
+
+.session-status-key__text {
+    min-width: 0;
+    font-size: 0.68em;
+    line-height: 1.35;
+    color: var(--color-fg-muted);
+    overflow-wrap: anywhere;
+}
+
+.session-status-key__note {
+    margin: 6px 0 0 0;
+    padding-top: 5px;
+    border-top: 1px solid var(--color-border-subtle);
+    font-size: 0.66em;
+    line-height: 1.35;
+    color: var(--color-fg-subtle);
+    overflow-wrap: anywhere;
+}

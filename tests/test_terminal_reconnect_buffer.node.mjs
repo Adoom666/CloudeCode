@@ -323,7 +323,6 @@ function loadTerminal(term) {
     tc.term = term;
     tc.ws = null;
     tc.connectWebSocket = () => {};
-    tc.loadLocalServers = () => {};
     tc._applyKeyHandlers = () => {};
     tc._forceScrollToBottom = () => {};
     tc.fitAddon = { fit() {} };

@@ -30,6 +30,7 @@ os.environ.setdefault(
 
 import pytest
 
+from src.core import claude_rename
 from src.core.claude_rename import (
     MIN_RENAME_VERSION,
     launch_name_args,
@@ -38,6 +39,22 @@ from src.core.claude_rename import (
 from src.models import CreateSessionRequest
 
 SUPPORTED = MIN_RENAME_VERSION
+
+
+@pytest.fixture
+def installed_claude_supports_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the version gate, because the id path probes the real binary.
+
+    ``launch_name_args_for_agent_type`` resolves the claude version by
+    running the installed ``claude`` binary. On a machine that has none -
+    every CI runner - that probe answers None and the function correctly
+    returns [], so an assertion about the flag would be measuring whether
+    claude happens to be installed rather than whether the label reaches
+    argv. Pinning the version to the lowest one that takes ``--name``
+    leaves the LABEL half of the answer as the only variable, which is
+    the half these tests are about.
+    """
+    monkeypatch.setattr(claude_rename, "detect_claude_version", lambda: SUPPORTED)
 
 
 # ---------------------------------------------------------------------
@@ -162,7 +179,9 @@ def test_real_project_names_survive_as_one_argv_element(label):
     assert len(args) == 2
 
 
-def test_the_agent_type_wrapper_resolves_the_family_itself():
+def test_the_agent_type_wrapper_resolves_the_family_itself(
+    installed_claude_supports_name,
+):
     """The route passes an agent_type id, not a family, so this is the
     call site that actually runs.
 
@@ -172,12 +191,7 @@ def test_the_agent_type_wrapper_resolves_the_family_itself():
     """
     args = launch_name_args_for_agent_type(label="Punchlist", agent_type="claude")
 
-    assert args[:1] == ["--name"] or args == []
-    # An environment without the configured wrappers resolves no family
-    # and correctly returns []; when it does resolve, the label must be
-    # carried through unchanged rather than rewritten.
-    if args:
-        assert args == ["--name", "Punchlist"]
+    assert args == ["--name", "Punchlist"]
 
 
 def test_no_label_changes_nothing_on_the_id_path():
@@ -191,7 +205,9 @@ def test_no_label_changes_nothing_on_the_id_path():
     assert launch_name_args_for_agent_type(label="", agent_type="claude") == []
 
 
-def test_an_unknown_agent_type_gets_the_flag_because_claude_is_what_runs():
+def test_an_unknown_agent_type_gets_the_flag_because_claude_is_what_runs(
+    installed_claude_supports_name,
+):
     """THE FLAG MUST AGREE WITH THE COMMAND, not with the id.
 
     ``Settings.get_agent_command`` deliberately falls back to the DEFAULT

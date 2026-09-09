@@ -45,7 +45,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import structlog
 
@@ -132,7 +132,24 @@ DEFAULT_SOCKET_NAME: str = "cloude"
 #: history-limit through the normal option lookup when it trims a pane's
 #: history, so a later change reaches existing panes too, but setting it
 #: first means a pane is never briefly born under the stock limit.
-HISTORY_LIMIT: int = 10000
+#:
+#: Matched to xterm.js's own ``scrollback: 50000`` in
+#: ``client/js/terminal.js``. A pane that retains less than the browser is
+#: willing to show is a ceiling the user hits with nothing to tell them
+#: which layer stopped them, so the two are kept equal deliberately. This
+#: is what tmux RETAINS; how much of it is replayed to a client on attach
+#: is ``AuthConfig.session.scrollback_lines``, which is smaller on purpose
+#: because the replay crosses a phone's network and ANSI parser.
+#:
+#: Memory: roughly 10-30 MB per pane at 50000 lines by 172 columns,
+#: depending on how many cells carry attributes. Real, but tmux only
+#: allocates lines that exist, so an idle session costs nothing like that.
+#:
+#: This is only reachable at all because CloudeCode launches agents with
+#: ``CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`` (see
+#: ``AuthConfig.session.disable_alternate_screen``). An alternate-screen
+#: pane retains ZERO history whatever this says.
+HISTORY_LIMIT: int = 50000
 
 #: Session name prefix - ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
@@ -843,6 +860,39 @@ class TmuxBackend(SessionBackend):
             pipe=str(pipe_path),
         )
 
+    def _record_tail_start_offset(self) -> None:
+        """Pin the byte the tail loop must start from, as of RIGHT NOW.
+
+        Description: reads the pipe file's current size and stores it in
+          ``self._adopt_tail_start_offset``, which ``_tail_loop`` seeks to
+          instead of ``SEEK_END`` when it finally opens the fd. Call it
+          immediately after ``ensure_pipe_pane`` returns, on EVERY attach
+          path - that call is the moment tmux is known to be appending to
+          this path, so it is the earliest offset that cannot replay
+          history and the latest one that cannot lose live output.
+          A file that does not exist yet records 0, which replays nothing
+          because there is nothing there, and a stat that fails records 0
+          for the same reason: re-delivering a little is recoverable,
+          dropping the stream is not.
+        Inputs: none (reads ``self``).
+        Output: None. Sets ``self._adopt_tail_start_offset``.
+        Example: await self.ensure_pipe_pane(attaching=True)
+                 self._record_tail_start_offset()
+        """
+        try:
+            pipe_path = self._resolve_pipe_path()
+            if pipe_path.exists():
+                self._adopt_tail_start_offset = pipe_path.stat().st_size
+            else:
+                self._adopt_tail_start_offset = 0
+        except OSError as exc:
+            logger.warning(
+                "adopt_fifo_offset_stat_failed",
+                session=self.tmux_session,
+                error=str(exc),
+            )
+            self._adopt_tail_start_offset = 0
+
     async def attach_existing(self, needs_pipe_setup: bool = False) -> None:
         """Rehydrate state for an existing tmux session on our socket.
 
@@ -937,19 +987,7 @@ class TmuxBackend(SessionBackend):
             # scrollback capture (step 5 in ``adopt_external_session``)
             # pulls from tmux's visible-pane buffer, so there's no
             # overlap contest here.
-            try:
-                pipe_path = self._resolve_pipe_path()
-                if pipe_path.exists():
-                    self._adopt_tail_start_offset = pipe_path.stat().st_size
-                else:
-                    self._adopt_tail_start_offset = 0
-            except OSError as exc:
-                logger.warning(
-                    "adopt_fifo_offset_stat_failed",
-                    session=self.tmux_session,
-                    error=str(exc),
-                )
-                self._adopt_tail_start_offset = 0
+            self._record_tail_start_offset()
 
             # 3. Defensive remain-on-exit so external death doesn't silently
             # collapse the pane mid-adoption. Users who need tear-down
@@ -981,22 +1019,104 @@ class TmuxBackend(SessionBackend):
             )
             await self._apply_history_limit()
 
-        # Recompute / re-resolve pipe file path. It was written to by the
-        # old Python process; the tmux server kept pipe-pane running, so
-        # the file is still being appended to. We tail from current EOF.
+        # THE INVARIANT THIS METHOD OWES ITS CALLER: when it returns,
+        # tmux's ``pipe-pane`` is writing to the SAME path the tail loop
+        # is about to read. Nothing above establishes that for a backend
+        # that skipped the external-setup block, so it is established
+        # here.
+        #
+        # What used to be here instead: a check for the file's existence
+        # that, on a miss, logged ``tmux_backend_pipe_missing_recreating``
+        # and called ``pipe_path.touch()``. Its comment reasoned that "the
+        # old pipe-pane process inside tmux continues, we just make sure
+        # our file target exists" - and that is precisely the mistake. A
+        # MISSING pipe file is positive proof of the opposite: no
+        # pipe-pane is writing to this path, because if one were, the file
+        # would be there. ``touch()`` then created an empty file that
+        # nothing writes to and handed it to ``_tail_loop``, which sat at
+        # its EOF forever. The pane's real output was going to a different
+        # path entirely - the same tmux session reached through
+        # ``for_external`` resolves ``tmux_ext_<slug>.pipe`` while the boot
+        # re-adopt builds an OWNED backend that resolves
+        # ``tmux_adopted_<slug>.pipe``.
+        #
+        # MEASURED on the owner's box: ``tmux_adopted_cloude_cloudecode``
+        # .pipe sat at 0 bytes while ``tmux_ext_cloude_cloudecode.pipe``
+        # grew past 2.7 MB, and the browser showed a terminal frozen at
+        # whatever the last attach had painted. The paint kept working
+        # throughout and that is what made it confusing: it goes through
+        # ``capture_visible_screen()``, which asks tmux directly and never
+        # touches this file, so every re-attach produced fresh text and
+        # every keystroke in between produced nothing.
+        #
+        # ``ensure_pipe_pane`` is the right repair and not a bigger
+        # hammer than needed: it probes ``#{pane_pipe}`` itself, adopts a
+        # pane that has no pipe, replaces one pointed somewhere else, and
+        # creates the file. It is also what the external-setup block above
+        # already calls, so this makes the two attach paths agree instead
+        # of leaving one of them guessing.
         pipe_path = self._resolve_pipe_path()
-        if not pipe_path.exists():
-            # Shouldn't happen if tmux's pipe-pane is alive, but handle gracefully
-            # by re-running pipe-pane to re-establish the pipe. This is a
-            # defensive reconnect - the old pipe-pane process inside tmux
-            # continues, we just make sure our file target exists.
-            logger.warning(
-                "tmux_backend_pipe_missing_recreating",
-                session=self.tmux_session,
-                pipe=str(pipe_path),
-            )
-            pipe_path.parent.mkdir(parents=True, exist_ok=True)
-            pipe_path.touch()
+        if not do_external_setup:
+            try:
+                await self.ensure_pipe_pane(attaching=True)
+                # AND THE OFFSET IS RECORDED ON THIS PATH TOO, for the
+                # same reason step 2b records it on the external one.
+                # ``read_async()`` only calls ``create_task``; the tail
+                # loop cannot open its fd until this coroutine's caller
+                # next yields to the event loop, and every byte tmux
+                # appends in that window is silently dropped by a bare
+                # ``SEEK_END``. Leaving it None here was not a smaller
+                # version of the same behavior, it was the opposite one:
+                # "start where the pane was when we attached" became
+                # "start wherever the pane had got to by the time the
+                # loop happened to schedule us".
+                #
+                # MEASURED, and it is why this is a defect rather than a
+                # slow test: with a pane shell that starts fast enough to
+                # echo before the caller's next await, 9 of 10 attaches
+                # delivered ZERO bytes while the marker sat in the pipe
+                # file every time. The macOS CI runner reproduces it
+                # because a ``tmux send-keys`` subprocess costs more
+                # there than the pane needs to run ``echo``, so the whole
+                # burst lands - prompt included - before the reader opens.
+                # After the burst the pane is idle, so nothing arrives to
+                # reveal the loss: the stream is not late, it is empty.
+                self._record_tail_start_offset()
+            except RuntimeError as exc:
+                # A DEAD PANE IS THE CASE THIS EXISTS FOR, and it is why
+                # the failure is tolerated rather than raised. tmux
+                # answers ``pipe-pane`` on an exited pane with "target
+                # pane has exited", which arrives here as RuntimeError.
+                # The caller that reaches this branch is
+                # ``SessionManager._lifespan_tmux_reconcile``, and it
+                # treats RuntimeError out of ``attach_existing`` as
+                # proof the session is gone: it logs
+                # ``session_backend_attach_failed`` and calls
+                # ``_clear_stale_metadata``. Letting the exception
+                # through would therefore DROP a dead-pane session's
+                # pointer at boot, leaving it reachable only through the
+                # Adopt list - a session the user could previously still
+                # see would silently stop being theirs.
+                #
+                # The old code could not hit that: it only ever called
+                # ``touch()``, which succeeds on a dead pane. So the
+                # fallback here is the previous behavior byte for byte,
+                # and this branch is strictly additive - it can only
+                # improve a pane that CAN be piped and never degrades one
+                # that cannot.
+                #
+                # Only RuntimeError is caught. Anything else - a
+                # cancellation, an OSError writing the file - still
+                # propagates, because those are not "this pane cannot be
+                # piped" and must not be disguised as it.
+                logger.warning(
+                    "tmux_backend_pipe_missing_recreating",
+                    session=self.tmux_session,
+                    pipe=str(pipe_path),
+                    error=str(exc),
+                )
+                pipe_path.parent.mkdir(parents=True, exist_ok=True)
+                pipe_path.touch()
 
         self._pipe_path = pipe_path
         self._running = True
@@ -1033,18 +1153,27 @@ class TmuxBackend(SessionBackend):
         is the toggle form and by this point no pipe is active either way, so
         we want the explicit non-toggle start semantics.
 
-        THE THIRD WAY TO SATISFY THE GUARD, and why it is not a hole in
-        it. The guard below means "this backend has a live pane to pipe
-        from". ``_running`` proves that for a backend that CREATED its
-        pane and ``_is_external`` proves it for one built by
+        THE THIRD WAY TO SATISFY THE GUARD, and what it does and does
+        not promise. The guard below means "this backend has a live pane
+        to pipe from". ``_running`` proves that for a backend that
+        CREATED its pane and ``_is_external`` proves it for one built by
         ``for_external``; neither is true of an OWNED backend attaching
-        to a pane that already exists, which is what the boot re-adopt
-        builds. That caller is not exempted from the precondition - it
-        passes ``attaching=True`` only from inside ``attach_existing``,
-        after ``is_alive()`` and the ``#{pane_dead}`` probe have both
-        answered, so it arrives with a STRONGER and more recent proof of
-        the same fact than either flag carries. Every other caller is
-        unchanged: the default is False, so nothing that is neither
+        to a pane that already exists. ``attaching=True`` is passed only
+        from inside ``attach_existing``, which has at minimum cleared
+        ``is_alive()`` on the SESSION.
+
+        THE PANE, HOWEVER, MAY BE DEAD. ``attach_existing`` runs its
+        ``#{pane_dead}`` probe inside the external-setup block, and the
+        second caller - the one covering the path where that block was
+        skipped - reaches here WITHOUT it. A session can be alive while
+        its pane has exited, and on such a pane tmux answers ``pipe-pane``
+        with "target pane has exited". That is not a bug in either place:
+        this method reports it as RuntimeError and the skipped-setup
+        caller catches RuntimeError and falls back to creating the file,
+        which is what it did before it called here at all. So the
+        contract is "establish the pipe, or say clearly that you could
+        not" - NOT "the pane is guaranteed pipeable". Every other caller
+        is unchanged: the default is False, so nothing that is neither
         running nor external can reach tmux through here by accident.
 
         Inputs: attaching (bool, keyword-only) - True only from
@@ -2370,13 +2499,60 @@ class TmuxBackend(SessionBackend):
         exact geometry, so tmux's own line breaks are the correct ones and
         joining them would re-wrap content that is already right.
 
-        Trailing blank lines are dropped so the cursor ends up immediately
-        after the last real character. That is what makes an unterminated
-        prompt ("password: ") look like a prompt rather than like text
-        with the cursor parked below it.
+        Trailing blank lines are dropped so a short screen does not park
+        the client's cursor on a blank row far below the content.
+
+        THE CURSOR IS PART OF THE SCREEN, AND OMITTING IT PUT EVERY
+        KEYSTROKE IN THE WRONG PLACE. The capture on its own leaves the
+        client's cursor immediately after the last character it wrote,
+        which is where the pane's cursor is only by coincidence. Measured
+        on a real pane 2026-09-08, Claude Code 2.1.266 at 172x53: the
+        pane's cursor sat on row 9 (the prompt line inside its input box)
+        while the capture was 12 lines long, because the box's bottom
+        border, the path/branch line and the mode line all sit BELOW the
+        prompt. So the client was left three rows too low.
+
+        That used to be survivable and is not any more, and the reason is
+        which renderer Claude Code is using. Byte-for-byte on the same
+        keystroke, same pane size:
+
+            alternate screen:  ESC[?25l ESC[H \r ESC[4C ESC[49B l
+                               ESC[53;1H ESC[50;6H ESC[?25h
+            normal screen:     ESC[?25l ESC[5D ESC[4B \r ESC[5C ESC[4A l
+                               \r\n \r\n \r\n \r\n ESC[6C ESC[4A ESC[?25h
+
+        The alternate-screen renderer re-anchors ABSOLUTELY on every
+        frame (``ESC[H`` to start, ``ESC[50;6H`` to finish), so a client
+        whose cursor was wrong is silently corrected by the next
+        keystroke. The normal-screen renderer contains no absolute
+        positioning at all - it is pure ``ESC[nA`` / ``ESC[nB`` / ``\r``
+        / ``ESC[nC`` relative motion - so a wrong starting cursor is
+        never recovered from. It also skips over spaces with ``ESC[nG``
+        rather than writing them, so the row it lands on is not even
+        erased: the user's typed sentence appeared painted ON TOP of the
+        input box's bottom border with the border's dashes showing
+        through every word gap.
+
+        Since ``AuthConfig.session.disable_alternate_screen`` defaults on
+        (it is what makes scrollback exist at all), the normal-screen
+        renderer is the shipped case, so the cursor is restored here with
+        an explicit ``ESC[row;colH``. Rows line up one to one because the
+        caller homes and clears first and ``-S 0`` starts at viewport row
+        1, so tmux's 0-based ``#{cursor_y}`` is simply row ``y + 1``.
+
+        A cursor that cannot be read appends nothing. Leaving the client
+        where the text ended is the old behavior, and an invented
+        position would be worse than the honest absence of one.
+
+        Racing the app is possible and bounded: the cursor is read a
+        couple of milliseconds after the capture, so an app that redraws
+        inside that window is described by a cursor slightly newer than
+        the screen. That is strictly better than the previous state,
+        which was wrong on every attach rather than on a rare one.
 
         Returns:
-            Bytes with CRLF line endings, or ``b""`` on failure.
+            Bytes with CRLF line endings and a trailing absolute cursor
+            positioning sequence, or ``b""`` on failure.
         """
         rc, out, _ = self._run_tmux_sync(
             "capture-pane",
@@ -2393,7 +2569,49 @@ class TmuxBackend(SessionBackend):
         body = out.rstrip(b"\r\n")
         if not body.strip():
             return b""
-        return normalize_replay_newlines(body)
+        screen = normalize_replay_newlines(body)
+        cursor = self.pane_cursor_position()
+        if cursor is None:
+            return screen
+        col, row = cursor
+        return screen + f"\x1b[{row + 1};{col + 1}H".encode("ascii")
+
+    def pane_cursor_position(self) -> Optional[Tuple[int, int]]:
+        """Read the pane's cursor as tmux reports it, 0-based.
+
+        The two values are ``#{cursor_x}`` and ``#{cursor_y}``, both
+        measured from the top-left of the VISIBLE pane, which is the same
+        origin ``capture-pane -S 0`` uses.
+
+        Returns:
+            ``(x, y)`` 0-based, or ``None`` when tmux failed or answered
+            something unparseable. ``None`` is a refusal to claim a
+            position, never a claim of ``(0, 0)``.
+
+        Example:
+            >>> backend.pane_cursor_position()
+            (2, 8)
+        """
+        rc, out, _ = self._run_tmux_sync(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{cursor_x} #{cursor_y}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        parts = out.decode("utf-8", errors="replace").split()
+        if len(parts) != 2:
+            return None
+        try:
+            x, y = int(parts[0]), int(parts[1])
+        except ValueError:
+            return None
+        if x < 0 or y < 0:
+            return None
+        return x, y
 
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""

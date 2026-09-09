@@ -36,8 +36,23 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
+import { makeEnv as startupToastEnv_, toast as startupToast_, cards as startupCards_ }
+    from './lib_toast_dom_stub.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
+
+/**
+ * Description: the shared toast sandbox, bundled with the two helpers
+ *   the startup-prompt case needs, so this suite does not build a second
+ *   fake browser that could disagree with the toast suites' one.
+ * Inputs: None. Output: {container, mgr, toast, cards}.
+ */
+function startupToastEnv() {
+    const env = startupToastEnv_();
+    return { container: env.container, mgr: env.mgr,
+             toast: startupToast_, cards: startupCards_ };
+}
 
 let failures = 0;
 let passes = 0;
@@ -278,8 +293,22 @@ test('the toast kind is registered as blocking', () => {
         'a startup prompt is blocking and the user cannot see it by glancing '
         + 'at the terminal, so it must be HIGH - which is also what makes it '
         + 'cap-exempt and unable to hide behind "+3 more"');
-    assert.match(src, /StartupPrompt: \(t\) =>/,
-        'it must declare a coalesce key, or two of them would stack');
+    // The coalesce key it used to declare is gone, and correctly: every
+    // status toast now collapses onto ONE CARD PER SESSION, so a second
+    // startup prompt cannot stack whatever this kind declares. What has
+    // to hold instead is that it wins that card - it is the blocking
+    // half of the `input` bucket it shares with Notification, and a
+    // chatty notification taking the card would drop the card's
+    // severity from 3 to 2 and with it the cap exemption asserted above.
+    const { container, mgr, toast, cards } = startupToastEnv();
+    mgr.add(toast('StartupPrompt', 'needs a keypress', 'trust this folder?'));
+    mgr.add(toast('StartupPrompt', 'needs a keypress', 'trust this folder?'));
+    mgr.add(toast('Notification', 'wants your attention', 'idle'));
+    const c = cards(container);
+    assert.equal(c.length, 1, 'one session, one card');
+    assert.equal(c[0].getAttribute('data-kind'), 'StartupPrompt',
+        'a session parked on an unanswered startup prompt must keep the card');
+    assert.equal(c[0].getAttribute('data-severity'), '3');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

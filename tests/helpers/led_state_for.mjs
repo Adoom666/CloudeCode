@@ -11,9 +11,17 @@
 // is pure by contract and must keep loading with none of the app around
 // it.
 //
-// Usage:  echo '{"activity_status":"idle","unread":true}' | node tests/led_state_for.node.mjs
+// Usage:  echo '{"activity_status":"idle","unread":true}' | node tests/helpers/led_state_for.mjs
 // Prints: {"inner":"done","outer":"unread"}
 // Exits non-zero, with the reason on stderr, if the row cannot be mapped.
+//
+// WHY IT LIVES UNDER tests/helpers/ AND NOT tests/. The javascript job runs
+// `for suite in tests/*.node.mjs; do node "$suite"; done`. This file reads a
+// row from stdin, so run with no input it exits 2 with "could not parse the
+// row as JSON" - a CLI behaving correctly, reported by that loop as a failed
+// test suite. Renaming it out of the glob is the fix: it is a helper for
+// tests/test_led_real_hooks.py, not a suite, and nothing should have to
+// remember to exclude it by name.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,7 +38,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  */
 function loadStatusLed() {
     const src = fs.readFileSync(
-        path.join(here, '..', 'client', 'js', 'status-led.js'),
+        path.join(here, '..', '..', 'client', 'js', 'status-led.js'),
         'utf8'
     );
     const sandbox = { console: { log() {}, warn() {}, error() {} } };

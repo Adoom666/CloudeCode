@@ -156,6 +156,106 @@ def test_wrapper_script_file_permissions(tmp_path):
 
 
 # ---------------------------------------------------------------------- #
+# CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN - the scrollback switch
+#
+# Claude Code's fullscreen renderer draws on the terminal's ALTERNATE
+# screen, and an alternate-screen pane has no scrollback anywhere in the
+# chain: tmux keeps zero history for it (measured `history_size=0` even
+# with `history-limit` at 10000), and xterm.js applies its own scrollback
+# to the normal buffer only. So "scroll back through the conversation"
+# cannot be delivered by any capture-side change while that renderer is
+# in use - the lines were never retained by anything.
+#
+# Setting CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 moves Claude Code to the
+# normal screen, where lines that scroll off the top enter tmux's real
+# history. Measured on a throwaway tmux socket on 2026-09-08 against
+# Claude Code 2.1.265, same pane geometry, same user settings.json (which
+# carries "tui": "fullscreen"):
+#
+#     without the env var:  alternate_on=1  history_size=0    capture -S - -> 12 lines
+#     with    the env var:  alternate_on=0  history_size=137  capture -S - -> 149 lines
+#
+# The env var wins over the settings.json renderer choice, which is the
+# whole reason this is safe to set per launch.
+# ---------------------------------------------------------------------- #
+
+DISABLE_ALT = "export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
+
+
+def test_disable_alternate_screen_exports_the_var_before_the_agent_runs(tmp_path):
+    """The export must precede the sourced script, or it never applies."""
+    w = AgentWrapper(id="claude", label="claude", script="command claude")
+    cmd = render_wrapper_invocation(w, tmp_path, disable_alternate_screen=True)
+    assert DISABLE_ALT in cmd
+    assert cmd.index(DISABLE_ALT) < cmd.index("claude.zsh"), (
+        "the export lands after the script is sourced, so the agent it is "
+        "meant to configure has already been launched without it"
+    )
+
+
+def test_disable_alternate_screen_off_exports_nothing(tmp_path):
+    """Opting out must leave the launch byte-identical to before."""
+    w = AgentWrapper(id="claude", label="claude", script="command claude")
+    off = render_wrapper_invocation(w, tmp_path, disable_alternate_screen=False)
+    assert "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN" not in off
+    assert off == render_wrapper_invocation(w, tmp_path)
+
+
+def test_the_export_survives_into_a_function_style_wrapper(tmp_path):
+    """A wrapper whose script DEFINES a function must still get the var.
+
+    ``cld`` is a function body in a ``( ... )`` subshell. The export is
+    emitted in the same ``zsh -c`` shell that sources the definition and
+    then calls it, so the subshell inherits it - which is the only reason
+    one export can serve both wrapper shapes.
+    """
+    w = AgentWrapper(
+        id="cld", label="cld", script=EXAMPLE_WRAPPER_CLD, entry="cld"
+    )
+    cmd = render_wrapper_invocation(w, tmp_path, disable_alternate_screen=True)
+    assert cmd.index(DISABLE_ALT) < cmd.rindex("cld")
+
+
+def test_settings_disables_the_alternate_screen_for_launches_by_default(tmp_path):
+    """The setting is on out of the box, because scrollback is the point."""
+    config_data = {
+        "agents": {
+            "wrappers": [
+                {
+                    "id": "claude",
+                    "label": "claude",
+                    "script": "command claude",
+                    "default": True,
+                }
+            ]
+        }
+    }
+    s = _settings_with_config(tmp_path, config_data)
+    assert s.load_auth_config().session.disable_alternate_screen is True
+    assert DISABLE_ALT in s.get_agent_command("claude")
+
+
+def test_turning_the_setting_off_removes_the_export_from_the_launch(tmp_path):
+    """The escape hatch for anyone who wants the flicker-free renderer."""
+    config_data = {
+        "session": {"disable_alternate_screen": False},
+        "agents": {
+            "wrappers": [
+                {
+                    "id": "claude",
+                    "label": "claude",
+                    "script": "command claude",
+                    "default": True,
+                }
+            ]
+        },
+    }
+    s = _settings_with_config(tmp_path, config_data)
+    assert s.load_auth_config().session.disable_alternate_screen is False
+    assert "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN" not in s.get_agent_command("claude")
+
+
+# ---------------------------------------------------------------------- #
 # The real cld body — round trip + resolved invocation (verification bar)
 # ---------------------------------------------------------------------- #
 

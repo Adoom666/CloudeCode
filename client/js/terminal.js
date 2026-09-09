@@ -336,7 +336,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 // isMouse gate as the two guards above, same reason: a
                 // pointer move is not an answer. After the send, so a
                 // dropped frame does not clear a toast nobody answered.
-                if (!isMouse) this._noteUserInputToSession();
+                if (!isMouse) this._noteUserInputToSession(data);
             }
         });
 
@@ -533,10 +533,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * Wire the two session-scoped FAB menus, split by JOB not by corner.
      *
      * TOOLS (#terminalToolsBtn) moves content across the terminal's
-     * boundary: copy output, paste from clipboard, attach image. SESSION
-     * EDITOR (#sessionEditorBtn) configures the session itself: theme and
-     * music. They were merged into one drawer once and the grouping had
-     * no rule a user could learn; keep them apart.
+     * boundary: copy output, paste from clipboard, attach image. It is
+     * the only FAB of the two and is mobile-only (terminal-tools.css).
+     * SESSION EDITOR (#sessionEditorBtn) configures the session itself:
+     * theme and detach, and is a header button now. They were merged
+     * into one drawer once and the grouping had no rule a user could
+     * learn; keep them apart.
      *
      * Both buttons and the file input live OUTSIDE #terminal, so
      * term.reset() on a session swap cannot wipe their handlers and the
@@ -771,7 +773,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     sendKeyToTerminal(keyData) {
         if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
-        this._noteUserInputToSession();
+        this._noteUserInputToSession(keyData);
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(new TextEncoder().encode(keyData));
         } else {
@@ -909,9 +911,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // Connect WebSocket
         setTimeout(() => this.connectWebSocket(), 500);
-
-        // Load any locally-detected dev servers for this session
-        this.loadLocalServers();
     }
 
     /**
@@ -1054,10 +1053,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // fit/font readiness dance in connectWebSocket() has a stable
         // container to measure.
         setTimeout(() => this.connectWebSocket(), 500);
-
-        // Refresh local-servers panel in case dev servers came up or
-        // shut down while the user was away on the launchpad.
-        this.loadLocalServers();
     }
 
     /**
@@ -1205,12 +1200,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *
      * Output: void.
      */
-    _noteUserInputToSession() {
+    _noteUserInputToSession(data) {
         const sessionId = this._sessionId();
         if (!sessionId) return;
         if (window.ToastManager
             && typeof window.ToastManager.dismissForSessionActivity === 'function') {
-            window.ToastManager.dismissForSessionActivity(sessionId);
+            window.ToastManager.dismissForSessionActivity(sessionId, data);
         }
     }
 
@@ -1414,7 +1409,46 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     setupWebSocketHandlers() {
         if (!this.ws) return;
 
+        // ISOLATION GATE. There is one xterm in the page and the user moves
+        // between sessions inside it. `WebSocket.close()` only STARTS the
+        // closing handshake, so a socket we have already replaced keeps
+        // dispatching the frames that were in flight, and these handlers
+        // close over the controller rather than over their own socket -
+        // which put session A's transcript inside session B's terminal.
+        // Capture the socket and the session it was opened FOR, and let
+        // TerminalFrameGuard decide, in one place, whether an event may act.
+        // See client/js/terminal-frame-guard.js for the full reasoning.
+        const sock = this.ws;
+        const boundSessionId = this._sessionId();
+        const live = (what) => {
+            const verdict = window.TerminalFrameGuard
+                ? window.TerminalFrameGuard.accepts({
+                    socket: sock,
+                    liveSocket: this.ws,
+                    boundSessionId,
+                    currentSessionId: this._sessionId(),
+                })
+                // Module missing is a load-order failure, not a licence to
+                // paint foreign bytes: fall back to the socket-identity
+                // half of the rule rather than to "allow".
+                : { ok: sock === this.ws, reason: 'guard-unavailable' };
+            if (!verdict.ok) {
+                // Detach so a superseded socket stops costing us anything
+                // at all after its first stray event.
+                sock.onmessage = null;
+                sock.onopen = null;
+                sock.onerror = null;
+                sock.onclose = null;
+                console.warn(
+                    `Terminal: dropped ${what} from ${verdict.reason}`,
+                    { boundSessionId, currentSessionId: this._sessionId() }
+                );
+            }
+            return verdict.ok;
+        };
+
         this.ws.onopen = () => {
+            if (!live('open')) return;
             console.log('Terminal: WebSocket connected');
 
             // Reset reconnect state
@@ -1485,6 +1519,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 this._forceScrollToBottom(800);
             }
 
+            // The socket is up. Record it so the sidebar row and the
+            // launchpad card for THIS session stop showing the red
+            // "disconnected" light - see client/js/session-transport.js
+            // for why this fact lives outside the session row model.
+            if (globalThis.SessionTransport) {
+                globalThis.SessionTransport.mark(
+                    this._currentTmuxName(),
+                    globalThis.SessionTransport.CONNECTED);
+            }
+
             // Start keepalive ping
             if (this.keepaliveInterval) {
                 clearInterval(this.keepaliveInterval);
@@ -1497,6 +1541,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         };
 
         this.ws.onmessage = (event) => {
+            // THE confidentiality check. Everything painted into the shared
+            // xterm arrives here, so this is the one gate that has to hold.
+            if (!live('frame')) return;
             // Handle binary frames (PTY data)
             if (event.data instanceof ArrayBuffer) {
                 this.enqueue(new Uint8Array(event.data));
@@ -1513,11 +1560,30 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         };
 
         this.ws.onerror = (error) => {
+            if (!live('error')) return;
             console.error('Terminal: WebSocket error:', error);
             this.updateStatus('WebSocket error', 'error');
         };
 
         this.ws.onclose = (event) => {
+            // A superseded socket's close is not this session's disconnect.
+            // Without this the LIVE socket's reference was nulled by the OLD
+            // socket's close event, and the reconnect + banner ran for a
+            // session the user had already left.
+            if (!live('close')) {
+                // The keepalive belongs to the controller, not to this
+                // socket, and the live branch below is what used to stop
+                // it. When nothing is attached any more - detach/destroy
+                // closed us and set ws to null - that branch will never
+                // run, so stop the timer here rather than leaking it. A
+                // socket superseded while another session IS attached
+                // leaves the timer alone: it is that session's now.
+                if (!this.ws && this.keepaliveInterval) {
+                    clearInterval(this.keepaliveInterval);
+                    this.keepaliveInterval = null;
+                }
+                return;
+            }
             const closeCode = (event && typeof event.code === 'number') ? event.code : null;
             console.log('Terminal: WebSocket closed', { code: closeCode });
             this.ws = null;
@@ -1534,7 +1600,22 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (this._intentionalClose) {
                 console.log('Terminal: intentional close, skipping reconnect');
                 this._intentionalClose = false;
+                // A DELIBERATE CLOSE IS NOT A DISCONNECTION. Clearing
+                // rather than marking is the difference between "we lost
+                // this session" and "you left it", and only the first
+                // may paint a row red.
+                if (globalThis.SessionTransport) {
+                    globalThis.SessionTransport.clear();
+                }
                 return;
+            }
+
+            // The socket dropped under us. Every other status signal on
+            // this session is now stale, so its light says so.
+            if (globalThis.SessionTransport) {
+                globalThis.SessionTransport.mark(
+                    this._currentTmuxName(),
+                    globalThis.SessionTransport.DISCONNECTED);
             }
 
             this.updateStatus('Disconnected', 'error');
@@ -1612,8 +1693,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * header status affordance (updateStatus) and the shared notice
      * (_showStatusPill); nothing is dropped, it just stops interleaving.
      *
-     * @param {{type: string, content?: string, message?: string,
-     *   url?: string, port?: number}} message - a decoded WS frame.
+     * @param {{type: string, content?: string, message?: string}} message
+     *   - a decoded WS frame.
      * @returns {void}
      */
     handleWebSocketMessage(message) {
@@ -1621,17 +1702,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         if (type === 'log') {
             if (message.content) this._showStatusPill(message.content, 'info');
-        } else if (type === 'local_server_detected') {
-            // Plan v3.2 - A dev server was detected on the host and
-            // confirmed as a live TCP listener. Merge into local state
-            // and re-render.
-            if (message.url) {
-                this._showStatusPill(`local server detected: ${message.url}`, 'info');
-            }
-            this._mergeLocalServer({ port: message.port, url: message.url });
-        } else if (type === 'local_server_lost') {
-            // The janitor sweep stopped seeing this listener - drop it.
-            this._dropLocalServer(message.port);
         } else if (type === 'error') {
             this._showStatusPill(`error: ${message.message}`, 'error');
         } else if (type === 'pong') {
@@ -2117,88 +2187,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     }
 
     /**
-     * Resolve the tmux session name to query the local-servers endpoint
-     * for. Returns null when no session is active or the name can't be
-     * read (e.g. fresh session view, server not yet replied).
-     */
-    _activeSessionName() {
-        const sess = this._currentSession;
-        if (!sess) return null;
-        return sess.tmux_session || sess.id || null;
-    }
-
-    /**
-     * Load locally-detected dev servers for the active session and paint
-     * them into the Local Servers panel. Detection is server-side only;
-     * this call is a pure read.
-     */
-    async loadLocalServers() {
-        const name = this._activeSessionName();
-        if (!name) {
-            this._localServers = [];
-            this._renderLocalServers();
-            return;
-        }
-        try {
-            const list = await window.API.getLocalServers(name);
-            this._localServers = Array.isArray(list) ? list : [];
-            this._renderLocalServers();
-        } catch (error) {
-            console.error('Terminal: Error loading local servers:', error);
-        }
-    }
-
-    /**
-     * Merge a single local-server entry into local state (idempotent on
-     * port). Triggered by the `local_server_detected` WS event.
-     */
-    _mergeLocalServer(entry) {
-        if (!entry || !entry.port) return;
-        if (!Array.isArray(this._localServers)) this._localServers = [];
-        const idx = this._localServers.findIndex(s => s.port === entry.port);
-        if (idx === -1) {
-            this._localServers.push({ port: entry.port, url: entry.url });
-        } else {
-            this._localServers[idx] = { ...this._localServers[idx], url: entry.url };
-        }
-        this._localServers.sort((a, b) => a.port - b.port);
-        this._renderLocalServers();
-    }
-
-    /**
-     * Drop a local-server entry by port. Triggered by `local_server_lost`.
-     */
-    _dropLocalServer(port) {
-        if (!Array.isArray(this._localServers)) return;
-        this._localServers = this._localServers.filter(s => s.port !== port);
-        this._renderLocalServers();
-    }
-
-    /**
-     * Repaint the Local Servers panel from `this._localServers`. Hides
-     * the container when no entries are tracked.
-     */
-    _renderLocalServers() {
-        const container = document.getElementById('localServersContainer');
-        const list = document.getElementById('localServersList');
-        if (!container || !list) return;
-
-        const entries = Array.isArray(this._localServers) ? this._localServers : [];
-        if (entries.length === 0) {
-            container.style.display = 'none';
-            list.innerHTML = '';
-            return;
-        }
-        container.style.display = 'block';
-        list.innerHTML = entries.map(entry => `
-            <div class="local-server-item">
-                <span class="local-server-port">${entry.port}</span>
-                <a class="local-server-url" href="${entry.url}" target="_blank" rel="noopener">${entry.url}</a>
-            </div>
-        `).join('');
-    }
-
-    /**
      * Destroy session
      *
      * Description: kills the tmux session and terminates the Claude
@@ -2399,7 +2387,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // Send text to terminal without newline
         this.ws.send(new TextEncoder().encode(text));
-        this._noteUserInputToSession();
+        this._noteUserInputToSession(text);
 
         console.log('Terminal: Inserted text:', text);
     }

@@ -226,7 +226,7 @@ console.log('[SessionSidebarReorder Module] Loading...');
     function onKeydown(e) {
         const row = e.target.closest && e.target.closest('.session-sidebar-row');
         if (!row || !row.dataset.name) return;
-        // A nested control (pin button, grip, mark-unread, delete) owns its
+        // A nested control (pin button, grip, kebab, delete) owns its
         // own keys; the row-level handler must not also fire for them.
         if (e.target !== row) return;
         const name = row.dataset.name;

@@ -354,49 +354,11 @@ body.session-sidebar-pinned .session-sidebar-panel {
     flex-shrink: 0;
 }
 
-/* ---- Manual mark-unread toggle --------------------------------------
- * feat/hook-driven-status - lets the user pin a session unread for
- * followup regardless of its live activity state. Distinct control from
- * the status dot (which is read-only); this one is interactive, so it
- * gets its own hit target and focus ring rather than piggybacking on the
- * dot's small hitbox. */
-
-.mark-unread-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    line-height: 1;
-    color: var(--color-fg-faint);
-    cursor: pointer;
-    flex-shrink: 0;
-    user-select: none;
-}
-
-.mark-unread-toggle:hover,
-.mark-unread-toggle:focus-visible {
-    color: var(--color-fg-strong);
-    background: var(--color-bg-hover);
-    outline: none;
-}
-
-.mark-unread-toggle:focus-visible {
-    box-shadow: 0 0 0 2px var(--color-accent-border);
-}
-
-.mark-unread-toggle--active {
-    /* Pinned unread - same warm color as the finished-unread dot so the
-     * two visually agree on what "unread" means. */
-    color: var(--color-warning);
-}
-
 /* ---- Per-row close / remove -----------------------------------------
  * The row's one destructive control: X (close) on a running row, trash
  * (remove) on a stopped one, built by client/js/session-row-actions.js
  * and styled identically either way - the glyph carries the difference,
- * not the color. Sized/positioned to match .mark-unread-toggle
+ * not the color. Sized/positioned to match .session-sidebar-row-pin
  * (same 18x18 hit target) but always neutral-colored until hover, then
  * goes red - same treatment as .project-delete-btn - so a destructive
  * control never looks alarming until the user is actually pointed at it. */

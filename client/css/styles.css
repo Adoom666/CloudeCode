@@ -29,7 +29,7 @@
     --color-bg:               #1e1e1e;            /* body / terminal / modal */
     --color-bg-page:          #0a0a0a;            /* header / tooltip surface */
     --color-bg-elevated:      #2d2d30;            /* panels / inputs / cards */
-    --color-bg-card:          #252526;            /* local servers card */
+    --color-bg-card:          #252526;            /* elevated card background */
     --color-bg-hover:         #323235;            /* row hover state */
     --color-bg-overlay:       rgba(0, 0, 0, 0.85); /* modal scrim */
     --color-header-bg: var(--color-bg);
@@ -170,26 +170,28 @@
     --fab-slot-0: var(--fab-edge);
     --fab-slot-1: calc(var(--fab-edge) + var(--fab-step));
 
-    /* THE TOP-RIGHT RAIL. A DIFFERENT AXIS, NOT A THIRD BOTTOM SLOT.
-     *
-     * The session editor is the only control up here. It shares the
-     * bottom row's right edge (--fab-slot-0), so it and the terminal
-     * tools button sit on ONE vertical rail against the right edge
-     * rather than at two unrelated insets, and it is offset DOWNWARD
-     * from the header rather than from the viewport top.
+    /* THERE IS NO TOP-RIGHT RAIL, AND NO `--fab-top-edge` TOKEN.
      *
      * A wide three-icon strip used to cover the terminal's top edge
-     * here. It was removed and the uncovered top edge was a real gain.
-     * This rail is deliberately expressed as a single vertical offset
-     * with NO step token: there is nothing to lay a second control out
-     * against, so adding one takes a deliberate edit rather than a
-     * copy-paste of `--fab-top-slot-1`.
+     * here, and after it was removed the session editor was pinned back
+     * over that corner alone, offset downward from the header by a
+     * token that resolved to one --fab-gap below --header-h. Written as
+     * prose, not as a declaration, because a stale example in a comment
+     * is enough to satisfy a test that greps for one. The session
+     * editor is a header control now
+     * (client/css/session-editor-header.css), so nothing is left to
+     * offset and the token is deleted rather than left defined and
+     * unread - the same rule that killed `--fab-slot-2` above. Wanting
+     * a floating control over the terminal's top corner again means
+     * writing this back deliberately, which is the point.
      *
-     * --header-h is derived, not measured. Its three parts are the same
-     * tokens .header and the bare `button` rule use at each breakpoint,
-     * so the clearance cannot drift when the header is restyled. The
-     * standalone safe-area inset is added in ios-chrome.css, where the
-     * header takes it too. */
+     * --header-h below stays, and is still derived rather than
+     * measured: the fixed layers that must clear the header
+     * (.fab-menu-notice, the config-editor drawer) read it, and its
+     * parts are the same tokens .header and .btn-icon use at each
+     * breakpoint, so the clearance cannot drift when the header is
+     * restyled. The standalone safe-area inset is added in
+     * ios-chrome.css, where the header takes it too. */
     --header-pad-y: 12px;
     /* The header's side padding, and therefore the gap between the
      * viewport edge and the first control in the header. Tokenised
@@ -216,7 +218,6 @@
     --home-subheader-extra: 0px;
     --header-h: calc(var(--control-size) + var(--header-pad-y) * 2
                      + var(--header-border) + var(--home-subheader-extra));
-    --fab-top-edge: calc(var(--header-h) + var(--fab-gap));
 
     /* The app's default round control, and therefore what sets the
      * header's height. Bumped to a thumb target on touch widths. */
@@ -320,8 +321,9 @@ body {
     z-index: 1000;
     background: var(--color-bg-page);
     /* Vertical padding and the border are two of the three parts of
-     * --header-h, which the top-right FAB clears itself against. Write
-     * the number here and the FAB slides under the header. */
+     * --header-h, which every fixed layer that has to sit BELOW the
+     * header derives its own top offset from. Write the number here
+     * instead and those layers slide under the header. */
     padding: var(--header-pad-y) var(--header-pad-x);
     border-bottom: var(--header-border) solid var(--color-accent);
 }
@@ -1087,9 +1089,6 @@ body.home-header-active {
     flex: 1;
     padding: 15px;
     overflow: hidden;
-    /* Positioning context for #localServersContainer, which is an overlay
-     * so that showing it can never resize #terminal. See .local-servers. */
-    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1188,102 +1187,6 @@ body.home-header-active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-/* ---------------------------------------------------------------------- */
-/* Local Servers panel - pure detection readout. The server tracks any   */
-/* dev port detected in pane output (Vite, Next, Flask, etc.) and pushes */
-/* `local_server_detected` / `local_server_lost` over the WebSocket. The */
-/* row is intentionally minimal: monospace port chip on the left, the    */
-/* clickable URL on the right. No CRUD affordances - display-only.       */
-/* ---------------------------------------------------------------------- */
-.local-servers {
-    /* AN OVERLAY, NOT A ROW IN THE COLUMN. This panel is toggled between
-     * `none` and `block` by Terminal#_renderLocalServers every time the
-     * local-servers fetch resolves and on every `local_server_detected` /
-     * `local_server_lost` websocket event - so it appears and disappears
-     * seconds after a connect, on its own schedule.
-     *
-     * While it was an in-flow sibling of `.terminal-container` it stole
-     * about four rows of height from `#terminal` each time it appeared
-     * and gave them back when it went. The ResizeObserver correctly read
-     * that as a real geometry change, shipped a pty_resize, tmux raised
-     * SIGWINCH, and claude answered with `ESC[2J` + a full redraw. On the
-     * alternate screen that erases the whole visible conversation, which
-     * is exactly what a user saw a few seconds after every reconnect:
-     * `215x45 source=ResizeObserver` then `215x41` eight seconds later.
-     * A panel listing dev servers must not be able to wipe the terminal.
-     *
-     * Out of flow inside `.terminal-container` (which is `position:
-     * relative` for this), so `#terminal` keeps the full height at all
-     * times and the observer never sees it move. It still shows nothing
-     * when there are no servers, so it covers output only when it has
-     * something to say. */
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 5;
-    max-height: 40%;
-    overflow-y: auto;
-    background: var(--color-bg-card);
-    padding: 14px 20px 16px;
-    border-top: 1px solid var(--color-border);
-    box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28);
-}
-
-.local-servers h3 {
-    margin: 0 0 10px;
-    color: var(--color-syntax-cyan);
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
-
-.local-server-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: var(--color-bg-elevated);
-    padding: 8px 12px;
-    margin-bottom: 6px;
-    border-radius: var(--radius-md);
-    border-left: 3px solid var(--color-syntax-cyan);
-    transition: transform 0.12s ease, box-shadow 0.12s ease;
-}
-
-.local-server-item:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.12);
-}
-
-.local-server-item:last-child {
-    margin-bottom: 0;
-}
-
-.local-server-port {
-    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-    font-size: 0.85rem;
-    color: var(--color-syntax-cyan);
-    font-weight: 600;
-    min-width: 56px;
-    text-align: right;
-    opacity: 0.85;
-}
-
-.local-server-url {
-    color: var(--color-syntax-blue);
-    text-decoration: none;
-    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-    font-size: 0.85rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.local-server-url:hover {
-    text-decoration: underline;
 }
 
 /* Auth screen styles */
@@ -3105,7 +3008,7 @@ body.home-header-active {
  * 1.875px stroke (24 -> 18 scales by 0.75). The shared helper in
  * session-status-ui.js draws a 16x16 viewBox at 16px and stroke-width
  * 1.5, which lands at an 8x8 glyph with a 1.5px stroke: visibly lighter
- * and smaller than the pencil and envelope it sits beside.
+ * and smaller than the pencil it sits beside.
  *
  * Sizing is the host surface's job by design (SessionRowActions.html()
  * takes a surfaceClass for exactly this), so correct it here rather than

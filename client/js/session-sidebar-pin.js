@@ -12,7 +12,7 @@
  * fix for that. Pinning individual sessions to the top of the list would
  * be a different feature solving a problem the list does not have - it
  * already sorts this-tab first, then live, then newest, and it carries a
- * mark-unread control for "come back to this one".
+ * kebab menu for "come back to this one".
  *
  * PINNED means: docked, not overlaid. No backdrop, no auto-close when a
  * row is clicked, and the header + terminal are padded to the right of

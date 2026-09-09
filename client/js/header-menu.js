@@ -22,12 +22,21 @@
  *   - `#session-sidebar-toggle`, top-LEFT and the one-handed reach
  *     target on a phone. This module never touches it.
  *   - Home and detach, which no longer exist as header buttons: clicking
- *     the title goes home, and detach moved to the session editor FAB.
+ *     the title goes home, and detach moved into the session editor.
  *
  * SCOPE BOUNDARY: this menu is APP-scoped and mounts on every screen
  * including the launchpad, where no session exists. Anything
- * session-scoped belongs to the session editor FAB, which hides itself
- * when nothing is attached.
+ * session-scoped belongs to the session editor, which hides itself when
+ * nothing is attached.
+ *
+ * THAT CONTROL NOW SITS IN THE SAME `.controls` ROW, AND IS STILL NOT
+ * THIS MENU'S BUSINESS. It is static markup in index.html and is scoped
+ * to the terminal screen by CSS (client/css/session-editor-header.css).
+ * It is deliberately absent from both id lists below: it must never
+ * fold into an app-scoped overflow, and it never needed the inline list
+ * either, since that list exists only to keep controls OUT of this
+ * overflow. Sharing a row is not the same as sharing an owner - the
+ * tests assert this file never names it at all.
  *
  * THERE IS NO AUDIO CONTROL HERE, AND ADDING ONE WOULD BE A REGRESSION.
  * An "app sound (all sessions)" toggle used to live in this menu. Being

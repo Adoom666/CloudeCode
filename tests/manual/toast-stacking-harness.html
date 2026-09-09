@@ -65,7 +65,15 @@
      be testing a container the app does not have. -->
 <div class="toast-container" id="toast-container"></div>
 
-<!-- THE REAL EMITTER. -->
+<!-- THE REAL EMITTER, and the two modules that decide which card a
+     toast lands on. One card per session is not a property of toast.js
+     alone: the attention order lives in session-status-summary.js and
+     the join from a hook event name to one of its buckets lives in
+     toast-session-group.js. A harness that loaded only toast.js would
+     measure the degraded fallback - per-kind coalescing - while every
+     assertion below read as if it had measured the shipped policy. -->
+<script src="../../client/js/session-status-summary.js"></script>
+<script src="../../client/js/toast-session-group.js"></script>
 <script src="../../client/js/toast.js"></script>
 
 <script>
@@ -111,14 +119,20 @@ window.__seq = 0;
  * @param {boolean} [vary] - give each a distinct body, so a `Stop` burst
  *   is the real-world case (transcript tails differ) rather than a
  *   byte-identical one that would coalesce for an easier reason.
+ * @param {boolean} [spread] - put each toast in a session of its own.
+ *   THE CAP CANNOT BE MEASURED WITHOUT THIS. A session gets exactly one
+ *   card now, so twelve toasts in one session are one card by
+ *   definition; a stack tall enough to need a cap is a stack spanning
+ *   several sessions, which is also the real-world shape - the screen
+ *   that prompted this was two sessions, not one.
  * @returns {void}
  */
-window.__burst = function (n, kind, vary) {
+window.__burst = function (n, kind, vary, spread) {
     for (let i = 0; i < n; i++) {
         window.__seq += 1;
         window.ToastManager.add({
             id: 'probe-' + window.__seq,
-            session_id: 'sess-probe',
+            session_id: spread ? ('sess-probe-' + window.__seq) : 'sess-probe',
             kind: kind,
             title: kind === 'Stop' ? 'Your turn'
                  : kind === 'PermissionRequest' ? 'Permission needed'

@@ -305,11 +305,35 @@ def _write_script_file(wrapper: AgentWrapper, scripts_dir: Path) -> Path:
     return path
 
 
+#: Moves Claude Code off the terminal's ALTERNATE screen and onto the
+#: normal one. This is the only thing that makes scrollback physically
+#: exist for a CloudeCode session: an alternate-screen pane retains no
+#: history in tmux (measured ``history_size=0`` with ``history-limit``
+#: at 10000) and xterm.js applies its ``scrollback`` to the normal buffer
+#: only, so the entire chain holds exactly one screen.
+#:
+#: Measured on a throwaway tmux socket, 2026-09-08, Claude Code 2.1.265,
+#: identical panes, with the user's own settings.json carrying
+#: ``"tui": "fullscreen"``:
+#:
+#:     without:  alternate_on=1  history_size=0    capture -S - -> 12 lines
+#:     with:     alternate_on=0  history_size=137  capture -S - -> 149 lines
+#:
+#: The env var overrides the settings.json renderer choice, so it is a
+#: per-launch decision and needs no edit to the user's own config.
+#:
+#: Emitted for every family, not just claude. It is inert to anything
+#: that is not Claude Code, and a plain shell session that launches
+#: claude by hand should behave like one CloudeCode launched.
+_DISABLE_ALTERNATE_SCREEN = "export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"
+
+
 def render_wrapper_invocation(
     wrapper: AgentWrapper,
     scripts_dir: Path,
     model: Optional[str] = None,
     extra_args: Optional[List[str]] = None,
+    disable_alternate_screen: bool = False,
 ) -> str:
     """Build the single shell-string command for launching this wrapper.
 
@@ -334,6 +358,16 @@ def render_wrapper_invocation(
         was placed in. Note the ``_`` throwaway $0 is emitted whenever
         there is ANY argument, model or not - without it the first real
         argument would silently become $0 and never reach "$@".
+      disable_alternate_screen (bool) - emit
+        ``export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`` ahead of the
+        sourced script, so the agent renders on the normal screen and
+        real scrollback accumulates. See ``_DISABLE_ALTERNATE_SCREEN``
+        for the measurement. It goes in the ``zsh -c`` shell rather than
+        into the script FILE for two reasons: the file is written
+        byte-for-byte as the user stored it and that round trip is a
+        tested invariant, and an export in the sourcing shell is
+        inherited by both wrapper shapes - a bare command line and a
+        ``cld() ( ... )`` subshell function alike.
     Output: str - e.g.
       ``zsh -c 'source ~/.zshrc >/dev/null 2>&1 </dev/null; source '"'"'/path/cld.zsh'"'"' "$@"; cld "$@"' _ some-model``
     Example: render_wrapper_invocation(cld_wrapper, dir, None) ->
@@ -341,6 +375,8 @@ def render_wrapper_invocation(
     """
     path = _write_script_file(wrapper, scripts_dir)
     inner = f"source {shlex.quote(str(path))} \"$@\""
+    if disable_alternate_screen:
+        inner = f"{_DISABLE_ALTERNATE_SCREEN}; {inner}"
     if wrapper.entry and wrapper.entry.strip():
         inner += f"; {shlex.quote(wrapper.entry.strip())} \"$@\""
     outer = rc_prefixed(inner)

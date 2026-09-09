@@ -1,6 +1,12 @@
 /**
  * Session status summary - roll a set of sessions up into ONE LED.
  *
+ * ONE COMPONENT, TWO PLACES. The roll-up is not a header-shaped dot: it
+ * is `StatusLed.ledHtml` with an (inner, outer) pair this module folds
+ * out of the children, so a group header and a row cannot draw two
+ * different vocabularies. The finished-turn ring in particular is the
+ * SAME ring on both.
+ *
  * A group header (and the launchpad's top bar, which is the same question
  * asked of every session at once) has to answer "is there anything in
  * here I need to deal with" without the user opening the group. That is a
@@ -43,6 +49,9 @@ console.log('[SessionStatusSummary Module] Loading...');
      */
     const SUMMARY_PRIORITY = [
         { key: 'permission', inner: 'waiting-permission', outer: 'active' },
+        // `inner` here is the STOPPED half of this bucket. A group whose
+        // only members are `notice` renders light blue instead - see
+        // summarizeStates.
         { key: 'input', inner: 'waiting-input', outer: 'active' },
         { key: 'working', inner: 'working', outer: 'active' },
         { key: 'unread', inner: 'done', outer: 'unread' },
@@ -73,11 +82,24 @@ console.log('[SessionStatusSummary Module] Loading...');
     function bucketFor(led) {
         const l = led || {};
         if (l.inner === 'waiting-permission') return 'permission';
-        if (l.inner === 'waiting-input') return 'input';
+        // `notice` joins `waiting-input` in the SAME bucket even though
+        // the five-colour pass gave it its own hue. The bucket answers
+        // "what is the most interesting thing in this group", and both
+        // of these are one answer: a session that wants the user without
+        // being stopped by a yes/no. The colour split is a rendering
+        // decision on the ROW; hoisting it into the fold would change the
+        // documented priority (permission > input > working > unread >
+        // done > dead > unknown), which it must not.
+        if (l.inner === 'waiting-input' || l.inner === 'notice') return 'input';
         if (l.inner === 'working') return 'working';
         if (l.outer === 'unread') return 'unread';
         if (l.inner === 'done') return 'done';
-        if (l.inner === 'dead') return 'dead';
+        // `disconnected` is a transport fact and no group feeds one in
+        // today - children come from a REST listing, which has no socket.
+        // It buckets with `dead` rather than adding an eighth bucket
+        // because they paint the same red and rank the same way: neither
+        // is the headline for a group that also holds live sessions.
+        if (l.inner === 'dead' || l.inner === 'disconnected') return 'dead';
         return 'unknown';
     }
 
@@ -112,6 +134,8 @@ console.log('[SessionStatusSummary Module] Loading...');
         const present = Object.create(null);
         let unreadCount = 0;
         let total = 0;
+        // See the `input` bucket note in the loop below.
+        let inputIsStopped = false;
 
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
@@ -120,6 +144,18 @@ console.log('[SessionStatusSummary Module] Loading...');
             const led = globalThis.StatusLed.ledStateFor(row);
             const bucket = bucketFor(led);
             present[bucket] = true;
+            // ONE BUCKET, TWO HUES. The `input` bucket holds both
+            // `waiting-input` (stopped on a startup prompt, yellow) and
+            // `notice` (still working, wants a look, light blue). The
+            // bucket's RANK is the same for both - that is the product
+            // decision and it does not move - but the header still has
+            // to paint one of them, and a header that disagrees with its
+            // only child is a bug this suite already guards. Yellow wins
+            // inside the bucket, because a stopped session is the one
+            // that will not move until someone goes to it.
+            if (bucket === 'input' && led.inner === 'waiting-input') {
+                inputIsStopped = true;
+            }
             // Counted off the ROW's flag, not off the halo: a working
             // session with an unread Stop buckets as `working` but is
             // still one unread thing waiting for the user, and the badge
@@ -140,8 +176,12 @@ console.log('[SessionStatusSummary Module] Loading...');
         for (let i = 0; i < SUMMARY_PRIORITY.length; i++) {
             const entry = SUMMARY_PRIORITY[i];
             if (present[entry.key]) {
+                const inner =
+                    entry.key === 'input' && !inputIsStopped
+                        ? 'notice'
+                        : entry.inner;
                 return {
-                    inner: entry.inner,
+                    inner: inner,
                     outer: entry.outer,
                     bucket: entry.key,
                     unreadCount: unreadCount,
@@ -164,22 +204,33 @@ console.log('[SessionStatusSummary Module] Loading...');
     }
 
     /**
-     * The summary LED plus its unread-count badge, as one HTML string.
+     * The summary LED, as one HTML string.
      *
      * Description: What a group header and the launchpad top bar both
-     *   render. The badge is omitted entirely at zero rather than shown
-     *   as "0" - an empty badge is noise, and its absence is already the
-     *   signal. Copy is lowercase and plain, per the project's voice.
+     *   render, and it is EXACTLY the component the rows render - this
+     *   function only picks the (inner, outer) pair and hands it to
+     *   `StatusLed.ledHtml`. A roll-up therefore takes every treatment a
+     *   row LED takes, including the green-ring-with-grey-centre that
+     *   says a turn finished in here and nobody has looked. Building a
+     *   second dot for headers is what would let the two drift.
+     *
+     *   THERE IS NO LONGER A NUMERIC BADGE BESIDE IT. A yellow "(n)" pill
+     *   used to carry the unread count; it was removed on 2026-09-09 at
+     *   the owner's request. The count is not replaced by anything,
+     *   deliberately: the ring already says "there is something here for
+     *   you", and a second indicator for one fact is how two indicators
+     *   end up disagreeing. `summarizeStates` still RETURNS
+     *   `unreadCount` - it is a measured property of the fold and cheap
+     *   to keep - but nothing renders it.
      * Inputs:
      *   children (Array|null) - as summarizeStates.
      *   opts (Object|null) - `{size}` forwarded to ledHtml.
      * Output:
-     *   string - HTML: one `.status-led` and, when non-zero, one
-     *     `.status-summary-badge`.
+     *   string - HTML for one `.status-led`.
      * Example:
      *   summaryHtml([{activity_status: 'idle', unread: true}])
-     *   // '<span class="status-led" ...></span>
-     *   //  <span class="status-summary-badge" ...>1</span>'
+     *   // '<span class="status-led" data-inner="done" data-outer="unread"
+     *   //   ...></span>'
      */
     function summaryHtml(children, opts) {
         const o = opts || {};
@@ -188,25 +239,12 @@ console.log('[SessionStatusSummary Module] Loading...');
             s.total === 0
                 ? 'no sessions'
                 : s.bucket + ' - ' + s.total + ' session' + (s.total === 1 ? '' : 's');
-        let html = globalThis.StatusLed.ledHtml({
+        return globalThis.StatusLed.ledHtml({
             inner: s.inner,
             outer: s.outer,
             size: o.size,
             title: label,
         });
-        if (s.unreadCount > 0) {
-            const badgeLabel = s.unreadCount + ' unread';
-            html +=
-                '<span class="status-summary-badge" role="status" ' +
-                'title="' +
-                badgeLabel +
-                '" aria-label="' +
-                badgeLabel +
-                '">' +
-                s.unreadCount +
-                '</span>';
-        }
-        return html;
     }
 
     const api = {

@@ -9,12 +9,13 @@
 // Claude Code session lives - there is no scrollback, so `ESC[2J` clears
 // the whole visible conversation.
 //
-// `#localServersContainer` was an in-flow sibling of `.terminal-container`
-// that Terminal#_renderLocalServers toggles between `none` and `block`
-// whenever the local-servers fetch resolves or a websocket event lands.
-// Each appearance took ~4 rows from #terminal, the ResizeObserver read it
-// as a real change, and the user's screen was wiped seconds after every
-// reconnect (`215x45 source=ResizeObserver` then `215x41` 8s later).
+// `#localServersContainer` (the "LOCAL SERVERS" panel, removed entirely
+// 2026-09-08) used to be an in-flow sibling of `.terminal-container`,
+// toggled between `none` and `block` whenever the local-servers fetch
+// resolved or a websocket event landed. Each appearance took ~4 rows
+// from #terminal, the ResizeObserver read it as a real change, and the
+// user's screen was wiped seconds after every reconnect
+// (`215x45 source=ResizeObserver` then `215x41` 8s later).
 //
 // So there are two things to hold down here, and they are different: the
 // panel must not be able to change the terminal's height (the fix), and
@@ -152,7 +153,13 @@ await test('the culprit description never throws and never blocks', () => {
 });
 
 // ---------------------------------------------------------------------
-// The fix: the panel cannot change the terminal's height any more.
+// The panel itself is gone (removed 2026-09-08 - the "LOCAL SERVERS"
+// bar the user saw between the terminal and the session status bar).
+// The guard module above is untouched and still active for whatever
+// transient element appears next; these tests now assert the panel's
+// removal left no CSS rule, no markup, and no dead JS behind, and that
+// the terminal container still lays out correctly with nothing overlaid
+// on it any more.
 // ---------------------------------------------------------------------
 
 /**
@@ -167,49 +174,32 @@ function ruleBody(selector) {
     return css.slice(i, css.indexOf('\n}', i));
 }
 
-await test('positive control: the rules under test actually exist', () => {
-    assert.ok(ruleBody('.local-servers').length > 0, '.local-servers rule missing');
-    assert.ok(ruleBody('.terminal-container').length > 0,
-        '.terminal-container rule missing');
+await test('.local-servers has no CSS rule any more', () => {
+    assert.equal(ruleBody('.local-servers'), '',
+        'the panel was removed; its CSS rule must not linger');
 });
 
-await test('#localServersContainer lives INSIDE the terminal container', () => {
+await test('#localServersContainer is gone from index.html, terminal container remains', () => {
     const html = fs.readFileSync(path.join(CLIENT, 'index.html'), 'utf8');
-    const open = html.indexOf('<div class="terminal-container">');
-    assert.ok(open > 0, 'the terminal container is gone');
-    const close = html.indexOf('</div>', html.indexOf('id="localServersContainer"'));
-    const panel = html.indexOf('id="localServersContainer"');
-    assert.ok(panel > open,
-        'the panel must be inside the terminal container, not a sibling below '
-        + 'it - as a sibling its appearance shrinks #terminal and erases the '
-        + 'conversation');
-    assert.ok(close > panel, 'malformed markup');
+    assert.ok(html.indexOf('<div class="terminal-container">') > 0,
+        'the terminal container itself must still be present');
+    assert.equal(html.indexOf('id="localServersContainer"'), -1,
+        'the panel markup was removed and must not reappear');
 });
 
-await test('the panel is out of flow, so showing it cannot resize #terminal', () => {
-    const body = ruleBody('.local-servers');
-    assert.match(body, /position:\s*absolute/,
-        'an in-flow panel steals height from #terminal when it appears');
-    assert.match(body, /bottom:\s*0/, 'it must be pinned, not merely offset');
-});
-
-await test('the terminal container is the positioning context for it', () => {
-    const body = ruleBody('.terminal-container');
-    assert.match(body, /position:\s*relative/,
-        'without this the overlay escapes to the nearest positioned ancestor '
-        + 'and can cover the bottom bar');
-});
-
-await test('the panel is still hidden when there is nothing to show', () => {
+await test('the local-servers fetch/render methods are gone from terminal.js', () => {
     const src = fs.readFileSync(path.join(CLIENT, 'js', 'terminal.js'), 'utf8');
-    // Anchor on the METHOD DEFINITION, not the first mention: the call
-    // sites in loadLocalServers() come earlier in the file.
-    const at = src.indexOf('_renderLocalServers() {');
-    assert.ok(at > 0, 'the render method is gone');
-    const fn = src.slice(at, at + 800);
-    assert.match(fn, /display\s*=\s*'none'/,
-        'an overlay that is always present would cover terminal output for '
-        + 'every user who has no dev servers running');
+    for (const name of ['_renderLocalServers', 'loadLocalServers',
+        '_mergeLocalServer', '_dropLocalServer', '_activeSessionName']) {
+        assert.equal(src.indexOf(name), -1, `${name} must be fully removed`);
+    }
+});
+
+await test('.terminal-container still fills the available height with nothing overlaid', () => {
+    const body = ruleBody('.terminal-container');
+    assert.ok(body.length > 0, '.terminal-container rule missing');
+    assert.match(body, /flex:\s*1/,
+        'the terminal container must still fill the space it is given');
 });
 
 // ---------------------------------------------------------------------

@@ -106,8 +106,11 @@ console.log('[SessionSidebarGroups Module] Loading...');
      *   section is FOLDED. It is a fold over the section's own rows via
      *   SessionStatusSummary, so it cannot disagree with the lights
      *   underneath it - both resolve through the same mapping rather than
-     *   through two copies of the rules. The unread count rides along as
-     *   a badge, and is omitted entirely at zero.
+     *   through two copies of the rules. It is the SAME component the
+     *   rows draw, so it takes every treatment they take, including the
+     *   green ring around a cleared centre that says a turn finished in
+     *   here and nobody has looked. There is no numeric unread badge
+     *   beside it any more - see summaryHtml for why it went.
      * Inputs: key (string) - one of KEYS. count (number) - rows in the
      *   section, shown so a folded section still says how much it hides.
      *   collapsed (boolean). rows (Array<object>|undefined) - the

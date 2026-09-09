@@ -179,7 +179,11 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
         "UserPromptSubmit+tools",
         want_status=("working", "working_subagent"),
         want_inner=("working",),
-        want_outer=("active", "unread"),
+        # `active` ONLY since the 2026-09-08 five-colour pass. A working
+        # session no longer takes the unread halo: that halo is now the
+        # green finished-turn ring, and a ring saying a turn ended around
+        # a session that is mid-turn is two contradictory claims.
+        want_outer=("active",),
         timeout=60.0,
     )
 
@@ -357,7 +361,11 @@ def test_a_real_permission_request_paints_the_waiting_state(
         live,
         "PermissionRequest",
         want_status=("question", "notice"),
-        want_inner=("waiting-permission", "waiting-input"),
+        # THREE inner states, because either hook may be the one that
+        # arrives. `question` is yellow (the agent is stopped), `notice`
+        # is light blue (it is not), and a startup prompt landing here
+        # would be `waiting-input`. See client/js/status-led.js.
+        want_inner=("waiting-permission", "waiting-input", "notice"),
         want_outer=("active",),
     )
 

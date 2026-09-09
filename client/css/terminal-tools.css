@@ -6,9 +6,12 @@
  * TWO MENUS, ON PURPOSE, WITH A LEARNABLE RULE.
  *   .terminal-tools-fab   moves content across the terminal's boundary:
  *                         copy output, paste from clipboard, attach image
- *   .session-editor-fab   configures the session itself: theme, music
- * They share their look and their machinery (.fab-menu-btn here,
- * fab-menu.js there) and differ only in glyph, rows and placement.
+ *   #sessionEditorBtn     configures the session itself: theme, detach
+ * They still share their machinery (fab-menu.js) and differ in glyph,
+ * rows and surface. Only the first one is a FAB: the session editor is a
+ * header control now and is styled and placed in
+ * client/css/session-editor-header.css, so nothing in this file places
+ * it. The tools FAB is MOBILE ONLY - see its media query below.
  *
  * Everything here is theme-aware through the same semantic tokens the
  * rest of the chrome uses, so a per-session theme restyles these
@@ -21,11 +24,12 @@
 /* ---------------------------------------------------------------------
  * FAB triggers
  *
- * NO STRIP OVER THE TERMINAL'S TOP EDGE. A folded three-icon tool strip
+ * NOTHING OVER THE TERMINAL'S TOP EDGE. A folded three-icon tool strip
  * used to sit over the top-right corner and cover output across its
- * whole width; it is gone entirely, not hidden. The session editor is
- * pinned back over that corner as ONE 45px button, which is what was
- * asked for; the strip is not coming back.
+ * whole width; it is gone entirely, not hidden. The session editor was
+ * pinned back over that corner as ONE 45px button for a while and has
+ * since moved into the header, so the corner is empty. Neither the strip
+ * nor a single button is coming back there.
  *
  * GEOMETRY IS SHARED, NOT RESTATED. The old paperclip sat at
  * `right: 16px` with a 44px box while `.dpad-float-button` sat at
@@ -59,21 +63,25 @@
 
 /* Terminal-only. `#launchpad-screen.active` is set by app.js#showLaunchpad
  * and cleared by hideAllScreens() before any other screen is activated,
- * so this reliably scopes both buttons to live sessions. Neither one
- * names anything on a screen with no session attached. */
-/* THE ARCHIVE IS THE THIRD SCREEN WITH NO SESSION ATTACHED, so it joins
- * the list rather than getting a workaround.
+ * so this reliably scopes the button to live sessions. It names nothing
+ * on a screen with no session attached.
  *
- * MEASURED at 1440x900 before this line: .archive-screen__export-btn
- * occupied x 1348-1430 / y 97-128 and .session-editor-fab (z-index 60)
- * occupied x 1375-1420 / y 74-119 - a 45x22px overlap sitting on the
- * middle of the Export label, which is why every screenshot of that
- * toolbar read "Ex####t".
+ * THIS LIST REACHES ONE BUTTON NOW, not two: the session editor is a
+ * header control and gets its scoping from an ALLOW-LIST in
+ * session-editor-header.css instead. Keep this one, though - the tools
+ * FAB is still a `.fab-menu-btn` and still needs every screen named.
+ *
+ * THE ARCHIVE IS THE THIRD SCREEN WITH NO SESSION ATTACHED, and it is on
+ * this list because of a measured collision, which is worth keeping as
+ * the reason the list is a list. MEASURED at 1440x900 before that line:
+ * .archive-screen__export-btn occupied x 1348-1430 / y 97-128 and the
+ * then-floating session editor (z-index 60) occupied x 1375-1420 /
+ * y 74-119 - a 45x22px overlap sitting on the middle of the Export
+ * label, which is why every screenshot of that toolbar read "Ex####t".
  *
  * The alternative was right-padding on .archive-screen__tools equal to
  * the FAB's footprint. That was rejected: it moves the collision without
- * removing it, and it leaves a session-scoped control - the one that
- * configures a session's theme, music and detach - floating over a
+ * removing it, and it leaves a session-scoped control floating over a
  * screen that has no session for it to act on. Hiding it is the same
  * reasoning that already applies to the launchpad and the auth screen,
  * stated once in one selector list. */
@@ -100,42 +108,57 @@ body:has(#archive-screen.active) .fab-menu-btn {
     background: var(--color-accent-bg, var(--color-bg-elevated));
 }
 
-/* Slot 0, the right edge. Shown at EVERY pointer type: the paperclip it
- * replaces was coarse-pointer only because it was an iOS paste
- * workaround, but this button also owns the copy sheet, which desktop
- * used to reach through the strip that is gone. */
+/* Slot 0, the right edge. */
 .terminal-tools-fab {
     right: var(--fab-slot-0);
 }
 
-/* THE TOP-RIGHT RAIL, NOT A BOTTOM SLOT.
+/* MOBILE ONLY, AND THE LINE IS THE D-PAD'S LINE.
  *
- * The session editor configures the session rather than acting on its
- * output, so it is the one control that does not belong in the row of
- * things you reach for while working. It is back in the top-right
- * corner, where it was before the bottom row was unified.
+ * The owner's words: "this icon and popup menu should only be visible on
+ * mobile view." So the trigger AND the menu it opens are gone above the
+ * breakpoint - `display: none`, not merely unreachable, because a menu
+ * left painted with no trigger is worse than either.
  *
- * ONE BUTTON, AND IT STAYS ONE. The wide three-icon strip that used to
- * live here covered terminal output and removing it uncovered the
- * terminal's top edge, which was a real gain. This is a single 45px
- * target on the same right rail as the terminal-tools button below it
- * (both take --fab-slot-0), so the two read as one column rather than
- * two loose corners.
+ * WHY 769px AND NOT A NEW NUMBER. This button sits in the bottom row
+ * beside `.dpad-float-button`, which styles.css already makes touch-only
+ * with `@media (min-width: 769px) { display: none !important }`. Two
+ * controls in one row that disappear at two different widths is how a
+ * row ends up with a hole in it at some third width nobody tested. The
+ * app's OTHER "mobile" number, MOBILE_MAX_PX = 700 in
+ * session-sidebar-pin.js and config-drawer-pin.js, answers a different
+ * question - "is there room to dock a panel" - and is deliberately not
+ * reused here.
  *
- * `bottom: auto` is REQUIRED, not decorative: .fab-menu-btn above sets
- * `bottom: var(--fab-edge)`, and a box with both top and bottom set and
- * a fixed height honours top and ignores bottom only because height is
- * declared - stating auto is what makes that explicit rather than
- * accidental. ios-chrome.css has the matching pair for standalone mode.
+ * PURE CSS ON PURPOSE. A JS check (`window.innerWidth <= 768`, the way
+ * dpad.js decides) would paint the button on first frame and remove it
+ * once the script ran, which is a flash of a control the desktop user
+ * was told they do not have.
  *
- * No breakpoint. The bottom row needed one because desktop hides the
- * d-pad and left a hole in the middle of it; a rail of one control has
- * no hole to close, so the same rule serves phone and desktop. */
-.session-editor-fab {
-    top: var(--fab-top-edge);
-    bottom: auto;
-    right: var(--fab-slot-0);
+ * WHAT DESKTOP KEEPS, and it is not all three rows. "paste from
+ * clipboard" is fully covered: xterm's own text paste handles cmd+V,
+ * and terminal.js's capture-phase paste handler uploads a pasted FILE
+ * and injects its path, which is the attach flow by another route.
+ * "copy output" (the whole-scrollback sheet) and "attach file" (the
+ * file picker) have NO other entry point on desktop - cmd+C still
+ * copies a mouse selection, but that is a different job. Recorded here
+ * rather than fixed here: the owner asked for the button to be mobile
+ * only, and inventing replacement desktop UI is a separate decision. */
+@media (min-width: 769px) {
+    .terminal-tools-fab,
+    .terminal-tools-menu {
+        display: none !important;
+    }
 }
+
+/* NO `.session-editor-fab` RULE, AND NO TOP-RIGHT RAIL. The session
+ * editor was the only control on that rail. It is a header button now
+ * (client/css/session-editor-header.css), so the rail, its
+ * `--fab-top-edge` token in styles.css and its safe-area pair in
+ * ios-chrome.css were all removed with it rather than left defined and
+ * unread - an orphan token is how a retired layout gets revived by
+ * accident. The terminal's top edge is uncovered again, which is what
+ * removing the old three-icon strip bought in the first place. */
 
 /* ---------------------------------------------------------------------
  * THE CONNECTION-LIGHT BAR.

@@ -1,12 +1,13 @@
 /**
  * The kebab (vertical three-dot) glyph, in ONE place.
  * ----------------------------------------------------------------------
- * This app draws a kebab in two places now: the app header's overflow
- * menu at the top right (client/js/header-menu.js) and the per-row
- * overflow menu in the conversations sidebar
- * (client/js/session-row-menu.js). The owner asked for the second one
- * "like in main sites top right", which is a request for the SAME
- * control, so the mark is defined once rather than typed out twice.
+ * This app draws a kebab in ONE place: the app header's overflow menu at
+ * the top right (client/js/header-menu.js). It briefly drew a second one
+ * on every conversation row, which is why the mark was extracted here
+ * rather than typed out twice; that row menu was removed on 2026-09-08
+ * and the extraction is kept, because a glyph inlined at its only call
+ * site is exactly how this app ended up with two drifting copies of it
+ * the first time.
  *
  * GLYPH WEIGHT IS LOAD BEARING, and this is the header's docblock moved
  * here with the markup it describes. The original kebab drew three
@@ -29,11 +30,10 @@
  * takes.
  *
  * The viewBox is fixed at 16 units whatever the pixel size, so a smaller
- * rendering (the sidebar row uses 16px) scales the same three dots down
- * rather than drawing a different, thinner mark.
+ * rendering scales the same three dots down rather than drawing a
+ * different, thinner mark.
  *
- * No dependencies. Must load BEFORE header-menu.js and before
- * session-sidebar-rows.js.
+ * No dependencies. Must load BEFORE header-menu.js.
  */
 
 console.log('[KebabIcon Module] Loading...');
@@ -61,7 +61,7 @@ console.log('[KebabIcon Module] Loading...');
      *     around it carries the accessible name.
      * Example:
      *   KebabIcon.svg()   // 20x20, byte-identical to the header's glyph
-     *   KebabIcon.svg(16) // the sidebar row's smaller rendering
+     *   KebabIcon.svg(16) // a smaller rendering, same three dots
      */
     function svg(size) {
         var px = (typeof size === 'number' && size > 0) ? size : DEFAULT_SIZE;

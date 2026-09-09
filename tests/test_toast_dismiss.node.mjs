@@ -155,13 +155,15 @@ test('the Dismiss all control is absent with one toast, present with two', async
     assert.equal(row.textContent, 'Dismiss all (2)');
 });
 
-test('the control counts TOASTS, not cards, so a coalesced pile offers it', () => {
+test('the control counts CARDS, so the number matches what is on screen', () => {
     const { container, mgr } = makeEnv();
     for (let i = 0; i < 4; i++) mgr.add(toast('Stop', 'Your turn', `t${i}`, 'A'));
     assert.equal(cards(container).length, 1, 'setup: one coalesced card');
+    assert.equal(dismissAllRow(container), null,
+        'one card is not a pile, so the control does not appear');
+    mgr.add(toast('Notification', 'other', 'b', 'B'));
     const row = dismissAllRow(container);
-    assert.ok(row, 'four records behind one card is exactly the pile-up case');
-    assert.equal(row.textContent, 'Dismiss all (4)');
+    assert.equal(row.textContent, 'Dismiss all (2)', 'two cards, two counted');
 });
 
 test('the control sits at the head of the stack, above every card', () => {
@@ -227,13 +229,16 @@ test('the control DISCLOSES the blocking prompts it is about to clear', () => {
 });
 
 test('an expanded overflow does not survive a Dismiss all', async () => {
+    // EIGHT SESSIONS, not eight toasts in one: a session now gets one
+    // card, so eight cards means eight sessions. Anything less never
+    // reaches the cap and this case would expand nothing.
     const { container, mgr } = makeEnv();
-    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `n${i}`, `b${i}`, 'A'));
+    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `n${i}`, `b${i}`, `A${i}`));
     container.querySelector('.toast-overflow').click();
     assert.ok(cards(container).length > 3, 'setup: expanded past the cap');
     dismissAllRow(container).click();
     await settle();
-    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `m${i}`, `c${i}`, 'A'));
+    for (let i = 0; i < 8; i++) mgr.add(toast('Notification', `m${i}`, `c${i}`, `A${i}`));
     assert.equal(cards(container).length, 3,
         'an emptied stack must come back capped, not still expanded');
 });
@@ -355,7 +360,11 @@ test('the onData and Shift+Enter call sites are still wired', () => {
     // not a behavioural test, and must not be mistaken for one.
     const src = fs.readFileSync(
         path.join(ROOT, 'client/js/terminal.js'), 'utf8');
-    assert.match(src, /if \(!isMouse\) this\._noteUserInputToSession\(\);/,
+    // The call now carries the POST-TRANSFORM bytes, which is what lets
+    // an attachment receipt tell a send apart from a keystroke. It must
+    // be `data` and not the raw event: by this line the mobile keyboard's
+    // Yen key has already become '\n', and a newline is not a submit.
+    assert.match(src, /if \(!isMouse\) this\._noteUserInputToSession\(data\);/,
         'term.onData must clear the session, gated on the SAME isMouse test '
         + 'the neighbouring guards use - a pointer move is not an answer');
     assert.match(

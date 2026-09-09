@@ -14,14 +14,21 @@ THE CLAIMS, EACH MEASURED AS BOXES:
   1. a burst of twelve repeats PAINTS ONE card, and that card paints a
      count badge with a real non-zero box - not a title string that
      happens to contain "x12"; and
-  2. a burst of twelve DISTINCT toasts paints at most the cap, plus an
-     overflow row whose stated count EQUALS what was withheld; and
+  2. a burst of twelve toasts ACROSS TWELVE SESSIONS paints at most the
+     cap, plus an overflow row whose stated count EQUALS what was
+     withheld; and
   3. the visible stack fits the viewport - the whole point of a cap is
      that the pile stops before the screen ends; and
   4. a PermissionRequest arriving LAST, behind ten Notifications, is
      still painted, above them, and never behind the overflow row; and
   5. clicking the overflow row paints every card it was holding, so the
-     suppression is reversible and the toasts were held, not dropped.
+     suppression is reversible and the toasts were held, not dropped; and
+  6. TWO DIFFERENT KINDS FOR ONE SESSION PAINT ONE CARD, and it is the
+     blocking one. This is the defect the one-card-per-session change
+     was written for: "wants your attention" and "Your turn" painted
+     side by side about the same session. A DOM assertion can say the
+     tree holds one card; only a box can say the second one stopped
+     being drawn.
 
 4 and 5 together are the "never silently lose an error" check. A cap that
 buried a blocking prompt, or dropped what it withheld, would trade an
@@ -203,7 +210,8 @@ def run_case(page, tag: str, width: int, height: int, cap: int) -> None:
 
     # -- CLAIMS 2 and 3. Twelve DISTINCT toasts: capped, counted, on screen.
     page.evaluate(
-        "() => { window.__reset(); window.__burst(12, 'Notification', true); }")
+        "() => { window.__reset(); "
+        "window.__burst(12, 'Notification', true, true); }")
     b = measure(page, f"{tag}/burst", width)
     if b is None:
         return
@@ -261,8 +269,8 @@ def run_case(page, tag: str, width: int, height: int, cap: int) -> None:
     # -- CLAIM 4. A blocking prompt is painted, on top, never in overflow.
     page.evaluate("""() => {
         window.__reset();
-        window.__burst(10, 'Notification', true);
-        window.__burst(1, 'PermissionRequest', true);
+        window.__burst(10, 'Notification', true, true);
+        window.__burst(1, 'PermissionRequest', true, true);
     }""")
     b = measure(page, f"{tag}/priority", width)
     if b is None:
@@ -286,6 +294,35 @@ def run_case(page, tag: str, width: int, height: int, cap: int) -> None:
     if ov is not None and ov["worstSeverity"] not in ("0", "1", "2"):
         fail(f"{tag}: the overflow row is holding severity "
              f"{ov['worstSeverity']}, i.e. a blocking prompt")
+
+    # -- CLAIM 6. One session, three kinds, ONE painted card - and it is
+    #    the blocking one. `spread` is deliberately OFF here: everything
+    #    lands on sess-probe, which is the reported screen.
+    page.evaluate("""() => {
+        window.__reset();
+        window.__burst(6, 'Stop', true);
+        window.__burst(2, 'Notification', true);
+        window.__burst(1, 'PermissionRequest', true);
+    }""")
+    b = measure(page, f"{tag}/one-per-session", width)
+    if b is None:
+        return
+    cards = painted(b["cards"])
+    if len(cards) != 1:
+        fail(f"{tag}: nine events in ONE session painted {len(cards)} cards, "
+             f"not 1: {[c['title'] for c in cards]}. That is the pile the "
+             f"user reported, one level up")
+    else:
+        c = cards[0]
+        if c["kind"] != "PermissionRequest":
+            fail(f"{tag}: the session's one card is showing {c['kind']!r}; a "
+                 f"session blocked on a yes/no must not paint chatter instead")
+        if c["badgeText"] is not None:
+            fail(f"{tag}: the card paints a count badge reading "
+                 f"{c['badgeText']!r} beside a title that happened ONCE. The "
+                 f"badge counts the kind on the card, not the session's pile")
+    if b["overflow"] is not None:
+        fail(f"{tag}: one card still rendered an overflow row")
 
 
 def main() -> int:
@@ -344,7 +381,8 @@ def main() -> int:
         for m in FAILURES:
             print(f"  - {m}")
         return 1
-    print(f"PASS: cap, coalescing, priority and the overflow row measured as "
+    print(f"PASS: one card per session, the cap, the count badge, priority "
+          f"and the overflow row measured as "
           f"painted boxes across {len(THEMES)} themes x {len(VIEWPORTS)} "
           f"viewports")
     return 0

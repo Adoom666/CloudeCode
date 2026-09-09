@@ -71,7 +71,7 @@ function loadModules() {
     return { Led: context.StatusLed, Summary: context.SessionStatusSummary };
 }
 
-const { Summary } = loadModules();
+const { Led, Summary } = loadModules();
 
 /**
  * Re-create a sandbox value in this realm - see the same helper in
@@ -135,7 +135,12 @@ test('a notice beats working but loses to a permission prompt', () => {
         ]),
     );
     assert.equal(withWork.bucket, 'input');
-    assert.equal(withWork.inner, 'waiting-input');
+    // The BUCKET is `input` - that rank is the product decision and did
+    // not move with the five-colour pass. The rendered inner is `notice`
+    // because every member of the bucket here IS a notice, and a header
+    // that painted the stopped yellow over a group holding nothing
+    // stopped would be claiming something nobody measured.
+    assert.equal(withWork.inner, 'notice');
 
     // THE HEADLINE IS THE PARKED SESSION, not the chatty one. A group
     // holding both must point the user at the row that will not move
@@ -237,20 +242,62 @@ test('the badge counts unread ROWS, not unread-coloured lights', () => {
     assert.equal(s.bucket, 'working');
 });
 
-test('summaryHtml omits the badge entirely at zero', () => {
-    const html = Summary.summaryHtml([{ activity_status: 'idle' }]);
-    assert.ok(html.includes('status-led'), 'the LED is always rendered');
-    assert.ok(!html.includes('status-summary-badge'), 'no empty badge');
+test('THE YELLOW UNREAD BADGE IS GONE, markup and stylesheet together', () => {
+    // The owner's words, 2026-09-09: "to be clear remove the yello (1)".
+    // A numeric pill used to sit beside every group header's roll-up LED.
+    // Nothing replaced it: the ring on the roll-up already says a turn
+    // finished in here and nobody has looked, and two indicators for one
+    // fact is how two indicators end up disagreeing.
+    //
+    // BOTH HALVES OR NEITHER. A rule left behind in the stylesheet for a
+    // class nothing emits is how a retired treatment gets revived by
+    // accident, so the CSS is asserted here beside the markup.
+    const cases = [
+        [{ activity_status: 'idle' }],
+        [{ activity_status: 'idle', unread: true }],
+        [
+            { activity_status: 'idle', unread: true },
+            { activity_status: 'idle', unread: true },
+            { activity_status: 'working', unread: true },
+        ],
+    ];
+    for (const children of cases) {
+        const html = Summary.summaryHtml(children);
+        assert.ok(html.includes('status-led'), 'the LED is always rendered');
+        assert.ok(
+            !html.includes('status-summary-badge'),
+            `a badge came back for ${JSON.stringify(children)}`,
+        );
+    }
+    const css = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'css', 'status-led.css'), 'utf8',
+    );
+    assert.ok(
+        !/^\s*\.status-summary-badge\s*\{/m.test(css),
+        'the badge stylesheet rule must go with the markup that emitted it',
+    );
 });
 
-test('summaryHtml renders the badge with its count when non-zero', () => {
+test('THE ROLL-UP IS THE ROW COMPONENT, ring treatment and all', () => {
+    // Item 2 of the 2026-09-09 request: the header dot takes the same
+    // visual vocabulary as the rows, including the green ring around a
+    // grey centre. It is not a header-shaped copy - summaryHtml calls
+    // StatusLed.ledHtml, which is the one builder every surface uses -
+    // so this asserts the ring actually comes out of the header path.
     const html = Summary.summaryHtml([
         { activity_status: 'idle', unread: true },
-        { activity_status: 'idle', unread: true },
+        { activity_status: 'idle' },
     ]);
-    assert.ok(html.includes('status-summary-badge'));
-    assert.ok(html.includes('>2<'), 'carries the count');
-    assert.ok(html.includes('aria-label="2 unread"'), 'and says so in words');
+    assert.ok(html.includes('data-inner="done"'), 'grey centre');
+    assert.ok(html.includes('data-outer="unread"'), 'green ring');
+    // Byte-identical to what a row would draw for the same pair, minus
+    // the row's own title. If the two ever diverge, one of them is
+    // drawing its own dot.
+    const rowLed = Led.ledHtml({ inner: 'done', outer: 'unread', title: 'x' });
+    assert.equal(
+        html.replace(/title="[^"]*" aria-label="[^"]*"/, 'T'),
+        rowLed.replace(/title="[^"]*" aria-label="[^"]*"/, 'T'),
+    );
 });
 
 test('summaryHtml labels the empty case honestly', () => {

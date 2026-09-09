@@ -487,6 +487,30 @@ class SessionActivityTracker:
         state = self._signals.get(session_id)
         return state is not None and state.hook_seen
 
+    def subagent_depth(self, session_id: str) -> int:
+        """How many ``SubagentStart`` events are still unmatched for a session.
+
+        Description: Read-only view of ``SessionActivitySignal.subagent_depth``
+            for callers outside this module, in the same spirit as
+            ``hooks_seen``. A session this tracker has never seen answers
+            0, which is deliberate: an unknown session is NOT evidence that
+            subagents are running, and every caller of this treats a
+            positive count as licence to stay quiet. Note the value is
+            whatever the LAST event applied left behind - ``Stop`` resets
+            it to 0, so a caller that wants the depth as it stood DURING
+            the turn has to read it before it feeds the ``Stop`` in.
+        Inputs:
+            session_id: cloudecode session id.
+        Output: int, 0 or greater. Never negative (``record_event`` floors
+            it) and never None.
+        Example:
+            >>> tracker.record_event("ses_1", "SubagentStart")
+            >>> tracker.subagent_depth("ses_1")
+            1
+        """
+        state = self._signals.get(session_id)
+        return state.subagent_depth if state is not None else 0
+
     def forget(self, session_id: str) -> None:
         """Drop all ephemeral state for ``session_id``. Idempotent.
 

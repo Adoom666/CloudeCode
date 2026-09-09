@@ -1078,6 +1078,14 @@ class API {
      * attached to or only attachable. Persisted server-side, so the flag
      * follows the user across browsers/devices (never localStorage).
      *
+     * NOTHING IN THE UI CALLS THIS AS OF 2026-09-08, and that is
+     * deliberate rather than an oversight. The unread envelope was the
+     * only caller and it was removed from the sidebar and the launchpad;
+     * the status light carries unread now. The ROUTE and the server-side
+     * tracking are untouched, so this wrapper is kept as the client for
+     * an endpoint that still works - see docs/session-status.md, "The
+     * envelope is gone".
+     *
      * @param {string} tmuxName - literal tmux session name.
      * @param {boolean} unread - true to mark, false to clear.
      * @returns {Promise<{success: boolean, message: string}>}
@@ -1339,21 +1347,6 @@ class API {
                     : {}),
             },
         });
-    }
-
-    /**
-     * Local servers: list dev servers detected on the host for a given
-     * tmux session. Pure read - never triggers detection.
-     *
-     * @param {string} sessionName - tmux session name (the value the
-     *   server tracks entries under).
-     * @returns {Promise<Array<{port: number, url: string,
-     *   first_seen: string, last_seen: string}>>}
-     */
-    async getLocalServers(sessionName) {
-        return await this.call(
-            `/sessions/${encodeURIComponent(sessionName)}/local-servers`
-        );
     }
 
     /**

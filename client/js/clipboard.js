@@ -185,7 +185,25 @@
             const sessionId = typeof term._sessionId === 'function' ? term._sessionId() : null;
             const result = await window.API.uploadFile(blob, filename || '', sessionId);
             term.insertText(quotePathForPrompt(result.path) + ' ');
-            report(term, 'attached: ' + result.filename, 'success');
+            // THE CONFIRMATION IS A TOAST, NOT AN OVERLAY. report() paints
+            // one line of text straight onto live terminal output with
+            // nothing behind it, and over a running claude session the two
+            // fought for the same pixels and the text lost - the reported
+            // symptom was that "attached: <name>" is unreadable. A toast
+            // has a card, the theme's own colours and a real contrast
+            // floor, and it shows the file rather than naming it. It is
+            // also not on a 3-second timer: it stands until the prompt
+            // carrying the file is sent. report() stays as the fallback
+            // for a document that somehow loaded without the module.
+            if (window.AttachmentToast
+                && typeof window.AttachmentToast.show === 'function') {
+                window.AttachmentToast.show(term, {
+                    blob: blob,
+                    filename: result.filename,
+                });
+            } else {
+                report(term, 'attached: ' + result.filename, 'success');
+            }
         } catch (err) {
             console.error('[FILE-PASTE] upload failed', err);
             report(term, 'upload failed: ' + (err && err.message ? err.message : 'unknown'), 'error');

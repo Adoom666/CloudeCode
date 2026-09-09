@@ -287,17 +287,25 @@ def test_the_git_walk_stops_at_home(tmp_path: Path):
     assert git_top_level(str(inner), home=str(tmp_path / "home")) is None
 
 
-def test_the_symlinked_spelling_matches_the_long_one(tmp_path: Path):
+def test_the_symlinked_spelling_matches_the_long_one(
+    tmp_path: Path, nonscratch_tmp_path: Path
+):
     """`~/Development` is a symlink into iCloud. Two spellings, ONE project.
 
     This is the defect that already manufactured two junk project rows.
     The plan canonicalises both sides, so a conversation recorded under
     the short spelling files into the project stored under the long one.
+
+    The PROJECT directories come from ``nonscratch_tmp_path``, not from
+    ``tmp_path``: the planner refuses a cwd under ``/tmp`` as per-run
+    scratch, which is correct, and pytest's tmp_path is exactly that on
+    a Linux runner. The transcript file itself stays under ``tmp_path``
+    - it is read, never situated, so the guard has no opinion on it.
     """
-    real = tmp_path / "iCloud" / "Development" / "proj"
+    real = nonscratch_tmp_path / "iCloud" / "Development" / "proj"
     real.mkdir(parents=True)
-    link = tmp_path / "Development"
-    link.symlink_to(tmp_path / "iCloud" / "Development")
+    link = nonscratch_tmp_path / "Development"
+    link.symlink_to(nonscratch_tmp_path / "iCloud" / "Development")
 
     path = write_transcript(
         tmp_path / "slug", UUID_A, conversation(str(link / "proj"), UUID_A)

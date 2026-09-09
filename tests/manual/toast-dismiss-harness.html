@@ -58,6 +58,12 @@
 <!-- The SHIPPED container markup, id and all. -->
 <div class="toast-container" id="toast-container"></div>
 
+<!-- The two modules that decide which card a toast lands on, loaded in
+     the shipped order. Without them toast.js falls back to per-kind
+     coalescing, so this page would measure a stack the app does not
+     have. -->
+<script src="../../client/js/session-status-summary.js"></script>
+<script src="../../client/js/toast-session-group.js"></script>
 <script src="../../client/js/toast.js"></script>
 
 <script>

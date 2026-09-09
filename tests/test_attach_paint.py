@@ -14,8 +14,9 @@ So these assertions are about BYTES AND PANE STATE, against a real tmux
 server on a THROWAWAY socket, never the user's:
 
   - a fullscreen (alternate-screen) pane is detected as such, and the
-    attach path redraws it by writing Ctrl+L to the pane, which is the
-    only thing that can repaint a TUI at the current geometry;
+    attach path paints it by sending the client tmux's capture of the
+    frame - never by writing a redraw request into the pane, which
+    Claude Code answers with an erase and only a partial repaint;
   - a normal-screen pane is painted by sending the client a capture, and
     that capture is NON-EMPTY and contains what is on screen;
   - a second attach (the reconnect case, which on a phone is the common
@@ -149,7 +150,13 @@ async def _start(session_id: str, command: str) -> TmuxBackend:
 
 @pytest.mark.asyncio
 async def test_fullscreen_pane_paints_on_first_attach(socket_cleanup) -> None:
-    """An alternate-screen pane is redrawn, which is what paints it."""
+    """An alternate-screen pane is painted from tmux's own capture.
+
+    This used to write Ctrl+L into the pane and send the client nothing,
+    trusting the TUI to repaint itself. Claude Code's fullscreen renderer
+    answers that with an erase and a partial repaint, so the client is
+    now sent the captured frame and the pane is never written to.
+    """
     backend = await _start("paint_alt", ALT_SCREEN_CMD)
     try:
         assert backend.pane_in_alternate_screen() is True, (
@@ -157,11 +164,10 @@ async def test_fullscreen_pane_paints_on_first_attach(socket_cleanup) -> None:
             "would not exercise the case that was rolled back"
         )
         ws = _RecordingSocket()
-        assert await paint_on_attach(ws, backend) == "redraw"
-        # A redraw is written to the PANE, not the socket: the TUI repaints
-        # itself at the current geometry. Nothing must be sent to the
-        # client, and the pane must still be alive to have received it.
-        assert ws.painted() == b""
+        assert await paint_on_attach(ws, backend) == "screen"
+        # Bytes, not strategy names: the client must actually receive the
+        # frame, and the pane must still be alive and unmolested.
+        assert ws.painted(), "the client received no frame at all"
         assert backend.is_alive()
     finally:
         await backend.stop()
@@ -183,7 +189,7 @@ async def test_fullscreen_pane_paints_again_on_reattach(socket_cleanup) -> None:
         await rejoined.attach_existing()
         assert rejoined.pane_in_alternate_screen() is True
         second = await paint_on_attach(_RecordingSocket(), rejoined)
-        assert (first, second) == ("redraw", "redraw")
+        assert (first, second) == ("screen", "screen")
         assert rejoined.capture_scrollback(), (
             "an alternate-screen pane must still capture bytes on rejoin; "
             "this is the exact invariant a9cd2f9 broke"

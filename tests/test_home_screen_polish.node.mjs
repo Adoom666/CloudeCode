@@ -352,14 +352,20 @@ test('the version chip renders exactly once, in the home bar', () => {
         `the header still renders ${headerHits.length} version chip(s); it belongs to the bar now`
     );
 
-    const barHits = launchpad.match(/class="[^"]*\bversion\b[^"]*"/g) || [];
+    // The actual `.version`-classed element is no longer static text in
+    // launchpad.js - client/js/version-footer.js generates it, and
+    // launchpad.js only owns the mount point and the one call that fills
+    // it. So the "exactly one chip" claim is now: one mount, filled by
+    // exactly one call into the shared component.
+    const mountHits = launchpad.match(/id="home-bar-version"/g) || [];
     assert.equal(
-        barHits.length, 1,
-        `expected exactly one version chip in the launchpad markup, found ${barHits.length}`
+        mountHits.length, 1,
+        `expected exactly one home-bar version mount, found ${mountHits.length}`
     );
-    assert.match(
-        barHits[0], /home-bar__version/,
-        'the one chip must be the home bar chip'
+    const renderCalls = launchpad.match(/window\.VersionFooter\.versionSpanHtml\(\)/g) || [];
+    assert.equal(
+        renderCalls.length, 1,
+        `expected exactly one call rendering the chip into it, found ${renderCalls.length}`
     );
 });
 

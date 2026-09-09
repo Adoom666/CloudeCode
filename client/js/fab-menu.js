@@ -2,15 +2,21 @@
  * Shared machinery for a small menu hung off a floating action button.
  * ----------------------------------------------------------------------
  * TWO CONTROLS, ONE MECHANISM. The terminal screen carries two
- * session-scoped FAB menus and they are deliberately NOT the same menu:
+ * session-scoped menus and they are deliberately NOT the same menu.
+ * Only the first still hangs off a floating action button; the second
+ * moved into the header and kept this plumbing, which is the point of
+ * the plumbing being here rather than in either caller:
  *
  *   - #terminalToolsBtn  "tools"          getting content in and out of
  *                                          the terminal: copy output,
  *                                          paste from clipboard, attach
  *                                          image (terminal-tools-menu.js)
  *   - #sessionEditorBtn  "session editor" configuring the session
- *                                          itself: theme and music
- *                                          (session-editor-menu.js)
+ *                                          itself: theme and detach
+ *                                          (session-editor-menu.js).
+ *                                          NOT a FAB any more - it is a
+ *                                          header button. Only its menu
+ *                                          is built here.
  *
  * What they share is only the plumbing: build a 16x16 icon, build a 44px
  * row, open anchored to the trigger, close on Escape or an outside

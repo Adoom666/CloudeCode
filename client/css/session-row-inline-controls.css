@@ -1,0 +1,115 @@
+/* The conversation row's TWO INLINE CONTROLS - the pin toggle and the
+ * close / restart / remove button - sized for a thumb.
+ * ----------------------------------------------------------------------
+ * The owner's words, 2026-09-08: "move the pin and close icons back to
+ * the inline icons. remove 'add to group' / 'restart the agent' and the
+ * three dots now that they're not needed." Both controls had been folded
+ * into a per-row overflow menu; this file is what makes them usable back
+ * on the row itself.
+ *
+ * ITS OWN FILE because client/css/session-sidebar-density.css is at the
+ * repo's 500-line ceiling and must not grow, and because everything here
+ * is one question - what a finger can hit at phone width - rather than a
+ * density variation.
+ *
+ * WHAT THE BUILDERS OWN AND WHAT THIS FILE OWNS. The two controls are
+ * SHAPED next door: `.session-sidebar-row-pin` in
+ * session-sidebar-density.css and `.session-sidebar-row-delete` in
+ * session-sidebar.css both size them as 18px square icon buttons and
+ * colour them. Nothing here changes how they look on a desktop; every
+ * rule below is behind `(pointer: coarse)`.
+ *
+ * MUST LOAD AFTER both of those files. It overrides `width` on the same
+ * elements at the same or higher specificity, so an earlier position in
+ * client/index.html would silently drop the tap targets and leave 18px
+ * controls on a phone - which looks correct in a screenshot and is
+ * unusable under a thumb.
+ */
+
+/* ---- Thumb targets for the two inline controls -----------------------
+ * THE GLYPHS ARE 13px AND 16px; A THUMB IS NOT. This app exists to drive
+ * a Mac from a phone, so the pin and the close/restart/remove control
+ * each need a target a finger can hit, and neither may grow the row - the
+ * density contract at the foot of session-sidebar-density.css states a
+ * height per mode and a taller button would quietly break it.
+ *
+ * TWO SEPARATE MEASURES, because these two controls sit SIDE BY SIDE and
+ * the kebab did not. The kebab was the last thing on the line with
+ * nothing to its right, so it widened its target with a transparent
+ * overlay that reached sideways for free. An overlay that reached
+ * sideways here would land on top of its neighbour and steal its taps -
+ * the exact trade the kebab's own comment refused to make vertically. So:
+ *
+ *   WIDTH is grown on the REAL BOX. Two 36px boxes cannot overlap, and
+ *   the row's flex layout takes the space from the NAME, which already
+ *   ellipsizes and is the element designed to give way.
+ *   HEIGHT is grown with a transparent overlay, which belongs to its
+ *   originating element for hit testing and so costs the layout nothing.
+ *
+ * AT COZY AND DETAILED ONLY, and that limit is the same one the kebab
+ * carried: a compact row is 24px tall with a 1px gap, so a 44px hitbox
+ * there would reach 10px into the row above and the row below and steal
+ * two taps to save one. At compact the honest target is the row's own
+ * height. */
+
+.session-sidebar-row-pin,
+.session-sidebar-row-delete {
+    /* The containing block for the overlay below. Harmless on a fine
+     * pointer, where no overlay is emitted. */
+    position: relative;
+}
+
+/* THE NAME GETS THE ROOM BACK, AND THE BADGE IS WHAT PAYS FOR IT.
+ *
+ * MEASURED, not assumed. At a 330px viewport the sidebar is 85vw, so a
+ * cozy row has 260px of content to divide. With the row's two controls
+ * widened for a thumb, the name column fell to 81.9px on a live row and
+ * 22.6px on a DEAD one, which carries three controls (pin, restart,
+ * remove) instead of two. 22.6px renders "Punchlist Test" as "P...",
+ * which is a row you cannot tell from the row above it.
+ *
+ * The tmux/external badge is 58px of that line and is the most redundant
+ * glyph on the row: ownership is already carried by the row's own
+ * styling, which is exactly why the row builder drops the badge outright
+ * at COMPACT density. This extends that existing rule to a narrow screen
+ * instead of inventing a new one, and it is a display rule only - the
+ * badge is still in the markup, still read by anything asserting on it,
+ * and still painted the moment there is room.
+ *
+ * WHY NOT SHRINK THE CONTROLS INSTEAD. They were widened to 36px so a
+ * thumb can hit them; taking that back to make room for a badge would
+ * trade the thing the user has to touch for a thing the user only reads,
+ * on the one device this app exists for.
+ *
+ * 420px is the breakpoint because 85vw of it is 357px, which leaves a
+ * dead row's name over 100px - the width the row had before its controls
+ * came back out of the overflow menu. */
+@media (pointer: coarse) and (max-width: 420px) {
+    .session-sidebar-list .session-sidebar-row-main
+    > .session-sidebar-row-badge {
+        display: none;
+    }
+}
+
+@media (pointer: coarse) {
+    .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-pin,
+    .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-delete,
+    .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-pin,
+    .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-delete {
+        width: 36px;
+    }
+
+    .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-pin::after,
+    .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-delete::after,
+    .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-pin::after,
+    .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-delete::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 44px;
+        transform: translateY(-50%);
+    }
+}
+

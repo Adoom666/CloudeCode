@@ -230,21 +230,24 @@
     content: none;
 }
 
-/* The version chip. Reuses .version from styles.css for type and colour
- * (it is the same chip, moved, not a new one); this rule only places it. */
+/* The version chip - a mount point for client/js/version-footer.js's
+ * `versionSpanHtml()`, which carries its own `.version` class for type
+ * and colour (the same token that already lived here before the chip's
+ * markup moved into that shared module). This rule only places the
+ * mount; it never repaints the text inside it, or the sidebar's copy of
+ * the same span could end up a different colour from this one.
+ *
+ * NO `:empty` RULE HERE ON PURPOSE. version-footer.js always renders
+ * something - a real version or "version unknown" - so this mount is
+ * only ever empty for the instant before that script runs, or if it
+ * failed to load at all; collapsing the gap for that case would hide a
+ * broken script rather than surface it. */
 .home-bar__version {
     flex-shrink: 0;
     /* Sits between the spacer and the nyedis link with a little more air
      * than the default gap, so the two do not read as one control. */
     margin-right: 4px;
     white-space: nowrap;
-}
-
-/* The chip is empty when the server could not resolve a version. An empty
- * inline box still consumes the flex gaps around it, so take it out of the
- * layout entirely rather than leaving a mystery notch beside the bird. */
-.home-bar__version:empty {
-    display: none;
 }
 
 /* The nyedis bird. It was 30px in the old block footer; at bar scale it

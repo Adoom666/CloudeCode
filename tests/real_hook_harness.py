@@ -226,7 +226,7 @@ def led_state_for(row: dict[str, Any]) -> dict[str, str]:
     """Ask the SHIPPED client JS what LED this row paints.
 
     Description: pipes the row verbatim into
-      ``tests/led_state_for.node.mjs``, which loads
+      ``tests/helpers/led_state_for.mjs``, which loads
       ``client/js/status-led.js`` in a bare sandbox and calls
       ``ledStateFor``. Nothing about the mapping is re-implemented here -
       the question is what the user's browser does with this exact row.
@@ -236,7 +236,7 @@ def led_state_for(row: dict[str, Any]) -> dict[str, str]:
     Example: led_state_for({"activity_status": "question"})
              -> {"inner": "waiting-permission", "outer": "active"}
     """
-    script = Path(__file__).resolve().parent / "led_state_for.node.mjs"
+    script = Path(__file__).resolve().parent / "helpers" / "led_state_for.mjs"
     proc = subprocess.run(
         ["node", str(script)],
         input=json.dumps(row),

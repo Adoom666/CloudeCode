@@ -433,23 +433,35 @@ await test('an open inline rename input is not clobbered by a repaint, and the r
         'the deferred repaint must land on the next tick, not be lost');
 });
 
-await test('an open row overflow menu blocks the repaint, and releases it when closed', async () => {
+await test('THE ROW OVERFLOW MENU IS GONE, and so is the check that asked it', async () => {
+    // The guard used to consult `SessionRowMenu.isOpen()` before wiping a
+    // list, because a body-mounted panel could be open over a row the
+    // repaint was about to destroy. That menu was removed on 2026-09-08:
+    // pin and close are inline icons on the row again, and nothing on a
+    // session row opens a panel any more.
+    //
+    // ASSERTED AS AN ABSENCE ON PURPOSE. A stale reference to a deleted
+    // global reads as a live feature and would never fire, so this
+    // insists the guard does not still ask - and the fixture below proves
+    // it by planting exactly the object the old check looked for. If a
+    // panel-opening control ever comes back to these rows, this test
+    // fails and points at what has to be re-added.
     const h = await boot({ visible: true });
     await h.lp.loadProjects();
     await h.settle();
     const tick = h.startPoller();
     tick(); await h.settle();
-    let open = true;
-    h.fakeWindow.SessionRowMenu = { isOpen() { return open; } };
+    h.fakeWindow.SessionRowMenu = { isOpen() { return true; } };
     const paints0 = h.paints('project-list');
-    h.lp.projects[0].name = 'project-changed-under-an-open-menu';
-    tick(); await h.settle();
-    assert.equal(h.paints('project-list') - paints0, 0,
-        'a repaint must not pull the rows out from under an open menu');
-    open = false;
+    h.lp.projects[0].name = 'project-changed';
     tick(); await h.settle();
     assert.equal(h.paints('project-list') - paints0, 1,
-        'closing the menu must let the pending change paint');
+        'nothing on a session row opens a panel now, so a repaint must not '
+        + 'be deferred by a global that no longer exists');
+    const src = fs.readFileSync(
+        new URL('../client/js/project-list-render-guard.js', import.meta.url), 'utf8');
+    assert.ok(!src.includes('window.SessionRowMenu'),
+        'the guard must not still reach for the deleted row overflow menu');
 });
 
 // ---------------------------------------------------------------------

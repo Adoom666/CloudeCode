@@ -2516,6 +2516,24 @@ class SessionManager:
 
         return toast
 
+    def subagent_depth(self, session_id: str) -> int:
+        """How many background sub-agents this session has running right now.
+
+        Description: Thin read-only passthrough to
+            ``SessionActivityTracker.subagent_depth`` so the hook endpoint
+            can ask the question without reaching into a private attribute.
+            An unknown session answers 0 - not having a record is not
+            evidence that sub-agents are running, and the one caller uses a
+            positive count only to STAY SILENT.
+        Inputs:
+            session_id: cloudecode session id.
+        Output: int, 0 or greater.
+        Example:
+            >>> mgr.subagent_depth("ses_1")
+            0
+        """
+        return self._activity_tracker.subagent_depth(session_id)
+
     def record_hook_event(
         self, session_id: str, kind: str, payload: Optional[dict] = None
     ) -> None:

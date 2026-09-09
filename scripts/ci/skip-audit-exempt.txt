@@ -1,0 +1,53 @@
+# Tests the skip audit may not fail the build over.
+#
+# READ THIS BEFORE ADDING A LINE.
+#
+# The audit exists because a test skipped on every platform CI runs was
+# never measured anywhere, which is strictly worse than failing: it looks
+# fine. That rule has exactly two honest exceptions, and neither of them
+# is "this test is inconvenient".
+#
+#   1. CI CANNOT SUPPLY THE ENVIRONMENT AT ALL. Not "it would be slow" or
+#      "nobody set it up" - the input does not exist on a hosted runner
+#      and cannot be created there. A 15 GB private corpus and a paid
+#      Claude API turn are the two in this repository.
+#   2. THE SKIP IS STRUCTURAL, NOT ENVIRONMENTAL. A parametrised case the
+#      assertion does not apply to skips identically on every machine on
+#      earth, including the author's. The TEST still runs; some of its
+#      parameters are simply not questions.
+#
+# Anything else - a missing binary, an uninstalled driver, an absent tag -
+# is a hole in the workflow, and this file is the wrong place to put it.
+# The workflow installs tmux, zsh, librsvg, playwright's chromium and
+# gitleaks for exactly that reason.
+#
+# FORMAT: one pattern per line. `*` is the only wildcard; everything else
+# is literal, so a parametrised id's [brackets] mean themselves. Text
+# after `#` on a pattern line is the reason, and it is PRINTED in the job
+# log next to every id it excuses. A pattern that matches nothing FAILS
+# the build - a stale exemption excuses a regression in advance.
+
+# --- 1. A REAL claude CLI SPENDING REAL API TURNS ----------------------
+# tests/test_led_real_hooks.py launches a real `claude` in a throwaway
+# tmux socket and asserts the status LED against hooks it actually fired.
+# It costs real Claude turns and about 50 seconds, and it is opt-in behind
+# CLOUDE_REAL_HOOK_TESTS=1 for that reason. A hosted runner has no claude
+# binary and no credentials to give one, so this cannot be installed away.
+tests.test_led_real_hooks::*  # needs a real claude CLI + API turns; run locally with CLOUDE_REAL_HOOK_TESTS=1
+
+# --- 2. THE 15 GB CORPUS DATABASE --------------------------------------
+# These prove byte-for-byte JSONL export fidelity against the live message
+# corpus, which exists on one machine and is private conversation content.
+# Point CLOUDE_FIDELITY_DB at a message-model database to run them.
+# tests/conftest.py prints a COULD NOT EVALUATE block naming each one on
+# every run that skips them, so this exemption hides nothing.
+tests.test_jsonl_shape_corpus_fidelity::*  # needs the corpus DB via CLOUDE_FIDELITY_DB
+tests.test_jsonl_shape_drift::*  # needs the corpus DB via CLOUDE_FIDELITY_DB
+
+# --- 3. STRUCTURALLY INAPPLICABLE PARAMETERS ---------------------------
+# test_reassemble_restores_key_order_position_for_position runs against
+# every fixture in the registry. Four of those fixtures are non-object
+# JSONL lines, and a non-object line has no key order to restore, so the
+# assertion is not a question for them. The test itself runs, and goes red,
+# for every other fixture on both platforms - it is not furniture.
+tests.test_jsonl_shape_fixtures::test_reassemble_restores_key_order_position_for_position[gap_not_an_object_*]  # a non-object line has no key order to restore

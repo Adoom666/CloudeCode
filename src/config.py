@@ -245,8 +245,24 @@ class SessionConfig(BaseModel):
     - ``tmux_socket_name``: name passed to ``tmux -L <name>``. Defaults to
       ``"cloude"`` so we never touch the user's default tmux server.
     - ``scrollback_lines``: how many lines the backend captures on re-attach
-      for scrollback replay. Too high = slow reconnects; too low = lost
-      context. 3000 lines is a reasonable middle ground.
+      for scrollback replay. This is the ATTACH REPLAY DEPTH, not what tmux
+      retains - tmux holds ``tmux_backend.HISTORY_LIMIT`` lines and this
+      says how many of them are sent to the browser on a reconnect. The two
+      ceilings are deliberately different: replaying 50000 lines of ANSI
+      into xterm.js is 5-15 MB through the parser, which is felt on a
+      phone, so the pane keeps the deeper history and the attach sends a
+      bounded slice of it. Anything past ~10000 should be paged rather
+      than sent as one blob.
+    - ``disable_alternate_screen``: when on, agents CloudeCode launches are
+      given ``CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1``, so Claude Code
+      renders on the terminal's NORMAL screen and tmux and xterm.js both
+      accumulate real scrollback. It is on by default because on the
+      alternate screen there is no scrollback to accumulate anywhere in
+      the chain - tmux keeps zero history for such a pane no matter how
+      high ``history-limit`` is set, and xterm.js applies its own
+      ``scrollback`` to the normal buffer only. Turn it off to get Claude
+      Code's flicker-free fullscreen renderer back, at the cost of having
+      no scrollback at all.
     """
     backend: str = Field(
         default="auto",
@@ -260,6 +276,13 @@ class SessionConfig(BaseModel):
         default=10000,
         description="Lines of scrollback to capture on re-attach",
         ge=0,
+    )
+    disable_alternate_screen: bool = Field(
+        default=True,
+        description=(
+            "Launch agents with CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 so "
+            "they render on the normal screen and scrollback accumulates"
+        ),
     )
 
 
@@ -1145,7 +1168,17 @@ class Settings(BaseSettings):
             # conversation instead of the forked one - a wrong session, with
             # no error.
             return render_wrapper_invocation(
-                chosen, scripts_dir, model=effective_model, extra_args=extra_args
+                chosen,
+                scripts_dir,
+                model=effective_model,
+                extra_args=extra_args,
+                # Read at LAUNCH time, not at import: the setting is a
+                # per-session decision and a user who turns it off gets
+                # the fullscreen renderer on their next launch without a
+                # server restart.
+                disable_alternate_screen=(
+                    self.load_auth_config().session.disable_alternate_screen
+                ),
             )
 
         # No wrapper for this family: fall back to its static

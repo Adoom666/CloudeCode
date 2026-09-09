@@ -5,7 +5,8 @@
   "session": {
     "backend": "auto",
     "tmux_socket_name": "cloude",
-    "scrollback_lines": 3000
+    "scrollback_lines": 10000,
+    "disable_alternate_screen": true
   },
   "auth_rate_limits": {
     "totp_verify_per_minute": 5,

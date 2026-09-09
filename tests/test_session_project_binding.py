@@ -256,7 +256,7 @@ class TestTheNoProjectFallback:
     """No project contains it, so one is created. Once."""
 
     def test_a_directory_outside_every_root_gets_a_project_of_its_own(
-        self, state_dir: Path, tmp_path: Path
+        self, state_dir: Path, nonscratch_tmp_path: Path
     ):
         """The owner's invariant, stated as a test.
 
@@ -264,7 +264,7 @@ class TestTheNoProjectFallback:
         a working directory outside every root still ends up with a
         project, never with nothing.
         """
-        lonely = tmp_path / "lonely"
+        lonely = nonscratch_tmp_path / "lonely"
         lonely.mkdir()
         with closing(_conn(state_dir)) as conn:
             with conn:
@@ -280,14 +280,15 @@ class TestTheNoProjectFallback:
         assert binding.attribution == SESSION_ATTRIBUTION_DERIVED_DEEPEST
         assert rows == 1
 
-    def test_minting_is_idempotent(self, state_dir: Path, tmp_path: Path):
+    def test_minting_is_idempotent(self, state_dir: Path,
+                                   nonscratch_tmp_path: Path):
         """A second resolve reuses the project rather than colliding.
 
         ``projects.root`` is UNIQUE, so a non-idempotent mint would not
         merely duplicate - it would raise on the second session opened
         in the same folder.
         """
-        lonely = tmp_path / "lonely"
+        lonely = nonscratch_tmp_path / "lonely"
         lonely.mkdir()
         with closing(_conn(state_dir)) as conn:
             with conn:
@@ -608,7 +609,7 @@ class TestTheCreatePathMintsRatherThanLandingNull:
     """A session created in an unregistered folder still gets a project."""
 
     def test_persist_creation_gives_a_new_folder_its_own_project(
-        self, state_dir: Path, tmp_path: Path
+        self, state_dir: Path, nonscratch_tmp_path: Path
     ):
         """FAILS ON THE OLD ORDERING.
 
@@ -619,7 +620,7 @@ class TestTheCreatePathMintsRatherThanLandingNull:
         from src.core.session_create_persist import persist_creation
         from src.core.tmux_listing import TmuxListing
 
-        folder = tmp_path / "brand_new"
+        folder = nonscratch_tmp_path / "brand_new"
         folder.mkdir()
         listing = TmuxListing.answered([{
                 "name": "cloude_New",

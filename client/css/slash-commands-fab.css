@@ -1,0 +1,36 @@
+/* The slash-commands FAB (the round "/" button, bottom-left of the
+ * terminal screen) and the modal it opens.
+ *
+ * MOBILE ONLY, same rule and same breakpoint as the terminal-tools FAB
+ * (client/css/terminal-tools.css) and .dpad-float-button (styles.css):
+ * the owner's request was "this button needs to be removed on desktop
+ * view just like the clipboard one." 769px is reused rather than
+ * invented - it is the house number for "is there room for a floating
+ * bottom-row control," already shared by both of those.
+ *
+ * BOTH THE TRIGGER AND THE PANEL ARE HIDDEN, not the trigger alone. A
+ * hidden button with a still-reachable modal is a half-change: the
+ * modal has no other opener, so hiding only the button would just make
+ * it unreachable through normal means while leaving dead markup behind.
+ *
+ * PURE CSS ON PURPOSE, no JS gate. slash-commands.js sets the button's
+ * `display` inline (`style.display = 'flex'`) once it has loaded the
+ * command list, which happens after first paint - a JS-driven hide would
+ * flash the button on screen first. `!important` beats that inline style
+ * exactly the way the terminal-tools rule beats fab-menu.js's inline
+ * styles, and beats `.modal.active { display: flex !important; }` in
+ * styles.css for the modal.
+ *
+ * WHAT DESKTOP KEEPS: typing "/" directly into the terminal reaches
+ * claude's own CLI, which is a real slash-command entry point. What this
+ * modal offers beyond that - a discoverable list of every available
+ * command with a description for each, plus a starred-favorites row and
+ * live filtering - has no desktop replacement. Recorded here rather than
+ * fixed here, the same call already made for the terminal-tools FAB.
+ */
+@media (min-width: 769px) {
+    .slash-commands-btn,
+    #slash-commands-modal {
+        display: none !important;
+    }
+}

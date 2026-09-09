@@ -129,6 +129,49 @@ jobs:
         # the platform where the check means something.
         run: brew install tmux librsvg
 
+      - name: Install gitleaks (linux)
+        if: runner.os == 'Linux'
+        # tests/test_secret_gate_parity.py runs the REAL gitleaks against
+        # .gitleaks.toml: once to prove the config still loads, and once as a
+        # POSITIVE CONTROL that plants a freshly generated credential inside an
+        # allowlisted fixture file and requires the scanner to still report it.
+        # With no binary installed both tests skipped on both platforms, and
+        # the skip audit below correctly failed the build. A secret gate that
+        # cannot fail is precisely the false green that file exists to prevent.
+        #
+        # LINUX ONLY, and that is the honest scope rather than a shortcut. The
+        # gate these tests measure IS the Linux one: secret-scan.yml runs
+        # gitleaks on ubuntu-latest and nowhere else. What is under test is a
+        # TOML config and an allowlist's scoping, not an operating system, so a
+        # second install on macOS would re-measure the same Go binary reading
+        # the same file. Compare the librsvg step above, which is macOS-only
+        # for the mirror-image reason: there the platform is the point.
+        #
+        # THE VERSION AND DIGEST ARE READ OUT OF secret-scan.yml, NOT COPIED.
+        # That workflow owns the pin. A second hardcoded copy here would be
+        # free to drift, and this job would then certify the config against a
+        # gitleaks the real gate never runs - the same "two gates, only one of
+        # them checked" defect test_secret_gate_parity.py was written for. An
+        # unreadable pin exits 1 rather than quietly installing whatever
+        # "latest" happens to be today.
+        run: |
+          set -euo pipefail
+          scan=.github/workflows/secret-scan.yml
+          version="$(sed -n 's/^[[:space:]]*GITLEAKS_VERSION:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$scan")"
+          sha256="$(sed -n 's/^[[:space:]]*GITLEAKS_SHA256:[[:space:]]*\([0-9a-f]\{64\}\).*/\1/p' "$scan")"
+          if [ -z "${version}" ] || [ -z "${sha256}" ]; then
+            echo "could not read GITLEAKS_VERSION / GITLEAKS_SHA256 out of ${scan}." >&2
+            echo "Refusing to install an unpinned security tool." >&2
+            exit 1
+          fi
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}"
+          curl --silent --show-error --fail --location "${url}" --output "/tmp/${archive}"
+          echo "${sha256}  /tmp/${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "/tmp/${archive}" --directory /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
       - name: Assert tmux indexes from zero
         # tmux_backend.py addresses panes as "<session>:0.0". A tmux config
         # setting base-index 1 makes every tmux test fail with "can't find
@@ -215,10 +258,16 @@ jobs:
           path: skips
 
       - name: Fail on tests skipped on every platform
+        # --exempt covers the skips no runner can turn into a measurement: a
+        # real claude CLI spending real API turns, and the 15 GB private
+        # corpus. Every exempted id is still PRINTED with its reason, and an
+        # exemption that stops matching fails this step, so the list cannot
+        # quietly outlive the reason it was written. See the file's header.
         run: |
           set -euo pipefail
           ls -l skips
-          python3 scripts/ci/skip-audit.py intersect skips/*.txt --require 2
+          python3 scripts/ci/skip-audit.py intersect skips/*.txt --require 2 \
+            --exempt scripts/ci/skip-audit-exempt.txt
 
   javascript:
     name: javascript syntax

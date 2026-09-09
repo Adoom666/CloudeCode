@@ -445,14 +445,29 @@ test('the version chip left the header and is stamped through a meta tag', () =>
     assert.match(indexHtml, /<meta name="cloude-app-version" content="\{\{VERSION\}\}">/,
         'src/main.py substitutes {{VERSION}} by plain string replace; the '
         + 'meta tag is how the runtime-built bar gets the value');
-    assert.match(launchpadJs, /meta\[name="cloude-app-version"\]/,
-        'launchpad.js must read the version back out of the meta tag');
+    // launchpad.js no longer reads the meta tag itself - that read moved
+    // into client/js/version-footer.js, the ONE place both the home bar
+    // and the sidebar footer get the string from, so the two placements
+    // cannot read it two different ways. launchpad.js instead delegates.
+    assert.ok(!/meta\[name="cloude-app-version"\]/.test(launchpadJs),
+        'launchpad.js must not read the meta tag directly any more - '
+        + 'version-footer.js owns that read');
+    assert.match(launchpadJs, /window\.VersionFooter\.versionSpanHtml\(\)/,
+        'launchpad.js must render the chip through the shared VersionFooter component');
 });
 
-test('an unresolved version leaves no mystery gap in the bar', () => {
-    const body = ruleBody(homeBarRules, '.home-bar__version:empty');
-    assert.match(body, /display:\s*none\s*;/,
-        'an empty inline box still consumes the flex gaps around it');
+test('an unresolved version renders "version unknown", not a mystery gap', () => {
+    // Replaces the old .home-bar__version:empty { display: none } rule.
+    // A blank chip told the user nothing; version-footer.js now always
+    // renders text (a real version, or its honest fallback), so there is
+    // no empty case left for CSS to hide.
+    const versionFooterJs = read('client', 'js', 'version-footer.js');
+    assert.match(versionFooterJs, /UNKNOWN_TEXT\s*=\s*'version unknown'/,
+        'the honest fallback text must exist and be named');
+    const emptyRule = homeBarRules.find((r) => r.selector.includes('.home-bar__version:empty'));
+    assert.equal(emptyRule, undefined,
+        'the :empty rule is dead now that the chip never renders empty - '
+        + 'a stale rule here would suggest the chip can still go blank');
 });
 
 // ---------------------------------------------------------------------

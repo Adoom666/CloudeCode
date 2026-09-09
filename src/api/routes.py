@@ -90,6 +90,7 @@ from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 from fastapi.concurrency import run_in_threadpool
 from src.core.session_manager import _configured_wrappers
 from src.core.session_lineage import LINEAGE_UNRESOLVED
+from src.core.session_activity import EVENT_NOTIFICATION, EVENT_STOP
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
 
 logger = structlog.get_logger()
@@ -2190,6 +2191,38 @@ async def claude_event_hook(request: Request):
     except Exception:
         payload = {}
 
+    # READ BEFORE THE EVENT IS APPLIED, because ``Stop`` itself resets the
+    # count to 0 (session_activity.record_event). The question the toast
+    # gate below asks is "were sub-agents running when this event fired",
+    # and for a Stop the only moment that is answerable is BEFORE it
+    # lands. Reading it afterwards would answer 0 every time and the gate
+    # would never fire. It is read here for every kind rather than only
+    # for Stop so that one value means one thing.
+    #
+    # This is also why the gate cannot be built on ``SubagentStop``:
+    # claude fires one of those about 1.5s AFTER the ``Stop`` on a turn
+    # that had no subagent in it (measured - see CLAUDE.md), so an event
+    # that has not arrived yet can neither confirm nor deny anything. The
+    # depth as it stood at this event is the only thing available at the
+    # moment the decision has to be made.
+    #
+    # FAIL TOWARD NOTIFYING. Anything that is not a POSITIVE count of live
+    # sub-agents leaves this at 0 and the toast is raised exactly as
+    # before: an unknown session, a dropped ``SubagentStart`` (hooks are
+    # droppable - CLAUDE.md), or a read that threw. A missed "your turn"
+    # is a worse failure than a spurious one, so silence is only ever
+    # bought with evidence.
+    try:
+        subagent_depth_at_event = session_manager.subagent_depth(session_id)
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning(
+            "hook_subagent_depth_unreadable",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+        subagent_depth_at_event = 0
+
     # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.
     # Best-effort: record_hook_event never raises (see its docstring), so
@@ -2313,6 +2346,37 @@ async def claude_event_hook(request: Request):
         # ACTIVITY_ONLY_EVENTS - state machine already updated above, no
         # toast to create or broadcast.
         return {"ok": True}
+
+    # WHILE SUB-AGENTS ARE RUNNING THE SESSION IS NOT WAITING ON THE USER,
+    # IT IS WAITING ON ITSELF. claude fires ``Stop`` when the main turn
+    # ends even though its own background agents are still going, and it
+    # fires ``Notification`` asking to be looked at in the same state - and
+    # the pane in that state literally reads "Waiting for 2 background
+    # agents to finish". Both toasts summon the user to a session that
+    # wants nothing from them, which is the false-urgency failure this
+    # project already paid for when `question` and `notice` were one state.
+    #
+    # ``PermissionRequest`` IS NEVER SUPPRESSED, at any depth. It is a HARD
+    # BLOCK: claude has stopped mid-turn and cannot continue until a human
+    # answers yes or no, so it is the one ask that stays true no matter how
+    # much else is still running. That is the whole of the exception - the
+    # rule is "waiting on itself", and a permission prompt is the case
+    # where it is not.
+    #
+    # The activity state machine is untouched: the session still records
+    # the event, still flips unread on a Stop, still resolves its status.
+    # The one thing skipped is the interruption.
+    if (
+        event_kind in (EVENT_STOP, EVENT_NOTIFICATION)
+        and subagent_depth_at_event > 0
+    ):
+        logger.info(
+            "hook_toast_suppressed_subagents_running",
+            session_id=session_id,
+            event_kind=event_kind,
+            subagent_depth=subagent_depth_at_event,
+        )
+        return {"ok": True, "toast_suppressed": "subagents_running"}
 
     title, body = _hook_event_presentation(event_kind, payload)
 

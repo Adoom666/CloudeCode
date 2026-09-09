@@ -334,11 +334,11 @@ Three rules for these:
 
 ```bash
 # 1. Download
-curl -LO https://github.com/Adoom666/CloudeCode/releases/download/v0.8.1/Cloude.Code-0.8.1-arm64.dmg
+curl -LO https://github.com/Adoom666/CloudeCodeDev/releases/download/v1.0.35/Cloude.Code-1.0.35-arm64.dmg
 
 # 2. Verify
-shasum -a 256 Cloude.Code-0.8.1-arm64.dmg
-# expected: 00f1beb6af6176ce904d3df472d5d6e37b4400736b2e04255cf72dcbcc89cfa5
+shasum -a 256 Cloude.Code-1.0.35-arm64.dmg
+# expected: f3d2f13fc20192758196f8e844239adec4de08785993e0b3141c4ba493e844c4
 ```
 
 3. Open the DMG, drag **Cloude Code** to `/Applications`, and launch it. The first run provisions the venv, installs dependencies, generates your secrets, and pops a QR window — scan it with your authenticator app.

@@ -79,7 +79,11 @@ function load(opts) {
 
     const trigger = env.document.createElement('button');
     trigger.setAttribute('id', 'sessionEditorBtn');
-    trigger.className = 'fab-menu-btn session-editor-fab';
+    // A HEADER BUTTON, not a FAB - the fixture must match the markup it
+    // stands in for, or it proves the plumbing works on an element the
+    // app does not have. Only the trigger's surface changed; FabMenu
+    // still wires it and AnchorPopover still places its dropdown.
+    trigger.className = 'btn-icon';
     env.document.body.appendChild(trigger);
 
     const toolsTrigger = env.document.createElement('button');
@@ -309,17 +313,16 @@ test('the two triggers report their own aria-expanded', () => {
 // Session-scoped, which is why it is not a header-kebab row
 // ---------------------------------------------------------------------
 
-test('the editor FAB is hidden on every screen with no session', () => {
+test('the editor is hidden on every screen with no session', () => {
     const css = clientFile('css', 'terminal-tools.css');
-    // Both FABs share the base class, so the scoping rule covers both
-    // and cannot be applied to one and forgotten on the other.
-    // THE ARCHIVE JOINED THIS LIST. It is the third screen with no
-    // session attached, and until it did, .session-editor-fab floated
-    // over the archive toolbar - measured at 1440x900, a 45x22px overlap
-    // sitting on the middle of the Export button's label, which is why
-    // every screenshot of it read "Ex####t". Asserted per screen rather
-    // than as one whole-block regex so that adding a FOURTH sessionless
-    // screen cannot silently drop one of the first three.
+    const header = clientFile('css', 'session-editor-header.css');
+    const html = clientFile('index.html');
+
+    // THE TOOLS FAB KEEPS THE DENY-LIST IT ALWAYS HAD. It is still a
+    // `.fab-menu-btn` floating over the screen, so every sessionless
+    // screen is named one at a time - asserted per screen rather than as
+    // one whole-block regex so that adding a FOURTH sessionless screen
+    // cannot silently drop one of the first three.
     for (const screen of ['#launchpad-screen', '#auth-screen', '#archive-screen']) {
         assert.ok(
             css.includes(`body:has(${screen}.active) .fab-menu-btn`),
@@ -328,12 +331,37 @@ test('the editor FAB is hidden on every screen with no session', () => {
     assert.match(css,
         /body:has\(#archive-screen\.active\) \.fab-menu-btn \{\s*\n\s*display: none !important;/,
         'the sessionless-screen list does not end in a display:none rule');
-    const html = clientFile('index.html');
-    for (const id of ['terminalToolsBtn', 'sessionEditorBtn']) {
-        const at = html.indexOf(`id="${id}"`);
-        assert.ok(html.slice(at - 200, at + 200).includes('fab-menu-btn'),
-            `${id} must carry the shared base class`);
-    }
+    const toolsAt = html.indexOf('id="terminalToolsBtn"');
+    assert.ok(html.slice(toolsAt - 200, toolsAt + 200).includes('fab-menu-btn'),
+        'terminalToolsBtn must carry the shared base class');
+
+    // THE SESSION EDITOR IS NOT A FAB ANY MORE, so it cannot inherit
+    // that list. It moved into the header's `.controls` row, which is
+    // mounted on EVERY screen, and `.controls` is exactly the reason it
+    // needs a gate of its own rather than none at all.
+    //
+    // MEASURED CONSEQUENCE OF GETTING THIS WRONG, and it is why the old
+    // list has three entries: while the editor floated, it painted over
+    // the archive screen's Export button - a 45x22px overlap at 1440x900
+    // that made every screenshot of that toolbar read "Ex####t". An
+    // ungated header button would be the same class of bug, just tidier
+    // looking: a control offering "session theme" and "detach session"
+    // on a screen with no session.
+    //
+    // AN ALLOW-LIST, NOT A DENY-LIST. The deny-list above had to be
+    // amended once already when a new sessionless screen arrived. Naming
+    // the ONE screen this control belongs on means a fourth cannot leak
+    // it.
+    assert.match(header, /#sessionEditorBtn \{\s*\n\s*display: none;/,
+        'hidden by default, and on an id so it beats .btn-icon display:flex');
+    assert.match(header,
+        /body:has\(#terminal-screen\.active\) #sessionEditorBtn \{\s*\n\s*display: flex;/,
+        'shown only while the terminal screen is the active screen');
+    const editorAt = html.indexOf('id="sessionEditorBtn"');
+    assert.ok(!html.slice(editorAt - 260, editorAt + 260).includes('fab-menu-btn'),
+        'the editor must not carry the FAB base class any more');
+    assert.ok(html.slice(editorAt - 260, editorAt + 260).includes('btn-icon'),
+        'it carries the header button class its neighbours carry instead');
 });
 
 test('session theme and music did NOT land in the app-scoped kebab', () => {

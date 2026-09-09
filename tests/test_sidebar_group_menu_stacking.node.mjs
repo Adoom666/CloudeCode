@@ -10,12 +10,12 @@
 // (session-sidebar.css) put the menu BEHIND the open sidebar: the two
 // numbers conflicted directly, with no clipping or overflow involved.
 //
-// `.session-row-menu` (session-row-menu.css), the row-level kebab this
-// menu is the group-level equivalent of, was built after and got this
-// right at `z-index: 1200`, which is why it layers correctly and the
-// group menu did not. The fix brings the group menu up to the same
-// value; the two never coexist (session-sidebar-group-actions.js keeps
-// `openMenu` as a single slot), so sharing a number is safe.
+// The row-level overflow menu was built after and got this right at
+// `z-index: 1200`, which is why it layered correctly and the group menu
+// did not. The fix brought the group menu up to the same value. That row
+// menu was removed on 2026-09-08 (pin and close are inline icons again),
+// so this is now the only body-mounted menu the sidebar opens and the
+// comparison below is against the panel alone.
 //
 // Run with: node tests/test_sidebar_group_menu_stacking.node.mjs
 
@@ -100,11 +100,9 @@ function decl(body, prop) {
 
 const groupsCss = clientFile('css', 'session-sidebar-groups.css');
 const sidebarCss = clientFile('css', 'session-sidebar.css');
-const rowMenuCss = clientFile('css', 'session-row-menu.css');
 
 const groupsRules = rules(groupsCss);
 const sidebarRules = rules(sidebarCss);
-const rowMenuRules = rules(rowMenuCss);
 
 /**
  * Pull the numeric z-index off the first rule matching `selector`.
@@ -133,16 +131,19 @@ test('.session-sidebar-group-menu paints above .session-sidebar-panel', () => {
         + `(${panelZ}), or the menu paints behind the open sidebar`);
 });
 
-test('.session-sidebar-group-menu matches its row-level sibling, .session-row-menu', () => {
-    // Not load-bearing on its own (either menu clearing the panel is
-    // sufficient), but the two are the group- and row-level versions of
-    // the same control and should share a layer now that both are fixed.
-    const menuZ = zIndexOf(groupsRules, '.session-sidebar-group-menu');
-    const rowMenuZ = zIndexOf(rowMenuRules, '.session-row-menu');
-    assert.equal(menuZ, rowMenuZ,
-        'the group menu and the row kebab menu are never open at the same '
-        + 'time (each keeps a single-slot "open menu" reference), so they '
-        + 'can safely share a z-index layer');
+test('the deleted row overflow menu is not still being styled', () => {
+    // The stylesheet that carried `.session-row-menu` was removed with
+    // the menu itself. An orphan rule for a class nothing emits is the
+    // kind of leftover that makes a reader think the control still
+    // exists, and it would silently re-style the row's inline pin and
+    // close if either ever landed inside an element carrying that class.
+    const dir = path.join(__dirname, '..', 'client', 'css');
+    const offenders = fs.readdirSync(dir).filter(
+        (name) => name.endsWith('.css')
+            && fs.readFileSync(path.join(dir, name), 'utf8')
+                .includes('.session-row-menu'));
+    assert.deepEqual(offenders, [],
+        `these stylesheets still style the removed row menu: ${offenders}`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

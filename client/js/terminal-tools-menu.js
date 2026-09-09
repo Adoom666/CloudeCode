@@ -7,12 +7,20 @@
  * button. It is the successor to the paperclip FAB, which already owned
  * two of the three.
  *
+ * MOBILE ONLY. The trigger and this menu are hidden above 769px by one
+ * media query in terminal-tools.css, on the owner's instruction that
+ * "this icon and popup menu should only be visible on mobile view". A
+ * desktop keeps the paste row's job through xterm's own cmd+V and
+ * terminal.js's capture-phase file-paste handler; the copy sheet and the
+ * file picker have no other desktop entry point, which is recorded there
+ * rather than papered over with a second control.
+ *
  * WHAT IS NOT HERE, AND WHY. Session theme and session music were briefly
  * merged into this menu and that was wrong: they do not move content,
  * they configure the session's appearance and sound. They are the SESSION
  * EDITOR (#sessionEditorBtn, session-editor-menu.js), a separate control
- * with its own glyph on the top-right rail. Two coherent groups beat one
- * drawer of everything.
+ * with its own glyph, now a button in the header. Two coherent groups
+ * beat one drawer of everything.
  *
  * ALSO NOT HERE: the header kebab (#header-menu-toggle, header-menu.js)
  * is APP-scoped - home, detach, logout, settings, claude config - and is

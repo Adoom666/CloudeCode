@@ -150,7 +150,7 @@ test('.btn-icon pins the round header icon controls to a control-size square', (
     assert.equal(decl(reset[0].body, 'height'), 'var(--control-size)');
 });
 
-test('.btn-icon is applied to exactly the three static buttons that need it', () => {
+test('.btn-icon is applied to exactly the four static buttons that need it', () => {
     // header-menu-toggle is built at runtime by header-menu.js, not
     // present in index.html, so it is not part of this static check.
     assert.match(indexHtml, /id="configEditorBtn"[^>]*class="btn-icon hidden"/,
@@ -173,16 +173,28 @@ test('.btn-icon is applied to exactly the three static buttons that need it', ()
     // user-agent stylesheet as an unstyled square. Count 2 -> 3.
     assert.match(indexHtml, /id="archiveBtn"[^>]*class="btn-icon"/,
         '#archiveBtn should carry the btn-icon class');
+    // #sessionEditorBtn JOINED THIS SET when the owner asked for the
+    // floating "session editor" control to be moved "up into the menu
+    // next to the folder one". It used to be a 45px FAB carrying
+    // `.fab-menu-btn`, which declared its own full box; as a header
+    // control it takes the header's box from this class instead, which
+    // is the whole reason the move is a MOVE and not a restyle - its
+    // size, gap, hover and focus now come from the same place its two
+    // neighbours' do. Count 3 -> 4, and this is the deliberate edit the
+    // note below asks for. It is still gated to the terminal screen, by
+    // client/css/session-editor-header.css rather than by a class.
+    assert.match(indexHtml, /id="sessionEditorBtn"[^>]*class="btn-icon"/,
+        '#sessionEditorBtn should carry the btn-icon class');
     // Nothing ELSE in the static markup should carry it - every other
     // button already owns its full box via its own class. This is still an
-    // exact-set assertion, not a floor: a fourth one appearing means
+    // exact-set assertion, not a floor: a fifth one appearing means
     // somebody styled a button by borrowing the header treatment instead
     // of giving it its own, and that should be a deliberate edit here.
     const withClass = [...indexHtml.matchAll(/<button[^>]*class="([^"]*)"[^>]*>/g)]
         .filter((m) => m[1].split(/\s+/).includes('btn-icon'));
-    assert.equal(withClass.length, 3,
-        'btn-icon should be on exactly three static <button>s '
-        + '(#archiveBtn, #configEditorBtn and #launchpad-help-btn)');
+    assert.equal(withClass.length, 4,
+        'btn-icon should be on exactly four static <button>s (#archiveBtn, '
+        + '#configEditorBtn, #launchpad-help-btn and #sessionEditorBtn)');
 });
 
 test('box-sizing is border-box, which is why the reset eats padding', () => {

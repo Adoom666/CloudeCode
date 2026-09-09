@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Iterator
@@ -155,6 +156,58 @@ def assert_socket_guard_active(tmux_socket_isolation: str) -> None:
             f"{TEST_SOCKET_PREFIX!r}, so it cannot be shown to be a "
             "throwaway socket."
         )
+
+
+@pytest.fixture(scope="session")
+def _nonscratch_base() -> Iterator[Path]:
+    """One throwaway directory the SCRATCH GUARD does not refuse.
+
+    ``src.core.transcript_import_paths.SCRATCH_PREFIXES`` refuses
+    ``/tmp``, ``/private/tmp`` and ``/var/folders`` as project roots, so
+    a per-run temp folder can never become a launcher entry. That guard
+    is correct and must not be widened to suit a test.
+
+    pytest's own ``tmp_path`` lands under exactly those prefixes -
+    ``/tmp/pytest-of-<user>/...`` on a Linux runner - so a test that
+    needs a directory the project binder will accept as a REAL project
+    root cannot use it. On macOS ``tmp_path`` sits under
+    ``/private/var/folders``, which escapes the list by accident; that
+    accident is why this only ever failed on the Linux half of CI.
+
+    A real project lives in the user's own space, so that is what this
+    hands out: one session-scoped directory under the home directory,
+    removed at the end of the run.
+
+    Inputs: none.
+    Output: yields Path - the base directory for this session.
+    """
+    base = Path(tempfile.mkdtemp(prefix=".cloude-test-project-roots-", dir=Path.home()))
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.fixture
+def nonscratch_tmp_path(_nonscratch_base: Path) -> Path:
+    """A fresh empty directory the project binder accepts as a project root.
+
+    Drop-in replacement for ``tmp_path`` in the tests that hand a
+    directory to the project binder or the transcript planner. Every
+    other test should keep using ``tmp_path``.
+
+    Inputs: _nonscratch_base (Path) - the session-scoped base directory.
+    Output: Path - a new empty directory, asserted non-scratch.
+    """
+    from src.core.transcript_import_paths import is_scratch
+
+    path = Path(tempfile.mkdtemp(dir=_nonscratch_base))
+    assert not is_scratch(str(path)), (
+        f"{path} is under a SCRATCH_PREFIXES entry, so the project binder "
+        "will refuse it and every test using this fixture would assert "
+        "against a refusal rather than against the behaviour it names."
+    )
+    return path
 
 
 @pytest.fixture

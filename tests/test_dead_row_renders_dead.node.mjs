@@ -268,8 +268,10 @@ test('a live row is unchanged, so this is a split and not a blanket', () => {
     );
     assertList(
         SessionRowActions.actionsFor('working'),
-        [SessionRowActions.ACTION_CLOSE, SessionRowActions.ACTION_RESTART],
-        'a live row must still offer close then restart'
+        [SessionRowActions.ACTION_CLOSE],
+        'a live row must offer close alone - its restart control was '
+        + 'removed on 2026-09-08, which makes the dead row the only '
+        + 'surface left that reaches the respawn ladder'
     );
 });
 

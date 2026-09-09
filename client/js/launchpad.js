@@ -1738,11 +1738,20 @@ class Launchpad {
             // via the shared SessionStatusUI helper (client/js/session-status-ui.js),
             // NOT the old ownership-colored placeholder. title + aria-label
             // on the dot itself so the state is never color-only.
+            // THE LIGHT CARRIES THE UNREAD FLAG NOW. The envelope icon
+            // that used to sit further along this row was removed on
+            // 2026-09-08, so the card hands the LED the signals a bare
+            // status string cannot express - the persisted unread flag,
+            // the startup gate, and whether this browser's socket to the
+            // session is up - and the light says all of it.
             const statusDot = window.SessionStatusUI
-                ? window.SessionStatusUI.dotHtml(s.status)
-                : '';
-            const markUnread = window.SessionStatusUI
-                ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
+                ? window.SessionStatusUI.dotHtml(s.status, {
+                    unread: !!s.unread,
+                    startup_gate: s.startup_gate,
+                    transport: window.SessionTransport
+                        ? window.SessionTransport.stateFor(s.name)
+                        : undefined,
+                })
                 : '';
             // X (close) on a running row, trash (remove) on a stopped one,
             // never both - built by the shared SessionRowActions module so
@@ -1794,7 +1803,6 @@ class Launchpad {
                     ${themeSwatch}
                     ${renamePencil}
                     ${forkBtn}
-                    ${markUnread}
                     ${rowAction}
                   </div>
                   <div class="running-session-badges">
@@ -2715,18 +2723,8 @@ class Launchpad {
                 : null;
             const forkEl = e.target.closest('.running-session-fork');
             const renameEl = e.target.closest('.running-session-rename');
-            const markUnreadEl = e.target.closest('[data-mark-unread]');
             const rowEl = e.target.closest('.running-session-row');
             if (!rowEl) return;
-
-            // Envelope icon path: manual mark/clear unread. Stop
-            // propagation so the row click handler (return/adopt) never
-            // also fires - this is a status toggle, not a navigation.
-            if (markUnreadEl) {
-                e.stopPropagation();
-                await this._handleMarkUnread(markUnreadEl);
-                return;
-            }
 
             // Fork path: spawn a NEW session branching this one. Stops
             // propagation so the row click (return/adopt) does not also
@@ -2797,44 +2795,7 @@ class Launchpad {
             // Not yet attached → adopt it as a (new, concurrent) session
             await this._handleAttachRunningSession(name);
         });
-        // Keyboard activation (Enter/Space) for the mark-unread toggle -
-        // it's a `role="button"` span, not a real <button>, so it needs
-        // explicit key handling to be operable without a mouse.
-        container.addEventListener('keydown', async (e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            const markUnreadEl = e.target.closest('[data-mark-unread]');
-            if (!markUnreadEl) return;
-            e.preventDefault();
-            e.stopPropagation();
-            await this._handleMarkUnread(markUnreadEl);
-        });
         container.__boundRunningClicks = true;
-    }
-
-    /**
-     * Toggle the manual unread flag for one running-session row.
-     *
-     * Description: Optimistic-ish - awaits the PATCH, then forces a
-     *   re-render by invalidating the signature cache and re-fetching, so
-     *   the toggle's visual state (and the finished_unread dot it may
-     *   flip on/off) updates immediately rather than waiting for the next
-     *   5s poll tick.
-     * Inputs:
-     *   toggleEl (Element) - the `[data-mark-unread]` span clicked,
-     *     carrying the tmux name + current state as data-* attributes.
-     * Output: Promise<void>.
-     */
-    async _handleMarkUnread(toggleEl) {
-        const tmuxName = toggleEl.dataset.markUnread;
-        if (!tmuxName) return;
-        const next = toggleEl.dataset.unreadCurrent !== 'true';
-        try {
-            await window.API.setSessionUnread(tmuxName, next);
-            this._lastRunningSig = null; // force a repaint past the sig-diff guard
-            await this.loadRunningSessions();
-        } catch (err) {
-            console.error('[launchpad] mark-unread failed:', err);
-        }
     }
 
     /**
@@ -3601,7 +3562,7 @@ class Launchpad {
                     <span class="home-bar__status-text" id="home-bar-status-text"></span>
                 </span>
                 <span class="home-bar__spacer" aria-hidden="true"></span>
-                <span class="version home-bar__version" id="home-bar-version"></span>
+                <span class="home-bar__version" id="home-bar-version"></span>
                 <a class="home-bar__link" href="https://nyedis.ai" target="_blank" rel="noopener noreferrer"
                    aria-label="nyedis.ai" title="nyedis.ai">
                         <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
@@ -3630,21 +3591,24 @@ class Launchpad {
     /**
      * Stamp the app version into the home bar's chip.
      *
-     * The version is resolved server-side and stamped into the
-     * `cloude-app-version` meta tag by src/main.py; this markup is built
-     * at runtime and so has no server-rendered token of its own. An
-     * absent or empty meta leaves the chip empty, which
-     * `.home-bar__version:empty` then removes from the layout - a blank
-     * gap beside the bird would read as a broken control.
+     * `#home-bar-version` is a mount point, not the version text itself:
+     * client/js/version-footer.js owns the string (a real version, or
+     * "version unknown" when the resolver could not determine one - see
+     * that file for why the unresolved case is named rather than left
+     * blank) and this markup is built at runtime, so it has no
+     * server-rendered content of its own to stamp. The same call
+     * produces the sidebar footer's version line
+     * (VersionFooter.sidebarFooterHtml() in
+     * client/js/session-sidebar-rows.js), so the two placements can
+     * never show two different strings.
      *
      * @returns {void}
      */
     renderHomeBarVersion() {
-        const chip = document.getElementById('home-bar-version');
-        if (!chip) return;
-        const meta = document.querySelector('meta[name="cloude-app-version"]');
-        const version = meta ? (meta.getAttribute('content') || '').trim() : '';
-        chip.textContent = version;
+        const mount = document.getElementById('home-bar-version');
+        if (!mount) return;
+        mount.innerHTML = window.VersionFooter
+            ? window.VersionFooter.versionSpanHtml() : '';
     }
 
     /**
@@ -4109,7 +4073,7 @@ class Launchpad {
      *   (``_renderFamilyPillHtml``, ``SessionStatusUI.dotHtml``), so a
      *   session never looks different depending on which surface drew
      *   it. Clicking the row opens/adopts the session via
-     *   ``_bindProjectSessionRowClicks`` - kill/rename/mark-unread stay
+     *   ``_bindProjectSessionRowClicks`` - kill/rename stay
      *   exclusively on the flat list above, this row does not duplicate
      *   those controls.
      * Inputs: s (object) - one running-session row (same shape as
@@ -4173,8 +4137,18 @@ class Launchpad {
         const displayName = this._sessionDisplayLabel(s);
         const escapedName = this._escapeHtml(s.name);
         const escapedDisplay = this._escapeHtml(displayName);
+        // Same signals the running-session card passes, for the same
+        // reason: one component, one meaning per colour, on every
+        // surface. A project-tree row that painted a plainer light than
+        // the card above it would be two answers to one question.
         const statusDot = window.SessionStatusUI
-            ? window.SessionStatusUI.dotHtml(s.status)
+            ? window.SessionStatusUI.dotHtml(s.status, {
+                unread: !!s.unread,
+                startup_gate: s.startup_gate,
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(s.name)
+                    : undefined,
+            })
             : '';
         return `
                 <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">

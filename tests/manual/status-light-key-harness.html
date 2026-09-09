@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>status light and key harness</title>
+<!--
+  THREE THINGS ARE MEASURED HERE, and all three were reported by eye
+  before anyone measured them.
+
+  1. ONE LIT DIAMETER. Until 2026-09-09 the LED's element box was 9px in
+     every state - which is why nothing caught it - while the LIT object
+     came out at three different diameters, because the halo was sized
+     per state AND drawn partly outside its own box by a spread
+     box-shadow. Only the loud states' halos were ever visible, so in a
+     sidebar where one session is working and the rest are at rest, one
+     dot read about 60 percent wider than its neighbours.
+     scripts/verify_status_led_geometry.py reads the ::after box out of
+     the browser for every (inner, outer) pair and requires them all to
+     match, and separately requires nothing to paint outside it.
+
+  2. THE GROUP HEADER DRAWS THE ROW COMPONENT. A header's roll-up is
+     StatusLed.ledHtml with a folded (inner, outer) pair, so it takes
+     every treatment a row takes including the green ring around a grey
+     centre. The yellow numeric unread badge that used to sit beside it
+     is gone.
+
+  3. THE KEY IS THE REAL LIGHTS. Every swatch in the legend is the
+     shipped component, not a picture of one, so the legend cannot show
+     a colour, a size or a shape the app does not paint.
+
+  EVERYTHING IS BUILT BY THE SHIPPED MODULES. Nothing on this page
+  hand-writes a dot, a header or a legend row; a hardcoded span would let
+  the harness and the app drift and the drift would look like a pass.
+
+  Serve over http from the repo root:
+    http://127.0.0.1:<port>/tests/manual/status-light-key-harness.html
+  A file:// origin cannot fetch the theme manifests.
+
+  Poll window.__keyReady before measuring.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar.css" />
+<link rel="stylesheet" href="../../client/css/status-dot.css" />
+<link rel="stylesheet" href="../../client/css/status-led.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-density.css" />
+<link rel="stylesheet" href="../../client/css/session-sidebar-groups.css" />
+<link rel="stylesheet" href="../../client/css/session-status-key.css" />
+<style>
+  /* The page carries no colour opinion of its own - __applyTheme paints
+     the backdrop from the theme's own --color-bg, so every light
+     composites against the colour a real sidebar row sits on. */
+  body { margin: 0; padding: 16px; font-family: inherit; }
+  .panel {
+      /* The narrow phone width the sidebar has to survive. The driver
+         also renders this page at a desktop viewport; the panel width
+         is what the sidebar itself is, not what the window is. */
+      width: 298px;
+      max-width: 100%;
+      border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 6px;
+  }
+  .panel + .panel { margin-top: 16px; }
+  .caption {
+      font-size: 11px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--color-fg-faint);
+      margin: 0 0 6px 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <p class="caption">group headers</p>
+  <div id="headers"></div>
+</div>
+
+<div class="panel">
+  <p class="caption">every state</p>
+  <div class="session-sidebar-list" id="rows"></div>
+</div>
+
+<div class="panel">
+  <p class="caption">the key, closed</p>
+  <div id="key-closed"></div>
+</div>
+
+<div class="panel">
+  <p class="caption">the key, open</p>
+  <div id="key-open"></div>
+</div>
+
+<script src="../../client/js/status-led.js"></script>
+<script src="../../client/js/session-status-summary.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-status-key.js"></script>
+<script src="../../client/js/session-sidebar-rows.js"></script>
+<script src="../../client/js/session-sidebar-groups.js"></script>
+<script>
+window.__keyReady = false;
+
+/**
+ * Apply one shipped theme's cssVars to :root, exactly as the real theme
+ * loader does, by reading that theme's OWN manifest off disk. Hardcoding
+ * a palette here would test a palette this app does not ship.
+ *
+ * Every property the previous theme set is cleared first - see the same
+ * helper in status-dot-shape-harness.html for the measured reason.
+ *
+ * @param {string} id - theme directory name, e.g. "claude".
+ * @returns {Promise<object>} the cssVars map that was applied.
+ */
+window.__applyTheme = async function (id) {
+    const res = await fetch('../../client/css/themes/' + id + '/theme.json');
+    if (!res.ok) throw new Error('theme manifest ' + id + ' -> HTTP ' + res.status);
+    const manifest = await res.json();
+    const vars = manifest.cssVars || {};
+    const root = document.documentElement;
+    Array.from(root.style).forEach((k) => {
+        if (k.indexOf('--') === 0) root.style.removeProperty(k);
+    });
+    Object.keys(vars).forEach((k) => root.style.setProperty(k, vars[k]));
+    root.setAttribute('data-theme', id);
+    document.body.style.background = vars['--color-bg'] || '#000000';
+    return vars;
+};
+
+/**
+ * Server rows for the two group headers, chosen so one header folds to
+ * the finished-turn ring and the other to a working session. Between
+ * them they prove the roll-up takes the ring AND that a busier state
+ * still outranks it, which is the documented priority.
+ * @type {object}
+ */
+window.__GROUPS = {
+    pinned: [
+        { activity_status: 'idle', unread: true },
+        { activity_status: 'idle' },
+        { activity_status: 'idle' },
+    ],
+    other: [
+        { activity_status: 'working' },
+        { activity_status: 'idle', unread: true },
+    ],
+};
+
+/**
+ * One entry per (inner, outer) pair the app can actually reach, named by
+ * the server status that produces it. Measuring only the reachable pairs
+ * would miss a regression in one nobody happens to be in today, so the
+ * driver enumerates the FULL matrix off StatusLed itself; this list is
+ * what the human-readable rows show.
+ * @type {Array<object>}
+ */
+window.__ROWS = [
+    { label: 'question', status: 'question', signals: {} },
+    { label: 'startup prompt', status: 'idle',
+      signals: { startup_gate: 'awaiting_startup_prompt' } },
+    { label: 'notice', status: 'notice', signals: {} },
+    { label: 'working', status: 'working', signals: {} },
+    { label: 'finished unread', status: 'finished_unread', signals: {} },
+    { label: 'idle', status: 'idle', signals: {} },
+    { label: 'dead', status: 'dead', signals: {} },
+    { label: 'disconnected', status: 'idle',
+      signals: { transport: 'disconnected' } },
+    { label: 'unknown', status: 'unknown', signals: {} },
+];
+
+/**
+ * Build every block from the shipped modules.
+ * @returns {void}
+ */
+function build() {
+    document.getElementById('headers').innerHTML = Object.keys(window.__GROUPS)
+        .map((k) => window.SessionSidebarGroups.headerHtml(
+            k, window.__GROUPS[k].length, false, window.__GROUPS[k],
+        )).join('');
+
+    document.getElementById('rows').innerHTML = window.__ROWS.map((r) => (
+        '<div class="session-sidebar-row" data-active="0" data-pinned="0" '
+        + 'data-state="' + r.label + '">'
+        + '<div class="session-sidebar-row-main">'
+        + window.SessionStatusUI.dotHtml(r.status, r.signals)
+        + '<span class="session-sidebar-row-name">' + r.label + '</span>'
+        + '</div></div>'
+    )).join('');
+
+    document.getElementById('key-closed').innerHTML = window.SessionStatusKey.keyHtml();
+
+    // The open copy is produced by pressing the REAL toggle, not by
+    // writing `open` markup by hand: what is screenshotted is then the
+    // state a user can actually reach.
+    const open = document.getElementById('key-open');
+    open.innerHTML = window.SessionStatusKey.keyHtml();
+    window.SessionStatusKey.onToggleClick(
+        open.querySelector('[data-status-key-toggle]'),
+    );
+}
+
+/**
+ * The geometry of one LED, for the driver to compare against every
+ * other. Reports the ELEMENT box and the HALO box separately, because
+ * the defect this page exists for moved only the second one.
+ *
+ * @param {Element} el - a `.status-led`.
+ * @returns {object} boxes, paint and the two state attributes.
+ */
+function ledGeometry(el) {
+    const cs = getComputedStyle(el);
+    const after = getComputedStyle(el, '::after');
+    const r = el.getBoundingClientRect();
+    return {
+        inner: el.getAttribute('data-inner'),
+        outer: el.getAttribute('data-outer'),
+        box: { w: r.width, h: r.height },
+        dotWidth: cs.width,
+        dotHeight: cs.height,
+        haloWidth: after.width,
+        haloHeight: after.height,
+        haloBoxShadow: after.boxShadow,
+        haloBackground: after.backgroundImage,
+        haloOpacity: after.opacity,
+        label: el.getAttribute('aria-label'),
+    };
+}
+
+/**
+ * Render the FULL (inner x outer) matrix off the component's own
+ * vocabularies into a measuring strip, and report one geometry record
+ * per pair. Enumerating from StatusLed rather than from a list in this
+ * file is what stops a state being added to the app and not to the
+ * measurement.
+ *
+ * @returns {Array<object>} one record per pair.
+ */
+window.__measureMatrix = function () {
+    const strip = document.createElement('div');
+    strip.id = 'matrix';
+    strip.style.position = 'absolute';
+    strip.style.left = '-9999px';
+    const pairs = [];
+    window.StatusLed.INNER_STATES.forEach((inner) => {
+        window.StatusLed.OUTER_STATES.forEach((outer) => {
+            pairs.push({ inner, outer });
+        });
+    });
+    strip.innerHTML = pairs
+        .map((p) => window.StatusLed.ledHtml({ inner: p.inner, outer: p.outer }))
+        .join('<br />');
+    document.body.appendChild(strip);
+    const out = Array.from(strip.querySelectorAll('.status-led')).map(ledGeometry);
+    strip.remove();
+    return out;
+};
+
+/**
+ * The geometry of every light actually on the page - the rows, the two
+ * group headers and every swatch in the key. This is the check that the
+ * REAL surfaces agree, not only the synthetic matrix above.
+ *
+ * @returns {Array<object>} one record per rendered LED, tagged by block.
+ */
+window.__measurePage = function () {
+    const blocks = ['headers', 'rows', 'key-closed', 'key-open'];
+    const out = [];
+    blocks.forEach((id) => {
+        const host = document.getElementById(id);
+        Array.from(host.querySelectorAll('.status-led')).forEach((el) => {
+            const rec = ledGeometry(el);
+            rec.block = id;
+            out.push(rec);
+        });
+    });
+    return out;
+};
+
+/**
+ * What the group headers rolled up to, and whether any unread badge
+ * survived. The badge was removed on 2026-09-09; a rule or a builder
+ * left behind would show up here.
+ *
+ * @returns {object} per-header state plus a badge count for the page.
+ */
+window.__headerReport = function () {
+    const headers = Array.from(
+        document.querySelectorAll('.session-sidebar-group__headerrow'),
+    ).map((row) => {
+        const led = row.querySelector('.status-led');
+        return {
+            group: row.querySelector('[data-group-toggle]')
+                .getAttribute('data-group-toggle'),
+            count: row.querySelector('.session-sidebar-group__count').textContent,
+            inner: led ? led.getAttribute('data-inner') : null,
+            outer: led ? led.getAttribute('data-outer') : null,
+        };
+    });
+    return {
+        headers: headers,
+        badges: document.querySelectorAll('.status-summary-badge').length,
+        footerNotes: document.querySelectorAll('.session-sidebar-note').length,
+    };
+};
+
+build();
+window.__keyReady = true;
+</script>
+</body>
+</html>

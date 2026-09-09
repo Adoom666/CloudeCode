@@ -132,25 +132,24 @@ test('losing Remove on a dead row would be a regression - it is still there', ()
     );
 });
 
-test('a running row offers close FIRST and then restart', () => {
-    // SUPERSEDES "only close", by TODO item 22 part 2. Restarting a live
-    // session is now a supported operation (respawn-pane -k in place), so
-    // the row offers it - but close stays FIRST, because that is where the
-    // muscle memory on these rows already points and moving a destructive
-    // control under a trained cursor is its own defect.
+test('a running row offers close and nothing else', () => {
+    // THE RULE WENT BACK, and this is its third position. It was "close
+    // only", then "close then restart" when respawn learned to replace a
+    // live pane (respawn-pane -k in place), and it is "close only" again
+    // from 2026-09-08: "remove 'add to group' / 'restart the agent' and
+    // the three dots now that they're not needed."
     //
-    // Offering it is not permitting it. The control opens the restart
-    // picker, which needs an arm box AND a confirm modal, and the server
-    // needs `confirm_restart_live` on top of that. See
-    // tests/test_restart_live_gate.node.mjs.
+    // THE RESTART SUBSYSTEM IS NOT DELETED. The picker, the preview
+    // endpoint, the arm box, the confirm modal and the server's
+    // `confirm_restart_live` are all still there and still tested by
+    // tests/test_restart_live_gate.node.mjs; what is gone is the only UI
+    // that handed a RUNNING session to them. A DEAD row still reaches
+    // that path, and that case is asserted above.
     const w = loadModules();
-    for (const status of ['working', 'idle', 'question', 'working_subagent']) {
+    for (const status of ['working', 'idle', 'question', 'working_subagent',
+        'notice', 'finished_unread', 'running']) {
         const actions = local(w.SessionRowActions.actionsFor(status));
-        assert.deepEqual(
-            actions,
-            [w.SessionRowActions.ACTION_CLOSE, w.SessionRowActions.ACTION_RESTART],
-            status,
-        );
+        assert.deepEqual(actions, [w.SessionRowActions.ACTION_CLOSE], status);
     }
 });
 
@@ -158,8 +157,9 @@ test('unknown status is never treated as dead', () => {
     const w = loadModules();
     // Guessing 'dead' here would offer to restart a session that may well
     // be running, and to remove one that is not gone. It stays close-only
-    // even now that KNOWN-live rows offer restart: a control that kills a
-    // running process is not offered on a state nobody could read.
+    // on its own merits, independently of what a KNOWN-live row is
+    // currently offered: a control that kills a running process is not
+    // offered on a state nobody could read.
     assert.deepEqual(local(w.SessionRowActions.actionsFor(undefined)), [
         w.SessionRowActions.ACTION_CLOSE,
     ]);
@@ -181,15 +181,17 @@ test('THE VISIBLE DEFECT: dead-row markup renders two buttons', () => {
     assert.deepEqual(local(actionsIn(markup)), ['restart', 'remove']);
 });
 
-test('a running row renders close then restart, an unknown one close alone', () => {
+test('a running row and an unknown one both render close alone', () => {
     const w = loadModules();
     const live = w.SessionRowActions.html('working', 'my-session', 'surface');
-    assert.equal(buttonCount(live), 2, live);
-    assert.deepEqual(local(actionsIn(live)), ['close', 'restart']);
+    assert.equal(buttonCount(live), 1, live);
+    assert.deepEqual(local(actionsIn(live)), ['close']);
 
-    // The row whose state could not be read is the one that keeps the old
-    // single-button markup, and that is the half of the rule still worth
-    // pinning.
+    // They arrive at the same markup by two different routes, and that is
+    // worth stating rather than collapsing: the live row lost a control
+    // it was given and later had removed, while the unreadable row never
+    // had one, because a control that kills a running process is not
+    // offered on a guess.
     const unread = w.SessionRowActions.html('unknown', 'my-session', 'surface');
     assert.equal(buttonCount(unread), 1, unread);
     assert.deepEqual(local(actionsIn(unread)), ['close']);

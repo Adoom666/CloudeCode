@@ -39,8 +39,8 @@
 .header {
     /* --header-pad-y already carries the per-breakpoint value, so the
      * top inset is added ONCE here rather than restated three times.
-     * The same token feeds --header-h, which the top-right FAB below
-     * clears itself against. */
+     * The same token feeds --header-h, which the toast layer and the
+     * shared FAB notice clear themselves against. */
     padding-top: calc(var(--header-pad-y) + env(safe-area-inset-top));
     /* --header-pad-x carries the per-breakpoint side padding the same way,
      * so the two media queries that used to restate 15px and 12px here are
@@ -69,8 +69,7 @@
  * home-indicator strip while its contents stay above it.
  *
  * An id beats the `.screen` class, so no !important and no ordering
- * dependency. Same shape as the `:not(.session-editor-fab)` exclusion
- * further down: an element that owns its own inset says so here rather
+ * dependency. An element that owns its own inset says so here rather
  * than silently taking the generic one as well. */
 #launchpad-screen {
     padding-bottom: 0;
@@ -100,25 +99,24 @@
  * needs the bottom inset added to its own offset or it sits under the
  * home indicator. Values mirror the base offsets in styles.css.
  *
- * The session editor is EXCLUDED because it is not on the bottom row any
- * more - it hangs from the top-right rail and takes the TOP inset
- * instead, below. This file loads after terminal-tools.css, so without
- * the :not() the bottom rule here would win on equal specificity and
- * quietly drag the editor back down to the command line. */
+ * THE `:not(.session-editor-fab)` EXCLUSION IS GONE WITH THE CONTROL IT
+ * excluded. The session editor used to hang from a top-right rail and
+ * take the TOP inset instead, and because this file loads after
+ * terminal-tools.css the exclusion was what stopped this rule dragging
+ * it back down to the command line. It is a header button now
+ * (session-editor-header.css) and is not a `.fab-menu-btn` at all, so
+ * every remaining `.fab-menu-btn` really is on the bottom row and the
+ * rule can name them plainly. */
 .dpad-float-button,
 .slash-commands-btn,
-.fab-menu-btn:not(.session-editor-fab) {
+.fab-menu-btn {
     bottom: calc(var(--fab-edge) + env(safe-area-inset-bottom));
 }
 
-/* The top-right rail. The header grows by exactly the top inset above,
- * so the editor's clearance below it is the same --fab-gap it is in
- * browser mode. `bottom: auto` is restated because the base rule in
- * terminal-tools.css is what this file is layered over. */
-.session-editor-fab {
-    top: calc(var(--fab-top-edge) + env(safe-area-inset-top));
-    bottom: auto;
-}
+/* NO TOP-RIGHT RAIL RULE HERE ANY MORE. The session editor rides the
+ * header's own `padding-top: calc(var(--header-pad-y) +
+ * env(safe-area-inset-top))` above, like every other header control,
+ * so there is nothing left to inset by hand. */
 
 /* THE CONNECTION LIGHT NEEDS NO RULE HERE ANY MORE. It used to be a
  * `position: fixed` chip that had to be pushed up off the home indicator

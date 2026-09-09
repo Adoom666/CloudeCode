@@ -36,17 +36,38 @@ in raw mode would have consumed the byte silently and repainted.
 THE FIX
 -------
 
-Ask the pane which case it is in, using ``#{alternate_on}``:
+Nothing is written into the pane on attach, in either case. The client
+is sent tmux's own capture of the pane's visible screen. That capture is
+taken AFTER the resize, from tmux's reflowed buffer, so it is already at
+the current geometry - precisely the property the old scrollback replay
+lacked and the whole reason Ctrl+L was reached for in the first place.
 
-* On the alternate screen (vim, less, the Claude CLI): a full-screen TUI
-  in raw mode. Ctrl+L means redraw. Unchanged behavior, so the original
-  problem stays fixed.
-* Not on the alternate screen: send the client a repaint of the pane's
-  visible screen instead, and write NOTHING to the pane. The capture is
-  taken AFTER the resize, from tmux's own reflowed buffer, so it is at
-  the current geometry - which is precisely the property the old
-  scrollback replay lacked and the reason Ctrl+L was reached for in the
-  first place.
+The alternate-screen case used to be the exception: a full-screen TUI in
+raw mode consumes Ctrl+L silently and repaints, so handing the redraw
+back to the application looked strictly better than capturing it. That
+reasoning does not survive contact with Claude Code 2.1.x's fullscreen
+renderer, measured byte-for-byte against a live pane on 2026-09-08:
+
+    <mode re-assertions>  ESC[?25l  ESC[2J  ESC[H  <rows 53-59 only>
+
+It answers the form feed with ``ESC[2J`` - erase the ENTIRE screen - and
+then repaints only the rows its diff engine believes changed, which on a
+quiescent session is the update banner, the prompt box and the footer.
+Rows 1 through 52 were erased and never redrawn. The user's conversation
+was destroyed by the very request meant to restore it, once per attach,
+and on a phone a re-attach is the common case rather than the rare one.
+
+A capture cannot do that. It reads the frame tmux already holds and
+sends it to the browser; the pane's process never learns the attach
+happened. So the alternate-screen branch was removed and both cases now
+paint the same way.
+
+``#{alternate_on}`` is still probed, because it still decides one thing:
+whether a BLANK screen may be announced as a stall (below). The notice
+tells the user a shell script may be waiting on input they cannot see.
+An alternate-screen pane is a raw-mode application, never a
+canonical-mode line reader, so that advice would be wrong there - and
+wrong advice is worse than silence.
 
 STALL DETECTION, AND WHY A BLANK SCREEN IS TWO OUTCOMES
 -------------------------------------------------------
@@ -91,9 +112,6 @@ logger = structlog.get_logger()
 #: reconnecting client's stale content cannot show through underneath.
 _CLEAR_AND_HOME = b"\x1b[H\x1b[2J"
 
-#: Redraw request for a full-screen TUI. Form feed, 0x0c.
-_CTRL_L = b"\x0c"
-
 #: How long a session may be blank before blankness stops being normal.
 #: A healthy agent paints something within a second or two, so anything
 #: past this is a session that never spoke. Generous on purpose: crying
@@ -130,8 +148,6 @@ class _PaintBackend(Protocol):
     def pane_in_alternate_screen(self) -> bool: ...
 
     def capture_visible_screen(self) -> bytes: ...
-
-    async def write(self, data: bytes) -> None: ...
 
     def session_age_seconds(self) -> Optional[float]: ...
 
@@ -174,17 +190,19 @@ async def paint_on_attach(
 ) -> str:
     """Make the pane's current screen visible to a freshly attached client.
 
+    Nothing is ever written into the pane. See the module docstring.
+
     Args:
-        websocket: Connected client socket. Receives a binary frame in the
-            screen-capture case and nothing in the redraw case.
+        websocket: Connected client socket. Receives one binary frame
+            carrying the captured screen, or the stall notice, or nothing.
         backend: The session's backend, or None when it could not be
             resolved (in which case there is nothing to do).
 
     Returns:
-        The strategy used, for logging and tests: ``"redraw"`` (Ctrl+L
-        written to the pane), ``"screen"`` (capture sent to the client),
-        ``"stalled"`` (screen was blank and the session is old enough
-        that blankness is itself the finding, so a notice was sent), or
+        The strategy used, for logging and tests: ``"screen"`` (capture
+        sent to the client), ``"stalled"`` (screen was blank, the pane is
+        not a full-screen app, and the session is old enough that
+        blankness is itself the finding, so a notice was sent), or
         ``"none"`` (no backend, or nothing to paint and no reason to
         think anything is wrong).
 
@@ -198,19 +216,11 @@ async def paint_on_attach(
     try:
         alternate = backend.pane_in_alternate_screen()
     except Exception as exc:
-        # An unreadable pane state is not a reason to stop painting; fall
-        # back to the screen capture, which cannot corrupt an input line.
+        # An unreadable pane state never stops the paint - the capture is
+        # the same either way. It only costs us the right to announce a
+        # blank screen, and an unknown must not manufacture an alarm.
         logger.warning("ws_paint_alt_probe_failed", error=str(exc))
-        alternate = False
-
-    if alternate:
-        try:
-            await backend.write(_CTRL_L)
-            logger.debug("ws_paint_redraw_sent")
-            return "redraw"
-        except Exception as exc:
-            logger.warning("ws_paint_redraw_failed", error=str(exc))
-            return "none"
+        alternate = True
 
     try:
         screen = backend.capture_visible_screen()
@@ -219,12 +229,14 @@ async def paint_on_attach(
         return "none"
 
     if not screen:
-        # Nothing on screen. Writing Ctrl+L here would be the old bug with
-        # extra steps, so we never touch the pane. But "blank" is not one
-        # outcome, it is two, and collapsing them is what made the startup
-        # hang invisible - see the STALL DETECTION section of the module
-        # docstring.
-        if _looks_stalled(backend):
+        # Nothing on screen, and we never touch the pane to find out why.
+        # But "blank" is not one outcome, it is two, and collapsing them
+        # is what made the startup hang invisible - see the STALL
+        # DETECTION section of the module docstring. The notice's advice
+        # ("press enter to release a blocked prompt") only makes sense
+        # for a canonical-mode line reader, which a pane on the alternate
+        # screen is not, so a full-screen app stays silent.
+        if not alternate and _looks_stalled(backend):
             try:
                 await websocket.send_bytes(_CLEAR_AND_HOME + _STALL_NOTICE)
             except Exception as exc:

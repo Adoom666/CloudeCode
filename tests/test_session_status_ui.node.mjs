@@ -1,19 +1,19 @@
-// Node-based tests for client/js/session-status-ui.js - specifically the
-// attribute escaping in markUnreadHtml().
+// Node-based tests for client/js/session-status-ui.js - the attribute
+// escaping every light in this app is rendered through, and the removal
+// of the unread envelope.
 //
-// WHY THIS FILE EXISTS: a tmux session name is free text that the user
-// chooses, and markUnreadHtml() interpolates it straight into
-// `data-mark-unread="..."`. It shipped with a quote-only replace, which
-// left `&` raw - so a name containing an entity-shaped substring came back
-// out of `dataset.markUnread` as a DIFFERENT string, and every other
-// special character was one edit away from breaking out of the attribute
-// list entirely. The markup is reached from BOTH the launchpad running
-// list (launchpad.js) and the in-terminal sidebar (session-sidebar-rows.js),
-// so there is no single call site to fix it at.
+// WHY THE ESCAPING TESTS EXIST: a tmux session name is free text that the
+// user chooses, and this module interpolates values straight into
+// attributes. It shipped once with a quote-only replace, which left `&`
+// raw - so a name containing an entity-shaped substring came back out of
+// `dataset` as a DIFFERENT string, and every other special character was
+// one edit away from breaking out of the attribute list entirely.
 //
-// The round-trip assertions are the real point: escaping that a browser
-// cannot decode back to the original name would break the PATCH
-// /sessions/{name}/unread call just as thoroughly as no escaping at all.
+// WHY THE ENVELOPE TESTS EXIST: the unread envelope was removed from the
+// sidebar and the launchpad on 2026-09-08 and the status light took over
+// saying it. This module used to BUILD that envelope, so it is the right
+// place to assert the glyph and its control are actually gone rather than
+// merely unrendered on one surface.
 //
 // Run with: node tests/test_session_status_ui.node.mjs
 // Exits 0 and prints "ALL PASS" on success; exits 1 otherwise.
@@ -117,65 +117,56 @@ test('escapeAttr handles all five characters, ampersand first', () => {
     assert.equal(StatusUI.escapeAttr(undefined), '');
 });
 
-test('a hostile session name cannot break out of data-mark-unread', () => {
-    const html = StatusUI.markUnreadHtml(HOSTILE, false);
-    // Nothing outside the intended tag: exactly one opening `<span`, one
-    // closing `</span>`, and no injected element anywhere.
-    assert.equal((html.match(/<span/g) || []).length, 1, 'one span only');
-    assert.ok(!html.includes('<img'), 'no injected element');
-    // The tokenizer-accurate read of the attribute must cover the WHOLE
-    // name, not stop early at an unescaped quote.
-    const raw = rawAttr(html, 'data-mark-unread');
-    assert.ok(raw !== null, 'attribute present');
-    // The words from the payload may survive as inert TEXT inside the
-    // value - that is what escaping means. What must not survive is
-    // `onerror` sitting outside that value as a real attribute.
-    assert.ok(raw.includes('onerror'), 'payload text is preserved verbatim');
-    assert.equal(
-        html.replace(`data-mark-unread="${raw}"`, '').includes('onerror'),
-        false,
-        'onerror appears only inside the escaped value',
-    );
-    assert.ok(!raw.includes('"'), 'no literal quote inside the value');
-    assert.ok(!raw.includes('<') && !raw.includes('>'), 'no literal angle bracket');
+test('THE UNREAD ENVELOPE IS GONE, builder and glyph together', () => {
+    // The owner's instruction was "remove the envelope icon from the
+    // slide out bar and the main menu screen", and this module is where
+    // both surfaces got it from. Leaving the builder exported would let a
+    // future edit put it back on one surface and not the other, which is
+    // the drift this module exists to prevent.
+    for (const gone of [
+        'markUnreadHtml',
+        'envelopeOutlineSvg',
+        'envelopeFilledSvg',
+    ]) {
+        assert.equal(typeof StatusUI[gone], 'undefined', `${gone} must be gone`);
+    }
+    const src = fs.readFileSync(
+        new URL('../client/js/session-status-ui.js', import.meta.url), 'utf8');
+    assert.ok(!src.includes('data-mark-unread'), 'no mark-unread attribute left');
 });
 
-test('the escaped name round-trips back to the exact original', () => {
-    // This is what launchpad.js/_handleMarkUnread and
-    // session-sidebar.js/_onMarkUnreadClick read as dataset.markUnread and
-    // send to PATCH /sessions/{name}/unread. Escaping that does not
-    // round-trip would silently target the wrong session.
-    for (const name of [
-        HOSTILE,
-        'plain_name',
-        'has "quotes" and \'apostrophes\'',
-        'a<b>c',
-        'ampersand & more',
-        'literal &quot; entity text',
-        'cloude_proj-2026',
+test('NO SURFACE STILL DRAWS THE ENVELOPE OR ITS HANDLERS', () => {
+    // Unread TRACKING is untouched server-side; only the visual control
+    // went. So the check is on the client, and it covers every file that
+    // used to render or handle it - a handler with nothing to fire on is
+    // dead code, and a dead handler reads like a live feature.
+    for (const file of [
+        'launchpad.js',
+        'session-sidebar-clicks.js',
+        'session-sidebar.js',
+        'session-sidebar-rows.js',
     ]) {
-        const raw = rawAttr(StatusUI.markUnreadHtml(name, true), 'data-mark-unread');
-        assert.equal(decodeEntities(raw), name, `round trip failed for: ${name}`);
+        const src = fs.readFileSync(
+            new URL(`../client/js/${file}`, import.meta.url), 'utf8');
+        assert.ok(!src.includes('data-mark-unread'),
+            `${file} still looks for the envelope`);
+        assert.ok(!src.includes('markUnreadHtml'),
+            `${file} still builds the envelope`);
     }
 });
 
-test('escaping does not disturb the rest of the toggle markup', () => {
-    const off = StatusUI.markUnreadHtml('plain', false);
-    const on = StatusUI.markUnreadHtml('plain', true);
-    assert.ok(off.includes('aria-pressed="false"') && off.includes('data-unread-current="false"'));
-    assert.ok(on.includes('aria-pressed="true"') && on.includes('data-unread-current="true"'));
-    assert.ok(on.includes('mark-unread-toggle--active'));
-    assert.ok(!off.includes('mark-unread-toggle--active'));
-    assert.ok(off.includes('mark unread for followup'));
-    assert.ok(on.includes('clear unread flag'));
-    assert.ok(off.includes('<svg') && on.includes('<svg'), 'envelope glyph still rendered');
-});
-
-test('a missing name yields an empty attribute rather than "undefined"', () => {
-    // The handlers bail on a falsy dataset value, which is the intended
-    // behavior; the string "undefined" would instead be sent to the API.
-    for (const empty of [undefined, null, '']) {
-        assert.equal(rawAttr(StatusUI.markUnreadHtml(empty, false), 'data-mark-unread'), '');
+test('the status light is what carries unread now, on BOTH surfaces', () => {
+    // One component, one meaning, every surface - the reason dotHtml
+    // delegates to status-led.js at all. A surface that passed the status
+    // alone would silently lose the finished-turn ring.
+    for (const [file, needle] of [
+        ['launchpad.js', 'dotHtml(s.status, {'],
+        ['session-sidebar-rows.js', 'dotHtml(r.status, signals)'],
+    ]) {
+        const src = fs.readFileSync(
+            new URL(`../client/js/${file}`, import.meta.url), 'utf8');
+        assert.ok(src.includes(needle), `${file} must feed the LED its signals`);
+        assert.ok(src.includes('unread:'), `${file} must pass the unread flag`);
     }
 });
 

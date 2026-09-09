@@ -1,0 +1,59 @@
+/* =====================================================================
+ * SESSION EDITOR, IN THE HEADER.
+ *
+ * The control that configures the session you are looking at - theme,
+ * detach - used to be a 45px floating button pinned to a "top-right
+ * rail" over the terminal's top corner (`.session-editor-fab`, its
+ * `--fab-top-edge` token, and a matching safe-area rule in
+ * ios-chrome.css). The owner asked for it "up into the menu next to the
+ * folder one", so it is now a normal header control declared inside
+ * `.controls` in index.html, immediately after `#configEditorBtn`.
+ *
+ * THE MOVE IS A MOVE, NOT A RESTYLE. The button carries `.btn-icon`,
+ * the same class `#configEditorBtn` and the header kebab carry, so its
+ * size (--control-size, 36px on desktop and 44px on touch widths),
+ * its 8px gap, its hover glow, its focus treatment and its tooltip all
+ * come from the header's own component rather than from anything
+ * written here. This file adds NO appearance at all. If you find
+ * yourself adding a colour to it, you are restyling a header button in
+ * one place instead of the header, which is the drift the shared class
+ * exists to stop.
+ *
+ * SO WHAT IS LEFT IS THE ONE THING THE MOVE COULD LOSE: SCOPE.
+ * `.controls` is mounted on every screen, including the launchpad and
+ * the auth screen where there is no session for "session theme" or
+ * "detach session" to name. The floating version got that for free from
+ * terminal-tools.css's `body:has(#launchpad-screen.active) .fab-menu-btn`
+ * list, and this button is no longer a `.fab-menu-btn`.
+ *
+ * IT IS AN ALLOW-LIST, NOT A DENY-LIST, and that is deliberate: the
+ * old rule named the three sessionless screens one at a time and had
+ * already had to be amended once when the archive screen arrived and
+ * the editor floated over its Export button. Naming the ONE screen the
+ * control belongs on means a fourth sessionless screen cannot leak it.
+ *
+ * A NOTE ON THE HOME HEADER, because it is the thing this could have
+ * broken quietly. `.header--home` centres the launcher title against
+ * `--home-header-flank-w`, a token that mirrors `.controls`' real
+ * width, and header-menu.js's comment is explicit that a third inline
+ * control is a layout fact rather than a list entry. This button is
+ * `display: none` on the home screen, so `.controls` really is the same
+ * width there as it was before the move and that token needs no new
+ * branch. Change the gate below and you have to revisit the token.
+ * ===================================================================== */
+
+/* Hidden everywhere by default. An id selector, because `.btn-icon`
+ * declares `display: flex` and a class would lose to it. */
+#sessionEditorBtn {
+    display: none;
+}
+
+/* The one screen a session control names anything on. `.active` is set
+ * by app.js on the screen it is showing and cleared by hideAllScreens()
+ * before any other screen is activated, which is exactly what the
+ * `body:has(#launchpad-screen.active)` rules in terminal-tools.css
+ * already rely on. `flex` restates .btn-icon's own display so the icon
+ * stays centred. */
+body:has(#terminal-screen.active) #sessionEditorBtn {
+    display: flex;
+}

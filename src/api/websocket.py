@@ -307,12 +307,13 @@ async def websocket_terminal(websocket: WebSocket):
     #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
     #      process (Claude/bash/etc.) and that process has a chance to
     #      finish any in-flight ANSI write before we stomp its buffer.
-    #   5. Server paints the pane's screen (see ws_startup_paint). A
-    #      full-screen TUI gets Ctrl+L and re-renders itself at the NEW
-    #      size; every other pane gets its visible screen captured
-    #      post-resize and sent to the client, because Ctrl+L into a
-    #      canonical-mode line reader is data, not a redraw. Live-stream
-    #      bytes then arrive via pipe-pane as usual.
+    #   5. Server paints the pane's screen (see ws_startup_paint). Every
+    #      pane, full-screen TUI or not, gets its visible screen captured
+    #      post-resize and sent to the client. Nothing is written into
+    #      the pane: Ctrl+L into a canonical-mode line reader is data
+    #      rather than a redraw, and Claude Code's fullscreen renderer
+    #      answers it with a full erase plus only a partial repaint.
+    #      Live-stream bytes then arrive via pipe-pane as usual.
     #
     # Trade-off: user loses historical scrollback on reconnect. Accepted
     # because a clean screen beats a corrupted one, and xterm.js retains
@@ -326,8 +327,8 @@ async def websocket_terminal(websocket: WebSocket):
         # Wait for the client's handshake pty_resize. We accept the NEXT
         # pty_resize message we see and ignore binary input and other
         # control frames until it arrives. Bounded timeout: if the client
-        # never replies, we still proceed (backend stays at birth dims +
-        # the app redraw still fires via Ctrl+L at whatever size that is).
+        # never replies, we still proceed (backend stays at birth dims and
+        # the paint captures the pane at whatever size that is).
         handshake_cols: Optional[int] = None
         handshake_rows: Optional[int] = None
         handshake_deadline_s = 2.0  # generous but bounded

@@ -50,6 +50,18 @@ console.log('[SessionSidebarClicks Module] Loading...');
             onGroupToggleClick(ctrl, groupToggle);
             return;
         }
+        // THE STATUS-LIGHT KEY IS A ROW OF THIS LIST TOO, sitting at its
+        // foot, so its click arrives here and has to be claimed before
+        // anything row-shaped runs. It folds IN PLACE rather than asking
+        // for a repaint: rebuilding every row to move one attribute would
+        // also drop the focus the user is holding on the button they just
+        // pressed.
+        const keyToggle = e.target.closest && e.target.closest('[data-status-key-toggle]');
+        if (keyToggle) {
+            e.stopPropagation();
+            if (window.SessionStatusKey) window.SessionStatusKey.onToggleClick(keyToggle);
+            return;
+        }
         // An edit in progress owns every click inside itself. Without
         // this the click that puts the caret in the input also reaches
         // the row handler and switches conversation out from under it.
@@ -62,13 +74,6 @@ console.log('[SessionSidebarClicks Module] Loading...');
         if (actionEl) {
             e.stopPropagation();
             await onRowActionClick(ctrl, actionEl);
-            return;
-        }
-
-        const toggleEl = e.target.closest('[data-mark-unread]');
-        if (toggleEl) {
-            e.stopPropagation();
-            await onMarkUnreadClick(ctrl, toggleEl);
             return;
         }
 
@@ -164,27 +169,6 @@ console.log('[SessionSidebarClicks Module] Loading...');
     }
 
     /**
-     * Description: toggle the manual unread flag for one row and re-render
-     *   immediately (optimistic - the next poll tick reconciles either
-     *   way, but a full POLL_MS with no visual feedback feels broken).
-     * Inputs: ctrl (object) - the SessionSidebarController.
-     *   toggleEl (Element) - the `[data-mark-unread]` span clicked.
-     * Output: Promise<void>.
-     */
-    async function onMarkUnreadClick(ctrl, toggleEl) {
-        const tmuxName = toggleEl.dataset.markUnread;
-        if (!tmuxName) return;
-        const next = toggleEl.dataset.unreadCurrent !== 'true';
-        try {
-            await window.API.setSessionUnread(tmuxName, next);
-            ctrl._lastSig = null; // force a repaint even if the poll sig matches
-            await ctrl._fetchAndRender();
-        } catch (err) {
-            console.error('SessionSidebar: mark-unread failed:', err);
-        }
-    }
-
-    /**
      * Description: run a row's destructive action - close a running
      *   session (X) or remove a stopped one (trash). Which action the row
      *   painted is read back off the button, so the confirm always matches
@@ -206,16 +190,14 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
         const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        // THE BUTTON IS NOT ALWAYS INSIDE THE ROW ANY MORE. These controls
-        // now also render inside the row's overflow menu, which is mounted
-        // on document.body (client/js/session-row-menu.js explains why: the
-        // sidebar panel is `transform`ed, so it would become the containing
-        // block for a fixed panel rendered inside it). From there the walk
-        // up to `.session-sidebar-row` finds nothing, and both `data-active`
-        // and `data-session-id` would read as absent - which looks exactly
-        // like "this is not the open tab and has no backend" and would send
-        // an own-tab close down the wrong path. Falling back to the live row
-        // by NAME keeps one handler for both mount points.
+        // THE BUTTON IS BACK INSIDE THE ROW, so `closest` is the primary
+        // route again. The by-NAME lookup stays as the fallback rather
+        // than being deleted with the overflow menu it was added for:
+        // `data-active` and `data-session-id` read as absent when the walk
+        // fails, which looks exactly like "this is not the open tab and
+        // has no backend" and would send an own-tab close down the wrong
+        // path. Resolving by name costs one query and cannot produce that
+        // silent misroute.
         const rowEl = btnEl.closest('.session-sidebar-row')
             || document.querySelector(
                 `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
@@ -298,15 +280,20 @@ console.log('[SessionSidebarClicks Module] Loading...');
             alert(`could not restart "${name}": the restart picker did not load.`);
             return;
         }
-        // The row does not carry its own status; the KEBAB does
-        // (`data-row-status`, set in SessionRowMenu.kebabHtml). Read it
-        // from there rather than adding a second copy of the same fact to
-        // the row, and resolve it by NAME so this works identically
-        // whether the button was clicked on the row or inside the
-        // body-mounted overflow panel.
-        const kebab = document.querySelector(
-            `[data-row-menu="${CSS.escape(name)}"]`);
-        const status = kebab ? kebab.getAttribute('data-row-status') : null;
+        // THE ROW CARRIES ITS OWN STATUS. `data-row-status` used to live
+        // on the kebab, which was the only element built from the whole
+        // payload; the kebab is gone and the row is stamped with it
+        // instead (client/js/session-sidebar-rows.js). Resolved by NAME
+        // rather than from `rowEl`, so a null row - which this function
+        // already tolerates - still yields a status when the list has one
+        // on screen. A null status is passed through untouched: the
+        // picker treats "not stated" as unknown and says so, which is not
+        // the same claim as a measured state.
+        const statusRow = rowEl || document.querySelector(
+            `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
+        const status = statusRow
+            ? statusRow.getAttribute('data-row-status')
+            : null;
         // The name column's TEXT is the display label - the same value
         // SessionLabel resolved when the row was painted. A dialog that
         // names the session differently than the row does is the bug the
@@ -373,7 +360,7 @@ console.log('[SessionSidebarClicks Module] Loading...');
 
     window.SessionSidebarClicks = {
         onRowClick, onGroupToggleClick, activateRow,
-        onMarkUnreadClick, onRowActionClick, runRestart,
+        onRowActionClick, runRestart,
     };
     console.log('[SessionSidebarClicks Module] Exported as window.SessionSidebarClicks');
 })();

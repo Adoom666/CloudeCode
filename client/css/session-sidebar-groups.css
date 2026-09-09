@@ -312,13 +312,14 @@
 
 /* ---- The "new group" button -------------------------------------------
  *
- * The row's own group chip is GONE, this round: "no i dont need to see
- * the group name in the item. its in the group i can see the group on
- * the sidebar." Its action half (opening the picker) rides in the row's
- * kebab menu now - see client/js/session-sidebar-group-actions.js
- * `rowMenuItemHtml` and client/css/session-row-menu.css, which styles
- * every folded control including this one. Nothing chip-shaped is left
- * on the row itself.
+ * The row's own group chip is GONE: "no i dont need to see the group
+ * name in the item. its in the group i can see the group on the
+ * sidebar." Its action half moved into the row's overflow menu, and that
+ * menu was removed in turn on 2026-09-08, so nothing on a session row
+ * opens the picker any more. The picker itself is untouched and still
+ * reached by `g` on a focused row, by Alt+Arrow across a band edge, and
+ * by dragging the row onto a group header. This button, which creates a
+ * group from the HEADER, is unaffected either way.
  */
 .session-sidebar-group-add {
     display: inline-flex;
@@ -356,10 +357,10 @@
  * z-index MUST clear .session-sidebar-panel's 1100 (session-sidebar.css)
  * - this menu is appended to document.body as a sibling of the panel,
  * not a descendant of it, so a lower z-index here painted the menu
- * UNDER the sidebar instead of over it. 1200 matches
- * .session-row-menu (session-row-menu.css), the row-level kebab this
- * menu is the group-level equivalent of; the two are never open at the
- * same time (openMenu is a single slot), so sharing a value is safe.
+ * UNDER the sidebar instead of over it. 1200 is the value it has always
+ * carried; it used to be shared with the row-level overflow menu, which
+ * was removed on 2026-09-08, so this is now the only body-mounted menu
+ * the sidebar opens.
  */
 .session-sidebar-group-menu {
     z-index: 1200;

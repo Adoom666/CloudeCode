@@ -1,0 +1,29 @@
+/* The app's build number in the sidebar - the sidebar half of
+ * client/js/version-footer.js. The home bar's half needs no rules of its
+ * own; it reuses `.home-bar__version` from client/css/home-bar.css and
+ * `.version` from styles.css exactly as it did before this file existed.
+ *
+ * SITS BELOW THE STATUS KEY, not fighting it for space. It is the very
+ * last thing in the sidebar's scrolled list content, so it borrows the
+ * same quiet treatment session-status-key.css uses for its own note: a
+ * hairline above it, subtle ink, small type. It is a reference, not a
+ * control - there is nothing to click and nothing folds.
+ *
+ * Loaded from client/index.html after session-status-key.css, whose
+ * footer treatment this matches.
+ */
+
+.version-footer {
+    margin: 4px 4px 2px 4px;
+    padding-top: 5px;
+    border-top: 1px solid var(--color-border-subtle);
+    text-align: center;
+}
+
+/* Sizing only. Colour and weight stay on the shared `.version` class in
+ * styles.css - this file must never repaint the text `.home-bar__version`
+ * paints, or the two placements could show one string in two colours. */
+.version-footer .version {
+    display: inline-block;
+    font-size: 0.68em;
+}

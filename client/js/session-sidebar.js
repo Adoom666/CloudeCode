@@ -108,18 +108,6 @@ class SessionSidebarController {
         this.listEl.addEventListener('dblclick', (e) => {
             if (window.SessionSidebarRename) window.SessionSidebarRename.onDblClick(e);
         });
-        // Keyboard activation (Enter/Space) for the mark-unread toggle -
-        // it's a `role="button"` span, not a real <button>, so it needs
-        // explicit key handling to be operable without a mouse.
-        this.listEl.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            const toggleEl = e.target.closest('[data-mark-unread]');
-            if (!toggleEl) return;
-            e.preventDefault();
-            e.stopPropagation();
-            this._onMarkUnreadClick(toggleEl);
-        });
-
         this._wired = true;
         // The panel ships CLOSED, and closed here means "slid off screen by
         // a transform" - which on its own leaves every row still focusable.
@@ -413,7 +401,7 @@ class SessionSidebarController {
             'data-groups-state', G ? G.current().status : 'nogroups',
         );
         this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
-            rows, density, this._listing, missing, state, groups,
+            rows, density, this._listing, state, groups,
         );
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.afterRender();
         if (window.SessionSidebarRename) window.SessionSidebarRename.afterRender();
@@ -472,14 +460,6 @@ class SessionSidebarController {
      * Inputs: rowEl (Element). Output: Promise<void>.
      */
     async activateRow(rowEl) { await window.SessionSidebarClicks.activateRow(this, rowEl); }
-
-    /**
-     * Description: toggle the manual unread flag for one row.
-     * Inputs: toggleEl (Element). Output: Promise<void>.
-     */
-    async _onMarkUnreadClick(toggleEl) {
-        await window.SessionSidebarClicks.onMarkUnreadClick(this, toggleEl);
-    }
 
     /**
      * Description: run a row's destructive action (close or remove).

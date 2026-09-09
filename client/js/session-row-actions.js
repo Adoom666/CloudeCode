@@ -74,38 +74,25 @@ console.log('[SessionRowActions Module] Loading...');
     const STOPPED_STATUSES = ['dead'];
 
     /**
-     * Statuses that mean "we positively know this session is RUNNING".
-     * A row in one of these may offer restart alongside close, because
-     * restarting a live session is now a supported operation
-     * (respawn-pane -k, same tmux name, same row).
+     * NO LIVE-ROW RESTART LIST ANY MORE, and this comment is the record
+     * of why there is no constant here.
      *
-     * ``unknown`` IS DELIBERATELY ABSENT HERE TOO, and for the sharper
-     * version of the same reason: offering restart on a row whose state
-     * we could not read would put a control that KILLS A RUNNING PROCESS
-     * in front of a user on the strength of a guess.
+     * ``LIVE_STATUSES`` was the allow-list of states in which a RUNNING
+     * row was also offered restart, added when respawn learned to
+     * replace a live pane. The owner removed that control on 2026-09-08:
+     * "remove 'add to group' / 'restart the agent'". A running row now
+     * offers close and nothing else, so there is no list left to consult
+     * and the constant would be dead weight that reads like a rule.
      *
-     * ``stopped`` IS ABSENT, and it is not a near miss. It means the
-     * tmux instance is GONE, not that a pane is holding an exited
-     * process, so there is no pane to kill and nothing to respawn into.
-     * That is the distinction session-status-ui.js spells out at length
-     * where it explains why ``stopped`` is not a synonym for ``dead``.
-     *
-     * The list is an allow-list rather than "everything that is not
-     * dead" so a status added to the vocabulary later cannot silently
-     * inherit a destructive control. Every entry is a live-pane state in
-     * client/js/session-status-ui.js, including the ``running``
-     * back-compat alias a half-upgraded tab still sends.
-     * @type {Array<string>}
+     * NOTHING SERVER-SIDE WAS REMOVED WITH IT. ``resolve_respawn_plan``
+     * still answers ``RESPAWN_NOT_DEAD`` for a live pane without
+     * ``live_restart_confirmed``, ``RespawnPlan.kills_live_pane`` is
+     * still the only thing that passes ``-k``, and the picker still
+     * carries its arm box and its confirm modal. What changed is that no
+     * surface in this app now hands a live session to that path. If a
+     * live restart is offered again, the control is what must come back;
+     * the gates behind it never left.
      */
-    const LIVE_STATUSES = [
-        'working',
-        'working_subagent',
-        'question',
-        'notice',
-        'finished_unread',
-        'idle',
-        'running',
-    ];
 
     /**
      * Hover tooltip + accessible name per action. Identical text goes to
@@ -220,33 +207,25 @@ console.log('[SessionRowActions Module] Loading...');
     /**
      * Decide which action a row with this status is allowed to offer.
      *
-     * Description: three cases, and the third is not the second.
+     * Description: two cases now, where there used to be three.
      *
-     *   A DEAD row is unchanged: restart first, because it is what the
-     *   user came for, then remove.
+     *   A DEAD row is unchanged, and it is the reason this function
+     *   still knows the word restart at all: restart first, because it
+     *   is what the user came for, then remove. This is the one place
+     *   in the app that still reaches the respawn ladder.
      *
-     *   A row we positively know is LIVE now offers restart too, after
-     *   close. It is second rather than first on purpose - close is
-     *   where the muscle memory already points on these rows, and moving
-     *   it would relocate a destructive control under a cursor that had
-     *   learned where it was.
-     *
-     *   OFFERING IT IS NOT PERMITTING IT. This control opens the restart
-     *   picker; a live restart still needs the arm box AND the confirm
-     *   modal inside it (client/js/session-restart-picker.js), and the
-     *   server still refuses without `confirm_restart_live`. Three
-     *   gates, and this is only the first.
-     *
-     *   An UNKNOWN row gets close alone, exactly as before. We could not
-     *   read its state, and a control that kills a running process is
-     *   not something to offer on a guess.
+     *   EVERY OTHER ROW GETS CLOSE, and nothing else. A row we
+     *   positively know is live briefly offered restart as well; the
+     *   owner removed it on 2026-09-08 along with the row's overflow
+     *   menu. An unknown row never had it, because a control that kills
+     *   a running process is not something to offer on a guess.
      * Inputs:
      *   status (string|null|undefined) - raw activity_status/status value
      *     from the API payload.
      * Output:
      *   Array<string> - one or two ACTION_* ids, in render order.
      * Example:
-     *   actionsFor('working')  -> ['close', 'restart']
+     *   actionsFor('working')  -> ['close']
      *   actionsFor('dead')     -> ['restart', 'remove']
      *   actionsFor(undefined)  -> ['close']   // unknown is never guessed
      */
@@ -261,9 +240,13 @@ console.log('[SessionRowActions Module] Loading...');
             // finished.
             return [ACTION_RESTART, ACTION_REMOVE];
         }
-        if (LIVE_STATUSES.indexOf(key) !== -1) {
-            return [ACTION_CLOSE, ACTION_RESTART];
-        }
+        // EVERY OTHER STATUS GETS CLOSE ALONE - a measured live one and an
+        // unmeasurable one alike. They arrive at the same answer by two
+        // different routes and that is fine, but they are not the same
+        // fact: a live row lost its restart because the owner asked for
+        // the control to go, while an unknown row never had one, because
+        // a control that kills a running process is not something to
+        // offer on a guess.
         return [ACTION_CLOSE];
     }
 
@@ -282,7 +265,7 @@ console.log('[SessionRowActions Module] Loading...');
      * Example:
      *   actionFor('working') -> 'close'
      *   actionFor('dead')    -> 'restart'
-     *   // a live row's SECOND action is restart; this accessor cannot
+     *   // a dead row's SECOND action is remove; this accessor cannot
      *   // see it, which is why new code calls actionsFor instead.
      */
     function actionFor(status) {
@@ -500,7 +483,6 @@ console.log('[SessionRowActions Module] Loading...');
         ACTION_CLOSE,
         ACTION_REMOVE,
         ACTION_RESTART,
-        LIVE_STATUSES,
         STOPPED_STATUSES,
         ATTR_ACTION,
         ATTR_NAME,

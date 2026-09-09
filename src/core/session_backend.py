@@ -218,23 +218,28 @@ class SessionBackend(ABC):
         history instead. tmux backend uses ``capture-pane -pS -<lines> -J``.
 
         Args:
-            lines: Number of scrollback lines to capture. Defaults to
-                `AuthConfig.session.scrollback_lines` (3000).
+            lines: Number of scrollback lines to capture. Every real caller
+                passes `AuthConfig.session.scrollback_lines`; the value in
+                this signature is only a floor for a direct call.
         """
 
     # ---- attach-time repaint support ------------------------------------
-    # Concrete, not abstract: a backend that cannot answer these is not
-    # broken, it just falls back to the old blind-Ctrl+L behavior.
+    # Concrete, not abstract: a backend that cannot answer these simply
+    # reports the conservative answer and the attach paint still works.
 
     def pane_in_alternate_screen(self) -> bool:
         """Report whether the pane's foreground app owns the whole screen.
 
         The alternate screen buffer is what a full-screen TUI switches to
         (vim, less, the Claude CLI). It is a reliable proxy for "this
-        process reads its input in raw mode and treats Ctrl+L as redraw".
-        A process reading a line in canonical mode - a password prompt,
-        a shell `read` - is never on the alternate screen, and for it
-        Ctrl+L is a data byte, not a command.
+        process reads its input in raw mode", and its opposite - a process
+        reading a line in canonical mode, such as a password prompt or a
+        shell `read` - is never on the alternate screen.
+
+        Nothing branches the PAINT on this any more; both cases are
+        painted from a capture. It decides only whether a blank screen may
+        be announced as a stalled startup, because that notice's advice is
+        about a line reader. See `src/api/ws_startup_paint.py`.
 
         Returns:
             True when the pane is on the alternate screen. False when it

@@ -28,13 +28,16 @@
     <meta name="apple-mobile-web-app-title" content="Cloude">
     <!-- The app version, stamped server-side by src/main.py's
          `{{VERSION}}` substitution. It used to be a `<span class="version">`
-         chip inside the header `<h1>`; it now renders in the home screen's
-         bottom bar, which is built by launchpad.js at runtime and so has
-         no server-rendered markup of its own to stamp. A meta tag is the
-         handoff: main.py's replace() is a plain string substitution and
-         does not care where the token lives, and Launchpad reads it back
-         with one querySelector. Empty content means the version could not
-         be resolved, and the chip renders nothing at all. -->
+         chip inside the header `<h1>`; it now renders in two places built
+         at runtime with no server-rendered markup of their own to stamp -
+         the home screen's bottom bar and the foot of the session sidebar
+         - so a meta tag is the handoff: main.py's replace() is a plain
+         string substitution and does not care where the token lives, and
+         client/js/version-footer.js reads it back with one querySelector,
+         once, for both callers. Empty content means the version could not
+         be resolved; version-footer.js renders "version unknown" rather
+         than leaving either placement blank - see that file's own doc for
+         why a silent gap is the wrong answer for a build marker. -->
     <meta name="cloude-app-version" content="{{VERSION}}">
     <meta name="theme-color" content="#0a0a0a">
     <link rel="manifest" href="/manifest.webmanifest">
@@ -82,13 +85,21 @@
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
-    <!-- The row's kebab and the panel it opens. MUST load after
-         session-sidebar.css and session-sidebar-density.css: those size
-         .session-sidebar-row-pin, .mark-unread-toggle and
-         .session-sidebar-row-delete as small square icon buttons for the
-         row, and this file re-styles those same elements as full-width
-         labelled menu items once they are inside the panel. -->
-    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
+    <!-- The foldable key to the status lights, at the foot of the session
+         sidebar. AFTER session-sidebar-density.css, whose quiet footer
+         note treatment it matches, and after status-led.css - the key's
+         swatches are real LEDs and this file must never repaint one. -->
+    <link rel="stylesheet" href="/static/css/session-status-key.css" />
+    <!-- The app version at the foot of the sidebar. AFTER
+         session-status-key.css, whose quiet footer treatment it matches
+         and below which it sits. -->
+    <link rel="stylesheet" href="/static/css/version-footer.css" />
+    <!-- The conversation row's inline pin and close/restart/remove, sized
+         for a thumb. MUST load after session-sidebar.css and
+         session-sidebar-density.css: those size both controls as 18px
+         square icon buttons, and this file widens them on a coarse
+         pointer. Loaded earlier it would silently lose the tap targets. -->
+    <link rel="stylesheet" href="/static/css/session-row-inline-controls.css" />
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
@@ -106,6 +117,12 @@
          After styles.css so it inherits the theme vars, AND so its
          explicit width/height beat the bare `button` base rule there. -->
     <link rel="stylesheet" href="/static/css/terminal-tools.css" />
+    <!-- The session editor is a HEADER control, not a floating one, so its
+         placement rules do not belong in terminal-tools.css beside the
+         controls that still float. After terminal-tools.css because the
+         id selectors here are what put the button back in the header's
+         normal flow if that file ever regrows a floating rule for it. -->
+    <link rel="stylesheet" href="/static/css/session-editor-header.css" />
     <!-- The copy-output sheet those tools open. Split from
          terminal-tools.css at the 500-line limit; same load reasoning. -->
     <link rel="stylesheet" href="/static/css/copy-output.css" />
@@ -140,6 +157,11 @@
     <!-- Two-line common-command chips. After styles.css, which owns the
          base .command-button rule this narrows. -->
     <link rel="stylesheet" href="/static/css/slash-command-chips.css" />
+    <!-- Hides the slash-commands FAB and its modal at desktop widths,
+         same rule as the terminal-tools FAB. After styles.css, which owns
+         both .slash-commands-btn and .modal.active and is what this
+         overrides. -->
+    <link rel="stylesheet" href="/static/css/slash-commands-fab.css" />
 
     <!-- The settings panel's music volume slider. After styles.css, which
          owns the .settings-field rules this builds on. -->
@@ -427,6 +449,40 @@
                     <path d="M2 5.25C2 4.69772 2.44772 4.25 3 4.25H6.5L7.75 5.75H13C13.5523 5.75 14 6.19772 14 6.75V11.25C14 11.8023 13.5523 12.25 13 12.25H3C2.44772 12.25 2 11.8023 2 11.25V5.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <!-- SESSION EDITOR. Sliders glyph: this one CONFIGURES the
+                 session (theme, detach) rather than moving its content.
+                 It used to be a 45px floating button pinned over the
+                 terminal's top-right corner on its own vertical rail;
+                 the owner asked for it "up into the menu next to the
+                 folder one", so it is a normal header control now and
+                 the rail is gone with it - token, safe-area rule and
+                 all. Do not rebuild the rail: a control that floats
+                 over live output has to earn the pixels it covers, and
+                 this one is set once per session.
+
+                 IT IS STILL SESSION-SCOPED, which is the one thing the
+                 move must not lose. `.controls` is mounted on every
+                 screen, so session-editor-header.css shows this button
+                 ONLY while `#terminal-screen` is the active screen and
+                 hides it everywhere else. That is also why `.controls`
+                 is still two buttons wide on the home screen and
+                 `--home-header-flank-w` (styles.css) needs no new
+                 branch: the title's centring never sees this control.
+
+                 Its menu still opens through FabMenu + AnchorPopover,
+                 which prefer ABOVE the trigger and fall to BELOW when
+                 there is no room above - from the header there never
+                 is, so the dropdown hangs down with no code change. -->
+            <button type="button" id="sessionEditorBtn" class="btn-icon"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
+                    aria-label="session editor" title="session editor" data-tooltip="session editor">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+            </button>
             <!-- THE LAUNCHER HELP BUTTON IS NOT IN THIS ROW ANY MORE.
                  It now sits inside #appTitle, immediately right of the
                  title text - see there. It was moved out of .controls on
@@ -663,31 +719,21 @@
 
     <!-- Terminal Screen -->
     <div id="terminal-screen" class="screen">
-        <!-- NO TOOL STRIP IN THE TOP-RIGHT CORNER. A folded three-icon
+        <!-- NOTHING FLOATS IN THE TOP-RIGHT CORNER. A folded three-icon
              strip used to float here holding copy output / session theme
              / session music, while a second paperclip menu in the
              bottom-right held paste / attach image. The STRIP is gone for
              good - it covered terminal output across its whole width.
              Its contents were re-split by JOB rather than by corner:
              #terminalToolsBtn moves content, #sessionEditorBtn configures
-             the session. Both are at the bottom of this file, and the
-             session editor alone is pinned back over this corner as a
-             SINGLE 45px button. One button is not a strip; do not grow it
-             back into one. -->
+             the session. The editor was then pinned back over this corner
+             as a single 45px button for a while; it is in the HEADER now,
+             beside the file editor, so this corner is empty again. Do not
+             put a floating control back here - not a strip, and not one
+             button that grows into one. -->
 
         <div class="terminal-container">
             <div id="terminal"></div>
-            <!-- INSIDE the terminal container, and absolutely positioned
-                 there (see .local-servers), so that showing or hiding it
-                 cannot change #terminal's height. It used to be a sibling
-                 below this container, and every appearance shrank the
-                 terminal by ~4 rows, which tmux answered with a SIGWINCH
-                 and claude with ESC[2J - erasing the conversation a few
-                 seconds after every reconnect. -->
-            <div class="local-servers" id="localServersContainer" style="display: none;">
-                <h3>Local Servers</h3>
-                <div id="localServersList"></div>
-            </div>
         </div>
 
         <!-- THE TERMINAL SCREEN'S REAL BOTTOM BAR. `.info` has always
@@ -725,9 +771,13 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
-    <!-- The vertical three-dot mark, in ONE place. Both the header
-         overflow (header-menu.js) and every conversation row
-         (session-row-menu.js) draw it, so it must load before both. -->
+    <!-- The vertical three-dot mark. Its one consumer is the header
+         overflow (header-menu.js), so it must load before that. It was
+         shared with the conversation rows until their overflow menu was
+         removed on 2026-09-08; the module stays a module rather than
+         being folded back into its caller, because a glyph inlined at
+         its only call site is exactly how the app ended up with two
+         drifting copies of it before. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/auth.js"></script>
@@ -741,14 +791,46 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- The one CLIENT-raised toast kind: the receipt for a file the user
+         attached to the prompt. It contributes the thumbnail strip that
+         toast.js asks for by name and nothing else - the card itself is
+         still toast.js's. Every call between the two is made at RENDER
+         time, not at parse time, so this may load after toast.js; it sits
+         here because it is a toast kind and belongs beside the registry
+         that defines what one means. clipboard.js raises it and
+         terminal.js retires it, both at runtime, both behind a guard. -->
+    <script src="/static/js/attachment-toast.js"></script>
     <!-- The status LED component. Pure, no dependencies, no DOM access -
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->
     <script src="/static/js/status-led.js"></script>
+    <!-- Whether THIS browser's terminal socket is up, which is the one
+         status signal the server cannot report. Written by terminal.js
+         (ws.onopen / ws.onclose), read by the sidebar rows and the
+         launchpad cards on their way into the LED. Pure state, no DOM.
+         Must load BEFORE terminal.js, launchpad.js and the sidebar. -->
+    <script src="/static/js/session-transport.js"></script>
     <!-- Rolls a set of sessions up into one LED for a group header or the
          launchpad top bar. Depends on status-led.js for the vocabularies,
          so it loads after it. -->
     <script src="/static/js/session-status-summary.js"></script>
+    <!-- ONE TOAST CARD PER SESSION: the join from a hook event name to a
+         bucket in the attention order session-status-summary.js owns, so
+         the toast stack and the LED beside it cannot disagree about which
+         session most needs the user. toast.js reads it through globalThis
+         at RENDER time, so it may load after toast.js; it sits here
+         because it is meaningless without the fold directly above. -->
+    <script src="/static/js/toast-session-group.js"></script>
+    <!-- The foldable legend naming every light. Draws REAL LEDs through
+         status-led.js, so it loads after it and before
+         session-sidebar-rows.js, which puts it at the foot of the list. -->
+    <script src="/static/js/session-status-key.js"></script>
+    <!-- The app's own build number, one small grey line reused by the
+         sidebar footer and the home bar's chip. Pure, no dependencies,
+         reads the `cloude-app-version` meta tag above. Must load BEFORE
+         launchpad.js (renderHomeBarVersion) and session-sidebar-rows.js
+         (footerHtml), both of which call window.VersionFooter. -->
+    <script src="/static/js/version-footer.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
     <script src="/static/js/session-status-ui.js"></script>
@@ -894,6 +976,9 @@
          missing terminal.js falls back to 'replace', which is the
          behaviour that shipped. -->
     <script src="/static/js/terminal-reconnect-buffer.js"></script>
+    <!-- Must load BEFORE terminal.js: it is the gate that keeps one
+         session's bytes out of another session's terminal. -->
+    <script src="/static/js/terminal-frame-guard.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
@@ -1034,17 +1119,6 @@
          move a session between them. Loads AFTER reorder because it
          borrows that module's live-region announcer. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
-    <!-- The row's overflow menu, and the three gestures that open it.
-         session-row-menu.js composes the row's own control builders
-         (session-sidebar-rows.js, session-status-ui.js,
-         session-row-actions.js, session-sidebar-group-actions.js for the
-         group picker item), places itself with anchor-popover.js and
-         routes its clicks into session-sidebar-clicks.js, so it must load
-         after all of them. The gesture module must load after the menu
-         AND after session-sidebar.js, whose #session-sidebar-list it
-         attaches to. -->
-    <script src="/static/js/session-row-menu.js"></script>
-    <script src="/static/js/session-row-menu-gestures.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the
@@ -1281,23 +1355,29 @@
          appended here by client/js/toast.js (ToastManager). -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- THE TWO SESSION-SCOPED FAB MENUS, split by JOB and by how often
-         you reach for them.
+    <!-- THE TWO SESSION-SCOPED MENUS, split by JOB and by how often you
+         reach for them. They are still two menus with one learnable
+         rule; only the SURFACES differ now.
 
          TERMINAL TOOLS (bottom row, slot 0, the right edge) moves content
          across the terminal's boundary: copy output, paste from
          clipboard, attach image. It stays on the bottom row with the
-         d-pad, over the command line, because it is used all day.
+         d-pad, over the command line, because it is used all day - and
+         it is MOBILE ONLY, gated by one media query in
+         terminal-tools.css against the same 769px line that already
+         makes the d-pad touch-only. On a desktop the pointer and the
+         keyboard reach the same jobs directly, so the button was
+         covering output to no end.
 
-         SESSION EDITOR (top-right rail) configures the session itself:
-         theme and music. Set once per session, so it is out of the
-         working row entirely. Two coherent groups with a rule a user can
-         learn, not one drawer of everything.
+         SESSION EDITOR configures the session itself: theme and detach.
+         Set once per session, so it is out of the working row entirely -
+         it is a HEADER control now, up in `.controls` beside the file
+         editor, and no longer floats at all.
 
-         Both are direct children of <body>. NOTHING may move inside
-         #terminal: TerminalScroll.blockOverscrollEscape calls
-         preventDefault on single-touch drags there, so a control mounted
-         inside it loses its gestures.
+         The terminal tools button is a direct child of <body>. NOTHING
+         may move inside #terminal: TerminalScroll.blockOverscrollEscape
+         calls preventDefault on single-touch drags there, so a control
+         mounted inside it loses its gestures.
 
          The hidden file input is the "attach file" path, opened
          programmatically by that menu row; the change handler lives in
@@ -1336,16 +1416,11 @@
         </svg>
     </button>
 
-    <!-- Sliders glyph: this one CONFIGURES rather than moves anything. -->
-    <button type="button" id="sessionEditorBtn" class="fab-menu-btn session-editor-fab"
-            aria-haspopup="menu" aria-expanded="false" aria-controls="sessionEditorMenu"
-            aria-label="session editor" title="session editor">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 4.5h5M10 4.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <path d="M2 11.5h4M9 11.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <circle cx="8.5" cy="4.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
-        </svg>
-    </button>
+    <!-- NO SESSION EDITOR BUTTON DOWN HERE ANY MORE. It was the second
+         body-level FAB, pinned to the top-right rail. It is a header
+         control now, declared inside `.controls` above beside the file
+         editor. Its MENU still mounts on <body> at open time, which is
+         what kept it out of #terminal's gesture guard in the first
+         place, so nothing about that reasoning is lost by the move. -->
 </body>
 </html>

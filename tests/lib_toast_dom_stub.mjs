@@ -24,6 +24,18 @@ import vm from 'node:vm';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
+// THE TWO MODULES THAT DECIDE WHICH CARD A TOAST LANDS ON, loaded in the
+// shipped order and into the SAME context, because one card per session
+// is not a property of toast.js alone: the attention order lives in
+// session-status-summary.js and the join from a hook event name to one
+// of its buckets lives in toast-session-group.js. A stub that loaded
+// only toast.js would silently measure the degraded fallback - per-kind
+// coalescing - and every one-card-per-session assertion would be
+// asserting against a browser the app does not have.
+const SUMMARY_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/session-status-summary.js'), 'utf8');
+const GROUP_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-session-group.js'), 'utf8');
 
 // ---------------------------------------------------------------- stub DOM
 
@@ -167,7 +179,15 @@ export function makeEnv(narrow = false) {
         TextEncoder,
     };
     vm.createContext(sandbox);
+    vm.runInContext(SUMMARY_SRC, sandbox, { filename: 'session-status-summary.js' });
+    vm.runInContext(GROUP_SRC, sandbox, { filename: 'toast-session-group.js' });
     vm.runInContext(SRC, sandbox, { filename: 'toast.js' });
+    if (!sandbox.ToastSessionGroup) {
+        throw new Error(
+            'toast-session-group.js did not export itself into the sandbox, so '
+            + 'the manager would silently fall back to per-kind coalescing and '
+            + 'every one-card-per-session assertion would measure nothing');
+    }
     return { sandbox, container, mql, acked, mgr: window.ToastManager };
 }
 
@@ -175,12 +195,20 @@ let seq = 0;
 /**
  * Description: a server-shape toast.
  * Inputs: kind (string), title (string), body (string|null),
- *   session (string).
+ *   session (string) - session_id. sessionName (string|null) -
+ *   session_name, the bare tmux name a click on the card's name would
+ *   navigate to; most cases don't need it and leave it null, which
+ *   matches a card with no navigation target. color (string) - the
+ *   server-baked per-session accent hex; defaults so every existing
+ *   caller keeps its card looking the way it always has.
  * Output: object.
  */
-export function toast(kind, title, body = null, session = 's1') {
+export function toast(kind, title, body = null, session = 's1', sessionName = null, color = '#ff8800') {
     seq += 1;
-    return { id: `t${seq}`, session_id: session, kind, title, body, color: '#ff8800', acknowledged: false };
+    return {
+        id: `t${seq}`, session_id: session, session_name: sessionName, kind, title, body,
+        color, acknowledged: false,
+    };
 }
 
 /** Description: the cards actually in the container, top to bottom. */

@@ -24,7 +24,6 @@ production ``cloude`` socket is unreachable from this file.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import subprocess
@@ -86,6 +85,38 @@ def _wait_for_file(path: Path, timeout: float = 8.0) -> bool:
     return False
 
 
+def _wait_for_dead_pane(socket: str, name: str, timeout: float = 8.0) -> bool:
+    """Poll ``#{pane_dead}`` until tmux says the pane's process has gone.
+
+    Description: the setup step every test in this file shares is "the
+      pane is dead before the restart is asked for", and the only honest
+      way to know that is to ask tmux. A fixed sleep encodes a GUESS
+      about how long a shell takes to act on ``exit``, and on a loaded
+      CI runner that guess is wrong often enough to fail the build:
+      ``resolve_respawn_plan`` answers ``RESPAWN_NOT_DEAD`` for a pane
+      that is still alive, so ``set-environment`` is never issued and
+      the assertion fails describing an ordering defect that is not
+      there. Polling the real signal costs nothing when the pane dies
+      promptly, which is nearly always.
+    Inputs: socket (str) - the throwaway test socket. name (str) - the
+      tmux session name. timeout (float) - seconds to keep asking.
+    Output: bool - True once tmux reports the pane dead, False if the
+      timeout expired without it ever doing so.
+    Example: assert _wait_for_dead_pane(socket_name, name)
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        got = _tmux(
+            socket, "list-panes", "-t", name, "-F", "#{pane_dead}"
+        ).stdout.strip()
+        if got == "1":
+            return True
+        time.sleep(0.1)
+    return False
+
+
 @pytest.fixture()
 def socket_name():
     """A throwaway tmux server, killed however the test ends."""
@@ -123,16 +154,7 @@ async def test_the_respawned_process_inherits_the_refreshed_env(
     _tmux(socket_name, "set-option", "-t", name, "remain-on-exit", "on")
     _tmux(socket_name, "send-keys", "-t", name, "exit", "Enter")
 
-    import time
-    deadline = time.monotonic() + 6.0
-    while time.monotonic() < deadline:
-        got = _tmux(
-            socket_name, "list-panes", "-t", name, "-F", "#{pane_dead}"
-        ).stdout.strip()
-        if got == "1":
-            break
-        time.sleep(0.1)
-    else:
+    if not _wait_for_dead_pane(socket_name, name):
         pytest.skip("setup: the pane never reached a dead state")
 
     backend = TmuxBackend.for_external(
@@ -199,7 +221,8 @@ async def test_the_session_environment_itself_is_updated(
     )
     _tmux(socket_name, "set-option", "-t", name, "remain-on-exit", "on")
     _tmux(socket_name, "send-keys", "-t", name, "exit", "Enter")
-    await asyncio.sleep(1.0)
+    if not _wait_for_dead_pane(socket_name, name):
+        pytest.skip("setup: the pane never reached a dead state")
 
     backend = TmuxBackend.for_external(
         session_name=name,
@@ -236,7 +259,8 @@ async def test_no_spawn_env_leaves_the_pane_environment_alone(
     )
     _tmux(socket_name, "set-option", "-t", name, "remain-on-exit", "on")
     _tmux(socket_name, "send-keys", "-t", name, "exit", "Enter")
-    await asyncio.sleep(1.0)
+    if not _wait_for_dead_pane(socket_name, name):
+        pytest.skip("setup: the pane never reached a dead state")
 
     backend = TmuxBackend.for_external(
         session_name=name,

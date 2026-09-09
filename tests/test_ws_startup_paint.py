@@ -80,12 +80,20 @@ class FakeBackend:
 
 
 @pytest.mark.asyncio
-async def test_tui_still_gets_ctrl_l():
-    """The original purpose: a full-screen app repaints itself."""
-    ws, backend = FakeWS(), FakeBackend(alternate=True, screen=b"ignored")
-    assert await paint_on_attach(ws, backend) == "redraw"
-    assert backend.written == [b"\x0c"]
-    assert ws.frames == []
+async def test_tui_gets_a_capture_and_the_pane_is_never_written_to():
+    """A full-screen app is painted by CAPTURE, never by asking it to redraw.
+
+    Ctrl+L used to go into the pane here. Claude Code 2.1.x's fullscreen
+    TUI answers that form feed with a full-screen erase followed by a
+    PARTIAL repaint - only the rows its diff engine believes changed -
+    so every attach wiped the user's screen and left a banner and a
+    prompt. tmux already holds the exact frame; capturing it paints the
+    same pixels with no write into the pane at all.
+    """
+    ws, backend = FakeWS(), FakeBackend(alternate=True, screen=b"the frame")
+    assert await paint_on_attach(ws, backend) == "screen"
+    assert backend.written == [], "attaching must never write into the pane"
+    assert ws.frames == [b"\x1b[H\x1b[2J" + b"the frame"]
 
 
 @pytest.mark.asyncio
@@ -226,11 +234,21 @@ async def test_capture_failure_is_survivable():
 
 
 @pytest.mark.asyncio
-async def test_ctrl_l_write_failure_is_survivable():
-    ws = FakeWS()
-    backend = FakeBackend(alternate=True)
-    backend.write_raises = True
+async def test_a_blank_alternate_screen_is_never_called_a_startup_hang():
+    """The alternate-screen probe now gates the notice, not the paint.
+
+    Both branches paint from the same capture, so the only thing the
+    probe still decides is whether a blank screen may be ANNOUNCED. The
+    notice tells the user a shell script may be waiting on input they
+    cannot see and to press enter. A pane on the alternate screen is a
+    raw-mode full-screen app, never a canonical-mode line reader, so
+    that advice would be wrong there - and wrong advice is worse than
+    silence.
+    """
+    ws, backend = FakeWS(), FakeBackend(alternate=True, screen=b"", age=999.0)
     assert await paint_on_attach(ws, backend) == "none"
+    assert ws.frames == []
+    assert backend.written == []
 
 
 @pytest.mark.asyncio
@@ -323,13 +341,20 @@ def test_startup_prompt_reaches_the_client_and_no_caret_l_appears(tmux_socket):
 
 
 @requires_tmux
-def test_full_screen_app_still_gets_its_redraw(tmux_socket):
-    """The behavior Ctrl+L was originally added for, still intact."""
+def test_full_screen_app_is_painted_from_a_capture_not_a_redraw(tmux_socket):
+    """The behaviour Ctrl+L was added for, delivered without touching the pane.
+
+    ``less`` is on the alternate screen, which is the branch that used to
+    write a form feed into the pane. The client must still end up with
+    the frame's content - here the numbers ``less`` is showing - and the
+    pane must receive nothing.
+    """
     if shutil.which("less") is None:
         pytest.skip("less not available")
     strategy, client, _ = _paint_against_pane(
         "/bin/sh -c 'seq 1 200 | less'", tmux_socket
     )
-    assert strategy == "redraw"
-    # less repaints on Ctrl+L; the repaint carries content, not a caret L.
+    assert strategy == "screen"
+    # The capture carries what is on screen, not a caret L.
     assert b"^L" not in client, client[:200]
+    assert b"1" in client and b"20" in client, client[:200]

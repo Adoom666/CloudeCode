@@ -4,32 +4,33 @@
  *
  * Split out of client/js/session-sidebar.js for the project's 500-line
  * rule, and along the same seam the repo already uses for row internals:
- * client/js/session-row-actions.js owns the destructive control,
- * client/js/session-status-ui.js owns the status dot and the mark-unread
- * toggle, and client/js/session-row-menu.js owns the kebab those two now
- * fold into. This module is the row that composes them, nothing else -
- * it holds no state and touches no DOM, it only returns strings.
+ * client/js/session-row-actions.js owns the destructive control and
+ * client/js/session-status-ui.js owns the status dot. This module is the
+ * row that composes them, nothing else - it holds no state and touches
+ * no DOM, it only returns strings.
  *
- * THE ACTION ICONS ARE NO LONGER DRAWN INLINE: pin, mark-unread and
- * close/restart/remove live in the row's overflow menu. Their builders
- * are unchanged and still have exactly one caller each - now
- * session-row-menu.js rather than rowHtml(). `pinButtonHtml` is exported
- * for it and must stay exported.
+ * THE ACTION ICONS ARE DRAWN INLINE AGAIN. "move the pin and close icons
+ * back to the inline icons. remove 'add to group' / 'restart the agent'
+ * and the three dots now that they're not needed." Pin and the
+ * close/remove control sit on the row, built by the same two builders
+ * that have always drawn them: `pinButtonHtml` here and
+ * `SessionRowActions.html` next door. No kebab, no panel, no third way
+ * to reach either control.
  *
- * NO GROUP CHIP EITHER, AS OF THIS ROUND. "no i dont need to see the
- * group name in the item. its in the group i can see the group on the
- * sidebar." The chip used to name the group a row was filed in AND open
- * the group picker; the display half is simply gone, and the action half
- * moved into the kebab menu the same way pin/mark-unread/close did -
- * see `rowMenuItemHtml` in client/js/session-sidebar-group-actions.js,
- * pulled in by client/js/session-row-menu.js. Group membership itself is
- * untouched: it is still DB-backed and it is still how the sidebar's
- * OWN group headers file each row, which is the only place the filing
- * is shown now.
+ * WHAT WENT WITH THE MENU, so nobody goes looking for it: the group
+ * picker ITEM (filing is still reachable by dragging onto a group
+ * header, by `g` on a focused row and by Alt+Arrow across a band edge -
+ * see client/js/session-sidebar-group-actions.js) and RESTART ON A LIVE
+ * ROW (a DEAD row still offers it inline, and that is now the only
+ * surface reaching the respawn ladder). Right-click and long-press
+ * opened that menu and now open nothing.
+ *
+ * NO GROUP CHIP EITHER. Group membership is untouched: still DB-backed,
+ * and still how the sidebar's OWN group headers file each row.
  *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, kebab
+ *   compact   grip, dot, name, pin, close/remove
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
  *   detailed  the above, with the badge moved DOWN to a second line that
  *             also carries the session's age
@@ -40,23 +41,18 @@
  * builder; nothing here feeds that one, so removing this row's pill
  * cannot change what the home screen renders.
  *
- * REMOVING IT ALSO REMOVED A REAL DEFECT, which is worth recording
- * because the shape of it recurs. This module's builder put a literal
- * `~` in front of a guessed family, AND `.family-pill--guess::before` in
- * client/css/styles.css adds another one - so a guessed family rendered
- * as `~~claude` on screen while every DOM assertion about the label read
- * a single, correct `~claude`. The launcher's builder never added the
- * literal, so only this surface was wrong. A test that reads DOM text
- * cannot see a `::before`; only a rendered pixel or a computed style can,
- * which is why the pill assertions in scripts/verify_sidebar_sessions.py
- * were the ones that could have caught it.
+ * REMOVING IT ALSO REMOVED A REAL DEFECT whose shape recurs: this
+ * builder put a literal `~` in front of a guessed family AND
+ * `.family-pill--guess::before` adds another, so `~~claude` rendered
+ * while every DOM assertion read a correct `~claude`. A test that reads
+ * DOM text cannot see a `::before`; only a rendered pixel or a computed
+ * style can, which is why the pill assertions in
+ * scripts/verify_sidebar_sessions.py were the ones that could catch it.
  *
  * WHAT NOW FILLS DETAILED'S SECOND LINE: the tmux/external badge, moved
  * down off the first line, plus the age it already carried. The badge is
- * emitted exactly once per row at every density either way - line one at
- * cozy, line two at detailed, and not at all at compact, which is
- * unchanged. The second line is therefore still a line about where the
- * session came from and how old it is, which is what it always was.
+ * emitted exactly once per row either way - line one at cozy, line two
+ * at detailed, not at all at compact.
  *
  * THE ROW HEIGHTS ARE DECLARED, NOT EMERGENT. Removing a glyph from a
  * row would otherwise shorten it by however tall that glyph happened to
@@ -64,19 +60,14 @@
  * per density. The density contract is a number the stylesheet states,
  * not an accident of whichever controls currently ride the line.
  *
- * A RESTART CONTROL IS EMITTED for a row whose status is `dead`, and it
- * now rides in the kebab menu with the rest of the actions. It
- * SUPERSEDES an older rule saying the sidebar could not know a session
- * was stopped rather than unknown. Both halves of that rule stopped
- * being true: `session-sidebar-fetch.js` `mergeLiveRow()` overwrites
- * `status` with the server's `activity_status` for every session this
- * app holds a backend for, and that value is `resolve_pane_status()`
- * reading tmux's own `#{pane_dead}` - so `dead` is a MEASUREMENT, while
- * a probe-only row still carries `unknown` and
+ * A RESTART CONTROL IS EMITTED for a row whose status is `dead`, inline
+ * beside remove, and for no other status. It SUPERSEDES an older rule
+ * saying the sidebar could not know a session was stopped rather than
+ * unknown: `session-sidebar-fetch.js` `mergeLiveRow()` overwrites
+ * `status` with the server's `activity_status`, which is
+ * `resolve_pane_status()` reading tmux's own `#{pane_dead}`, so `dead` is
+ * a MEASUREMENT - while a probe-only row still carries `unknown` and
  * `SessionRowActions.actionsFor` refuses to treat `unknown` as stopped.
- * And restart cannot produce "two of it": it runs `tmux respawn-pane`
- * against the pane already there (src/core/session_respawn.py), never
- * passes `-k`, and tmux REFUSES respawn-pane on a live pane without it.
  *
  * The destructive control (close vs remove) is unchanged and still comes
  * from SessionRowActions.
@@ -279,6 +270,10 @@ console.log('[SessionSidebarRows Module] Loading...');
                 startup: window.SessionStartupGate
                     ? window.SessionStartupGate.normalize(r.startup_gate)
                     : 'unknown',
+                // Same trap as `startup`: a dropped socket moves
+                // nothing else that the server reports.
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(r.name) : 'unknown',
             })),
         });
     }
@@ -300,21 +295,14 @@ console.log('[SessionSidebarRows Module] Loading...');
     }
 
     /**
-     * Description: the note naming remembered positions whose sessions are
-     *   not currently running. It is deliberately not an error and not a
-     *   silent drop: the slots are kept, and the count says so out loud.
-     * Inputs: missing (Array<string>). Output: string - HTML, or ''.
+     * Description: the foot of the list - the status-light key, then the
+     *   app's version (client/js/version-footer.js's sidebar placement).
+     * Inputs: none. Output: string - HTML. Either half is '' with no module.
      */
-    function missingNoteHtml(missing) {
-        if (!missing || !missing.length) return '';
-        const n = missing.length;
-        const names = esc(missing.join(', '));
-        return (
-            `<div class="session-sidebar-note" data-order-missing="${n}" title="${names}">` +
-            `${n} remembered ${n === 1 ? 'position is' : 'positions are'} held for ` +
-            `${n === 1 ? 'a session' : 'sessions'} not currently listed` +
-            '</div>'
-        );
+    function footerHtml() {
+        const key = window.SessionStatusKey ? window.SessionStatusKey.keyHtml() : '';
+        const version = window.VersionFooter ? window.VersionFooter.sidebarFooterHtml() : '';
+        return key + version;
     }
 
     /**
@@ -347,46 +335,61 @@ console.log('[SessionSidebarRows Module] Loading...');
      *   confident empty state would be a claim the app cannot support -
      *   and would contradict the CANNOT DETERMINE block the home screen is
      *   rendering from the same failed probe at the same moment.
+     *   The remembered-position count is NOT a parameter any more (see
+     *   footerHtml); it still reaches `signature()`.
      * Inputs: rows (Array<object>), density (string), listing (object|null)
-     *   - {ok, reason, detail}, missing (Array<string>),
+     *   - {ok, reason, detail},
      *   arrangement (object|null) - {status, reason, collapsed},
      *   opts (object|null) - {dragging (boolean)}, passed straight
      *   through to client/js/session-sidebar-groups.js, which is the only
      *   thing that reads it.
      * Output: string - HTML.
      */
-    function listHtml(rows, density, listing, missing, arrangement, opts) {
+    function listHtml(rows, density, listing, arrangement, opts) {
         const attention = window.SessionListingState
             ? window.SessionListingState.attentionHtml(listing)
             : '';
         const notice = arrangementNoticeHtml(arrangement);
+        // THE KEY RIDES EVERY BRANCH, including the two that draw no
+        // rows: it explains lights the user has seen on other surfaces
+        // too, so it is not conditional on this list holding anything.
+        const footer = footerHtml();
         if (!rows || rows.length === 0) {
-            if (listing && !listing.ok) return notice + attention;
-            return notice + '<div class="session-sidebar-empty">no other conversations</div>';
+            if (listing && !listing.ok) return notice + attention + footer;
+            const empty = '<div class="session-sidebar-empty">no other conversations</div>';
+            return notice + empty + footer;
         }
         const body = window.SessionSidebarGroups
             ? window.SessionSidebarGroups.bodyHtml(rows, density, arrangement, opts)
             : rows.map((r) => rowHtml(r, density)).join('');
-        return notice + attention + body + missingNoteHtml(missing);
+        return notice + attention + body + footer;
     }
 
     /**
      * Description: build one row at the given density. The dot, the theme
-     *   swatch and the kebab all come from shared modules, so this row
-     *   and the launcher's running-session row are the same controls
-     *   with the same tooltips and confirm copy.
+     *   swatch, the pin and the close/restart/remove control all come
+     *   from shared modules, so this row and the launcher's
+     *   running-session row are the same controls with the same tooltips
+     *   and confirm copy.
      *
-     *   `is_pinned`, `unread` and `status` are stamped on the KEBAB even
-     *   though nothing on the row draws them any more - the menu is built
-     *   from those attributes, so they are still things the row carries
-     *   and are still keyed in ``signature`` above.
+     *   `status` is stamped on the ROW as `data-row-status`, because the
+     *   restart picker needs to know what state the row was painted in
+     *   and the row is now the only element built from the whole payload.
+     *   `is_pinned` needs no attribute of its own: the pin button's
+     *   `aria-pressed` carries it. `unread` is not drawn as a glyph at
+     *   all but IS still in ``signature``, because the LIGHT renders it.
      * Inputs: r (object) - one merged session row.
      *   density (string) - 'compact' | 'cozy' | 'detailed'.
      * Output: string - HTML.
      */
     function rowHtml(r, density) {
         const mode = density || 'cozy';
-        const dot = window.SessionStatusUI ? window.SessionStatusUI.dotHtml(r.status) : '';
+        // THE LIGHT CARRIES THE UNREAD FLAG NOW - the envelope is gone.
+        const signals = { unread: !!r.unread, startup_gate: r.startup_gate,
+            transport: window.SessionTransport
+                ? window.SessionTransport.stateFor(r.name) : 'unknown' };
+        const dot = window.SessionStatusUI
+            ? window.SessionStatusUI.dotHtml(r.status, signals) : '';
         // punchlist 19 - "needs a keypress". Empty string for both 'ready'
         // and 'unknown', so this adds nothing to a normal row. It rides
         // at EVERY density including compact, unlike the tmux/external
@@ -423,12 +426,15 @@ console.log('[SessionSidebarRows Module] Loading...');
         const themeSwatch = window.SessionThemeTint
             ? window.SessionThemeTint.swatchHtml(r.pinned_theme)
             : '';
-        // ONE CONTROL WHERE THREE USED TO BE - "lets fold the icons a
-        // thin 3 dots up and down sub menu". The menu is built from the
-        // SAME builders that used to be called here, so nothing was
-        // dropped and no label was rewritten.
-        const kebab = window.SessionRowMenu
-            ? window.SessionRowMenu.kebabHtml(r)
+        // THE TWO INLINE CONTROLS. Pin toggles the row to the top; the
+        // action is close on a live row, restart plus remove on a dead
+        // one. Both come from the builders that own them, so this row and
+        // the launcher's card draw the same glyphs, tooltips and confirm
+        // copy.
+        const pin = pinButtonHtml(r.name, !!r.is_pinned);
+        const rowAction = window.SessionRowActions
+            ? window.SessionRowActions.html(
+                r.status, r.name, 'session-sidebar-row-delete')
             : '';
         const rename = renameState(r);
         // The badge is the first thing to go when the user asks for thin
@@ -450,7 +456,14 @@ console.log('[SessionSidebarRows Module] Loading...');
             `<div class="session-sidebar-row" data-name="${name}" ` +
             `data-active="${r.is_this_tab ? '1' : '0'}" ` +
             `data-pinned="${r.is_pinned ? '1' : '0'}" ` +
-            `data-rename-state="${rename.state}" ` + (window.SessionSidebarFetch ? window.SessionSidebarFetch.workAttr(r) : '') +
+            `data-rename-state="${rename.state}" ` +
+            // THE ROW CARRIES ITS OWN STATUS NOW. It used to live on the
+            // kebab; with that gone the row is the only element built
+            // from the whole payload, and session-sidebar-clicks.js reads
+            // it from here to tell the restart picker what state the
+            // session was painted in.
+            `data-row-status="${esc(r.status || 'unknown')}" ` +
+            (window.SessionSidebarFetch ? window.SessionSidebarFetch.workAttr(r) : '') +
             `role="option" aria-selected="${r.is_this_tab ? 'true' : 'false'}" ` +
             `tabindex="-1"${sidAttr}${themeAttrs}>` +
             '<div class="session-sidebar-row-main">' +
@@ -470,7 +483,8 @@ console.log('[SessionSidebarRows Module] Loading...');
             themeSwatch +
             startupGate +
             inlineBadge +
-            kebab +
+            pin +
+            rowAction +
             '</div>' +
             secondLine +
             '</div>'
@@ -479,7 +493,7 @@ console.log('[SessionSidebarRows Module] Loading...');
 
     window.SessionSidebarRows = {
         listHtml, rowHtml, signature, esc, gripHtml, renameState,
-        pinButtonHtml, ageLabel, missingNoteHtml, arrangementNoticeHtml,
+        pinButtonHtml, ageLabel, footerHtml, arrangementNoticeHtml,
     };
     console.log('[SessionSidebarRows Module] Exported as window.SessionSidebarRows');
 })();

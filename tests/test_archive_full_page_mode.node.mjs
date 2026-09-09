@@ -186,6 +186,13 @@ function loadApp(opts) {
     };
     sandbox.window = sandbox;
     vm.createContext(sandbox);
+    // THE REAL theme-navigation.js, not a stub. showArchive() calls
+    // window.ThemeNavigation.applyForGlobal(), and the assertions below
+    // ("the per-session theme scope is dropped") are about that call's
+    // effects on Themes and GlobalAudioToggle. A no-op stub would satisfy
+    // the property lookup and quietly delete the measurement; index.html
+    // loads this module before app.js, so the sandbox does too.
+    vm.runInContext(readClientJs('theme-navigation.js'), sandbox);
     vm.runInContext(readClientJs('app.js'), sandbox);
 
     const app = sandbox.App;

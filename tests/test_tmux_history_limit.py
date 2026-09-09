@@ -65,7 +65,11 @@ async def test_history_limit_is_declared_before_the_pane_exists() -> None:
     assert backend.tmux_calls == [
         ["set-option", "-g", "history-limit", str(HISTORY_LIMIT)]
     ]
-    assert HISTORY_LIMIT == 10000
+    # Matches xterm.js's own `scrollback: 50000` in client/js/terminal.js.
+    # A pane that retains less than the browser is willing to show is a
+    # ceiling the user runs into with no way to tell which layer stopped
+    # them, so the two are kept equal on purpose.
+    assert HISTORY_LIMIT == 50000
 
 
 @pytest.mark.asyncio

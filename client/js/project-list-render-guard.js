@@ -46,14 +46,19 @@
  * that treated it as such would silently freeze the launchpad on any
  * page whose markup it did not recognise.
  *
- * BUSY IS MEASURED IN THE CONTAINER WE ARE ABOUT TO WIPE. An open row
- * overflow menu (`SessionRowMenu.isOpen()` - its own predicate, reused
- * rather than re-derived) and a live inline rename input both mean a
- * user is mid-interaction with something a repaint would delete under
- * their hands. The focus test is scoped with `container.contains()` on
- * purpose: a focused input anywhere else on the page is none of this
- * guard's business, and a page-wide focus test would let one stray
- * focused field freeze the list indefinitely.
+ * BUSY IS MEASURED IN THE CONTAINER WE ARE ABOUT TO WIPE. A live inline
+ * rename input means a user is mid-interaction with something a repaint
+ * would delete under their hands. The focus test is scoped with
+ * `container.contains()` on purpose: a focused input anywhere else on
+ * the page is none of this guard's business, and a page-wide focus test
+ * would let one stray focused field freeze the list indefinitely.
+ *
+ * IT USED TO ASK THE ROW'S OVERFLOW MENU TOO (`SessionRowMenu.isOpen()`).
+ * That menu was removed on 2026-09-08 - pin and close are inline icons
+ * again - so the question has no answer to give and the check went with
+ * it. Nothing else on these rows opens a panel that a repaint could pull
+ * out from under a finger; a control that does would have to be added
+ * here.
  *
  * Named for its first consumer, but `isBusy` is shared: launchpad.js
  * consults it from `renderRunningSessions()` too, because the inline
@@ -132,10 +137,9 @@ console.log('[ProjectListRenderGuard Module] Loading...');
     /**
      * Is the user mid-interaction with something inside this container?
      *
-     * Description: an open row overflow menu, a live inline rename
-     *   input, or focus sitting in an editable field INSIDE the
-     *   container. Any of the three makes a repaint destructive rather
-     *   than merely wasteful.
+     * Description: a live inline rename input, or focus sitting in an
+     *   editable field INSIDE the container. Either one makes a repaint
+     *   destructive rather than merely wasteful.
      * Inputs: opts (object) - {container: Element, doc: Document}.
      * Output: boolean.
      * Example: if (guard.isBusy({container: el, doc: document})) return;
@@ -144,9 +148,6 @@ console.log('[ProjectListRenderGuard Module] Loading...');
         var container = opts && opts.container;
         var doc = (opts && opts.doc) || (typeof document !== 'undefined' ? document : null);
         if (!container) return false;
-
-        var menu = typeof window !== 'undefined' ? window.SessionRowMenu : null;
-        if (menu && typeof menu.isOpen === 'function' && menu.isOpen()) return true;
 
         if (typeof container.querySelector === 'function') {
             for (var i = 0; i < EDITOR_SELECTORS.length; i++) {

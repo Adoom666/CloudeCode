@@ -6,11 +6,22 @@
 // destructive and irreversible from the user's side, so the client half of
 // it is three separate gates and this file pins all three.
 //
-//   1. THE ROW OFFERS IT. `actionsFor` used to answer ['close'] for every
-//      status but 'dead', which is why no live row had a restart control at
-//      all. It now offers one on a status we POSITIVELY KNOW is live, and
-//      still answers ['close'] alone for 'unknown' - a control that kills a
-//      running process is not offered on a guess.
+//   1. THE ROW OFFERS IT - AND AS OF 2026-09-08 IT NO LONGER DOES. This
+//      gate went from "offer restart only on a status we POSITIVELY KNOW
+//      is live" to "never offer it on a live row at all", because the
+//      owner removed the control: "remove 'add to group' / 'restart the
+//      agent' and the three dots now that they're not needed". That is a
+//      TIGHTENING of gate 1, not a removal of the gate, and the three
+//      gates below it are untouched and still asserted here.
+//
+//      NOTHING SERVER-SIDE WAS DELETED. `resolve_respawn_plan` still
+//      answers RESPAWN_NOT_DEAD without `live_restart_confirmed`,
+//      `RespawnPlan.kills_live_pane` is still the only thing that passes
+//      `-k`, and the picker still carries its arm box and its confirm
+//      modal. What is gone is the only UI that fed a running session into
+//      that path. If a live restart is offered again, gates 2, 3 and 4
+//      are still standing behind it - which is exactly why they are still
+//      tested below against a live-shaped preview.
 //
 //   2. NOTHING ARRIVES ARMED. `armHtml()` emits an UNCHECKED checkbox and
 //      takes no argument, so there is no field in the server's payload that
@@ -166,16 +177,16 @@ function livePreview(projectedKind) {
 // 1. the row offers restart, and only where we know the state
 // ---------------------------------------------------------------------------
 
-test('a live row offers restart alongside close', () => {
+test('a live row offers close alone - gate 1 is closed again', () => {
     const w = load(['session-status-ui.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     for (const status of ['working', 'working_subagent', 'question',
-        'finished_unread', 'idle', 'running']) {
+        'notice', 'finished_unread', 'idle', 'running']) {
         const actions = plain(A.actionsFor(status));
         assert.deepEqual(
             actions,
-            [A.ACTION_CLOSE, A.ACTION_RESTART],
-            `${status} does not offer restart: ${JSON.stringify(actions)}`,
+            [A.ACTION_CLOSE],
+            `${status} still offers a live restart: ${JSON.stringify(actions)}`,
         );
     }
 });
@@ -202,14 +213,23 @@ test('an unknown row is never offered a control that kills', () => {
     }
 });
 
-test('a stopped row is not treated as a live one', () => {
+test('a stopped row is not treated as a dead one', () => {
     // 'stopped' means the tmux instance is GONE - there is no pane to kill
-    // and nothing to respawn into, which is why it is not in LIVE_STATUSES.
+    // and nothing to respawn into - while 'dead' means a pane is holding
+    // an exited process, which is the one case restart exists for. The
+    // two words are a documented trap in this codebase, so the
+    // distinction is asserted at the only place it now changes an answer.
+    //
+    // `LIVE_STATUSES` used to be the thing checked here and is gone: with
+    // no live restart to gate, the allow-list had no reader left, and a
+    // constant nothing consults reads like a rule that is still enforced.
     const w = load(['session-status-ui.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
-    assert.ok(A.LIVE_STATUSES.indexOf('stopped') === -1);
-    assert.ok(A.LIVE_STATUSES.indexOf('dead') === -1);
-    assert.ok(A.LIVE_STATUSES.indexOf('unknown') === -1);
+    assert.equal(A.LIVE_STATUSES, undefined,
+        'the live allow-list must be gone, not merely unused');
+    assert.deepEqual(plain(A.actionsFor('stopped')), [A.ACTION_CLOSE]);
+    assert.deepEqual(
+        plain(A.actionsFor('dead')), [A.ACTION_RESTART, A.ACTION_REMOVE]);
 });
 
 test('the restart control still needs no generic confirm dialog', () => {

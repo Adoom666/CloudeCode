@@ -624,7 +624,7 @@ test('tooltips are anchored to their own button, not to an ancestor', () => {
         'a CSS tooltip in the terminal corner is what overflowed before');
 });
 
-test('nothing overlays the terminal any more except the bottom-row FABs', () => {
+test('nothing overlays the terminal except one phone-only bottom-row FAB', () => {
     const css = readClientCss('terminal-tools.css');
     // The strip that used to sit over the top-right corner is GONE, so
     // the terminal's top edge is uncovered rather than covered by one
@@ -638,15 +638,25 @@ test('nothing overlays the terminal any more except the bottom-row FABs', () => 
     assert.ok(/position:\s*fixed;/.test(base));
     assert.ok(/bottom:\s*var\(--fab-edge\);/.test(base),
         'the bottom row hovers over the command line');
-    // Each button then carries ONLY a position, from the shared tokens.
-    // They share the right rail; the editor differs on the OTHER axis.
+    // The one remaining button carries ONLY a position, from the shared
+    // tokens. THE SECOND ONE IS GONE FROM THIS FILE ENTIRELY: the
+    // session editor used to sit on a top-right rail here and is a
+    // header control now (client/css/session-editor-header.css), so
+    // there is no `.session-editor-fab` rule to assert about. Absence is
+    // the assertion - a rule coming back means the rail came back.
     assert.match(ruleBody(css, '.terminal-tools-fab'), /right:\s*var\(--fab-slot-0\);/);
-    const editor = ruleBody(css, '.session-editor-fab');
-    assert.match(editor, /right:\s*var\(--fab-slot-0\);/);
-    assert.match(editor, /top:\s*var\(--fab-top-edge\);/);
-    assert.match(editor, /bottom:\s*auto;/);
+    const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!/\.session-editor-fab/.test(noComments),
+        'the top-right rail must stay retired');
+    // AND THE ONE THAT REMAINS ONLY OVERLAYS A PHONE. The owner asked
+    // for it to be mobile only, so above 769px - the same line that
+    // already makes the d-pad beside it touch-only - the terminal is
+    // covered by nothing at all.
+    assert.match(noComments,
+        /@media \(min-width: 769px\) \{\s*\n\s*\.terminal-tools-fab,\s*\n\s*\.terminal-tools-menu \{\s*\n\s*display: none !important;/,
+        'the tools FAB and its menu must be hidden on desktop');
     // Overlaying output is allowed and asked for, but only as one small
-    // button: 45px wide against a full-width strip.
+    // button on a phone: 45px wide against a full-width strip.
     assert.match(base, /width:\s*var\(--fab-size\);/);
 });
 

@@ -67,6 +67,25 @@ function clientFile(...parts) {
     return fs.readFileSync(path.join(__dirname, '..', 'client', ...parts), 'utf8');
 }
 
+/**
+ * A stylesheet with its comments removed.
+ *
+ * EVERY "THIS RULE IS GONE" ASSERTION MUST READ THROUGH THIS. The
+ * stylesheets in this project explain retired layouts in prose - the
+ * token block in styles.css names `--fab-slot-2` and the retired top
+ * rail precisely so nobody rebuilds them - and a bare `includes()` over
+ * the raw text cannot tell a declaration from the sentence explaining
+ * why there is no declaration. That is not hypothetical: it is the same
+ * trap the "A DECLARATION, not a mention" note further down already
+ * records. Strip the prose, then assert against real CSS.
+ *
+ * @param {string} css  Stylesheet text.
+ * @returns {string} The same text with every block comment removed.
+ */
+function cssRules(css) {
+    return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 /** The three rows, in the order the tools menu declares them. */
 const ENTRY_IDS = [
     'toolCopyOutput',
@@ -411,9 +430,9 @@ test('GEOMETRY: the bottom row is measured from the tokens, not eyeballed', () =
     // THE ROW IS TWO CONTROLS NOW. The session editor moved to the
     // top-right rail, so slot 2 is gone rather than left defined and
     // unread - an orphan token is how a retired layout gets revived.
-    assert.ok(!base.includes('--fab-slot-2'),
+    assert.ok(!cssRules(base).includes('--fab-slot-2'),
         'slot 2 must be removed with the control that used it');
-    assert.ok(!tools.includes('--fab-slot-2'));
+    assert.ok(!cssRules(tools).includes('--fab-slot-2'));
 
     // And the row shares one y: every one of them derives its bottom
     // from the same token, in the base rule and in the iOS safe-area
@@ -422,111 +441,182 @@ test('GEOMETRY: the bottom row is measured from the tokens, not eyeballed', () =
     assert.match(ruleOf(base, '.dpad-float-button'), /bottom:\s*var\(--fab-edge\);/);
     assert.match(ruleOf(base, '.slash-commands-btn'), /bottom:\s*var\(--fab-edge\);/);
     const ios = clientFile('css', 'ios-chrome.css');
-    assert.ok(!/\.terminal-tools-fab\s*\{/.test(ios),
+    assert.ok(!/\.terminal-tools-fab\s*\{/.test(cssRules(ios)),
         'the old stacked safe-area override must be gone, not left to drift');
+    // The `:not(.session-editor-fab)` exclusion that used to sit in this
+    // selector is gone WITH the control it excluded. The editor hung
+    // from a top-right rail and took the TOP inset, and because this
+    // file loads after terminal-tools.css the exclusion was the only
+    // thing stopping this rule dragging it back down to the command
+    // line. It is a header button now and is not a `.fab-menu-btn` at
+    // all, so every remaining one really is on the bottom row.
     assert.match(ios,
-        /\.dpad-float-button,\n\.slash-commands-btn,\n\.fab-menu-btn:not\(\.session-editor-fab\) \{\n\s*bottom: calc\(var\(--fab-edge\) \+ env\(safe-area-inset-bottom\)\);/,
-        'one safe-area rule for the whole row keeps them on one line, and it '
-        + 'must NOT reach the editor: this file loads after terminal-tools.css, '
-        + 'so an unexcluded bottom here silently drags it back down');
+        /\.dpad-float-button,\n\.slash-commands-btn,\n\.fab-menu-btn \{\n\s*bottom: calc\(var\(--fab-edge\) \+ env\(safe-area-inset-bottom\)\);/,
+        'one safe-area rule for the whole bottom row keeps them on one line');
+    assert.ok(!/\.session-editor-fab/.test(cssRules(ios)),
+        'no rail rule and no exclusion naming it: the class does not exist');
 
     assert.ok(!base.includes('.cloude-image-attach-button'),
         'the old hardcoded attach-button geometry must be gone');
 });
 
-test('GEOMETRY: the top-right rail clears the header from the same tokens', () => {
+test('GEOMETRY: the session editor is a HEADER button, and the rail is gone', () => {
     const base = clientFile('css', 'styles.css');
     const tools = clientFile('css', 'terminal-tools.css');
     const ios = clientFile('css', 'ios-chrome.css');
+    const header = clientFile('css', 'session-editor-header.css');
+    const html = clientFile('index.html');
 
-    // The editor is placed by TOKENS, on its own named axis. Hardcoding
-    // a top offset here is the drift this whole system exists to stop.
-    const rule = ruleOf(tools, '.session-editor-fab');
-    assert.match(rule, /top:\s*var\(--fab-top-edge\);/,
-        'the top offset must come from a token, not a number');
-    assert.match(rule, /bottom:\s*auto;/,
-        'without this the shared .fab-menu-btn bottom still applies');
-    assert.match(rule, /right:\s*var\(--fab-slot-0\);/,
-        'same right rail as the terminal-tools button below it');
-    assert.ok(!/\d+px/.test(rule), `no raw pixels in the placement: ${rule}`);
+    // THE MOVE. The owner asked for the floating session editor to go
+    // "up into the menu next to the folder one", so it is declared
+    // inside `.controls` immediately after #configEditorBtn.
+    const controlsAt = html.indexOf('<div class="controls">');
+    const controlsEnd = html.indexOf('</div>\n        </div><!-- /.header-row -->');
+    assert.ok(controlsAt > -1 && controlsEnd > controlsAt);
+    const controls = html.slice(controlsAt, controlsEnd);
+    assert.ok(controls.includes('id="sessionEditorBtn"'),
+        'the session editor must be declared inside the header .controls row');
+    assert.ok(controls.indexOf('id="configEditorBtn"')
+        < controls.indexOf('id="sessionEditorBtn"'),
+        'and it must sit immediately after the folder icon, as asked');
 
-    // --header-h is DERIVED from the header's own three parts, so a
-    // restyle of the header moves the FAB with it instead of sliding it
-    // under the header. HOME-HEADER-CONSOLIDATION added a fourth part,
-    // --home-subheader-extra, which is 0px on every screen except the
-    // launchpad (see styles.css) - the FAB itself never renders on the
-    // launchpad (client/js/app.js hides it there), so this does not move
-    // it anywhere it is actually seen; it exists so .fab-menu-notice,
-    // which DOES render on the launchpad, clears the header's new second
-    // row instead of landing under the subheader text.
+    // IT REUSES THE HEADER BUTTON, it does not restyle itself into one.
+    // .btn-icon is what #configEditorBtn and the kebab carry, so size,
+    // gap, hover, focus and tooltip all come from one place.
+    const btnTag = controls.slice(controls.indexOf('id="sessionEditorBtn"') - 60,
+        controls.indexOf('id="sessionEditorBtn"') + 400);
+    assert.ok(/class="btn-icon"/.test(btnTag),
+        'reuse the header button component rather than restyling in place');
+    assert.ok(!/fab-menu-btn|session-editor-fab/.test(btnTag),
+        'it is not a floating action button any more');
+    // Accessible name, tooltip and popup semantics all survive the move.
+    assert.ok(btnTag.includes('aria-label="session editor"'));
+    assert.ok(btnTag.includes('title="session editor"'));
+    assert.ok(btnTag.includes('data-tooltip="session editor"'));
+    assert.ok(btnTag.includes('aria-haspopup="menu"'));
+    assert.ok(btnTag.includes('aria-expanded="false"'));
+    assert.ok(btnTag.includes('aria-controls="sessionEditorMenu"'));
+
+    // NO ORPHANS. Every rule that existed only to float this control is
+    // deleted, not left defined and unread: the placement rule, the
+    // token that fed it, and the standalone safe-area pair.
+    assert.ok(!/\.session-editor-fab\s*\{/.test(cssRules(tools)),
+        'the top-right rail rule must be removed, not merely overridden');
+    assert.ok(!/\.session-editor-fab/.test(cssRules(ios)));
+    assert.ok(!/--fab-top-edge\s*:/.test(cssRules(base)),
+        'an orphan token is how a retired layout gets revived by accident');
+    assert.ok(!/var\(--fab-top-edge\)/.test(
+        cssRules(tools) + cssRules(ios) + cssRules(base)),
+        'and nothing may still read it');
+
+    // SCOPE SURVIVES THE MOVE, which is the one thing it could lose.
+    // `.controls` mounts on every screen, so an ALLOW-LIST names the one
+    // screen a session control means anything on. An id selector,
+    // because .btn-icon declares display:flex and a class would lose.
+    assert.match(header, /#sessionEditorBtn \{\s*\n\s*display: none;/,
+        'hidden by default, on an id so it beats .btn-icon');
+    assert.match(header,
+        /body:has\(#terminal-screen\.active\) #sessionEditorBtn \{\s*\n\s*display: flex;/,
+        'and shown only while the terminal screen is the active screen');
+    // An allow-list, deliberately: the old deny-list had to be amended
+    // once already when the archive screen arrived.
+    for (const screen of ['#launchpad-screen', '#auth-screen', '#archive-screen']) {
+        assert.ok(!cssRules(header).includes(screen),
+            `naming ${screen} would make this a deny-list again`);
+    }
+    // It adds NO appearance of its own. A colour here is a header button
+    // restyled in one place instead of in the header.
+    assert.ok(!/(background|border|color|box-shadow)\s*:/.test(cssRules(header)),
+        'the header component owns the look; this file owns scope only');
+
+    // THE HOME HEADER'S CENTRING IS UNTOUCHED, and that is why. The
+    // launcher title is centred against --home-header-flank-w, which
+    // mirrors `.controls`' real width; a third VISIBLE inline control
+    // there would push the title off centre by half a control. This one
+    // is display:none on the home screen, so the token needs no new
+    // branch - see header-menu.js's note that a third inline control is
+    // a layout fact.
+    assert.match(base,
+        /\.header--home \{\s*\n\s*--home-header-flank-w: calc\(var\(--control-size\) \* 2 \+ 8px\);/);
+    assert.match(base,
+        /\.header--home:has\(#archiveBtn:not\(\[hidden\]\)\) \{\s*\n\s*--home-header-flank-w: calc\(var\(--control-size\) \* 3 \+ 16px\);/);
+
+    // --header-h stays derived from the header's own parts. The rail no
+    // longer reads it, but .fab-menu-notice and the config drawer do.
     assert.match(base,
         /--header-h:\s*calc\(var\(--control-size\) \+ var\(--header-pad-y\) \* 2\s*\n?\s*\+ var\(--header-border\) \+ var\(--home-subheader-extra\)\);/);
-    assert.match(base, /--fab-top-edge:\s*calc\(var\(--header-h\) \+ var\(--fab-gap\)\);/);
-    // ...and the header really does read those parts, or the derivation
-    // is a fiction that happens to agree today.
-    const header = ruleOf(base, '.header');
-    // The side half is --header-pad-x now (the docked-sidebar offset in
-    // session-sidebar.css has to add that gap back on top of the sidebar
-    // width, so it could not stay a literal). Only the VERTICAL half feeds
-    // --header-h, and that is what this assertion is really about.
-    assert.match(header, /padding:\s*var\(--header-pad-y\) var\(--header-pad-x\);/);
-    assert.match(header, /border-bottom:\s*var\(--header-border\) solid/);
-    // The header's own three control-size icon buttons (configEditorBtn,
-    // header-menu-toggle, and their kin) are `.btn-icon` now, not a bare
-    // `button` reset - see the button-selector scoping pass.
+    const headerRule = ruleOf(base, '.header');
+    assert.match(headerRule, /padding:\s*var\(--header-pad-y\) var\(--header-pad-x\);/);
+    assert.match(headerRule, /border-bottom:\s*var\(--header-border\) solid/);
     assert.match(ruleOf(base, '.btn-icon'),
         /width:\s*var\(--control-size\);\n\s*height:\s*var\(--control-size\);/);
-
-    // Resolve the three breakpoints the way the browser will and check
-    // the editor clears the header at every one of them.
-    const gap = 12, size = 45, border = 2;
-    const widths = [
-        { w: 1280, pad: 12, control: 36 },
-        { w: 768, pad: 10, control: 44 },
-        { w: 390, pad: 8, control: 40 },
-    ];
-    for (const { w, pad, control } of widths) {
-        const headerH = control + pad * 2 + border;
-        const top = headerH + gap;
-        assert.ok(top >= headerH + gap,
-            `at ${w}px the editor must clear the ${headerH}px header`);
-        // It must also stay clear of the bottom row on the shortest
-        // viewport we support, or it stops being a top-right control.
-        const shortest = 699;
-        assert.ok(top + size < shortest - 20 - size,
-            `at ${w}px the editor (${top}..${top + size}) must not reach the bottom row`);
-    }
-    // Phone: 40 + 16 + 2 = 58px header, so the button is 70..115.
-    assert.equal(40 + 8 * 2 + border + gap, 70);
-    // Desktop: 36 + 24 + 2 = 62px header, so the button is 74..119.
-    assert.equal(36 + 12 * 2 + border + gap, 74);
-
-    // Standalone mode grows the header by the top inset, so the FAB
-    // takes the same inset or the clearance silently shrinks to zero.
+    // Standalone mode: the header pads itself by the top inset, so the
+    // button rides it like every other header control and needs no rule.
     assert.match(ios,
         /padding-top:\s*calc\(var\(--header-pad-y\) \+ env\(safe-area-inset-top\)\);/);
-    assert.match(ruleOf(ios, '.session-editor-fab'),
-        /top:\s*calc\(var\(--fab-top-edge\) \+ env\(safe-area-inset-top\)\);/);
-    assert.match(ruleOf(ios, '.session-editor-fab'), /bottom:\s*auto;/);
+
+    // TOUCH TARGET. --control-size is 36px on desktop and 44px at the
+    // touch breakpoints, which is the 44px minimum on every phone width.
+    for (const [width, control] of [[1280, 36], [768, 44], [390, 40]]) {
+        assert.ok(control >= 36, `${width}px control must stay a real target`);
+    }
+    assert.match(base, /@media \(max-width: 768px\) \{[\s\S]{0,400}?--control-size: 44px;/,
+        'the touch breakpoint must still raise every header control to 44px');
 });
 
-test('the top-right corner holds ONE button, never a strip again', () => {
+test('CHANGE 1: the terminal tools FAB and its menu are MOBILE ONLY', () => {
+    const base = clientFile('css', 'styles.css');
+    const tools = clientFile('css', 'terminal-tools.css');
+    // The owner's words: "this icon and popup menu should only be visible
+    // on mobile view." Both, not just the trigger - a menu left painted
+    // with no trigger is worse than either.
+    const gate = /@media \(min-width: 769px\) \{\s*\n\s*\.terminal-tools-fab,\s*\n\s*\.terminal-tools-menu \{\s*\n\s*display: none !important;/;
+    assert.match(tools, gate,
+        'the tools FAB and its menu must both be hidden above the breakpoint');
+
+    // THE BREAKPOINT IS THE D-PAD'S, NOT A NEW ONE. They share the
+    // bottom row; two controls in one row that vanish at two different
+    // widths is how a row ends up with a hole at some third width.
+    assert.match(base,
+        /@media \(min-width: 769px\) \{[\s\S]*?\.dpad-float-button \{\s*\n\s*display: none !important;/,
+        'the d-pad must still be touch-only at the same 769px line');
+
+    // PURE CSS, NO JS GATE. A width check in JS paints the button on the
+    // first frame and removes it once the script runs, which is a flash
+    // of a control the desktop user was told they do not have.
+    for (const f of ['terminal-tools-menu.js', 'terminal.js', 'fab-menu.js']) {
+        const src = clientFile('js', f).replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+        assert.ok(!/innerWidth|matchMedia/.test(src),
+            `${f} must not gate the tools FAB in JS; the media query owns it`);
+    }
+
+    // The session editor is NOT caught by this gate. It is a header
+    // control at every width and the owner asked for exactly one of the
+    // two to become mobile-only.
+    assert.ok(!/@media \(min-width: 769px\)[\s\S]*?session-editor/.test(cssRules(tools)));
+    assert.ok(!/@media[\s\S]*?#sessionEditorBtn/.test(
+        cssRules(clientFile('css', 'session-editor-header.css'))),
+        'the session editor must render at every width');
+});
+
+test('the top-right corner is empty, and no strip ever comes back', () => {
     const html = clientFile('index.html');
     const tools = clientFile('css', 'terminal-tools.css');
     // The folded three-icon strip that used to cover the terminal's top
-    // edge across its whole width is gone and stays gone. Exactly one
-    // control names the top rail.
-    assert.ok(!/\.terminal-tools\s*\{/.test(tools),
+    // edge across its whole width is gone and stays gone, and so is the
+    // single button that replaced it. NOTHING names the top rail now.
+    assert.ok(!/\.terminal-tools\s*\{/.test(cssRules(tools)),
         'the top-right tool strip must not be reintroduced');
-    const onRail = (tools.match(/top:\s*var\(--fab-top-edge\)/g) || []).length;
-    assert.equal(onRail, 1, 'exactly one control may sit on the top-right rail');
-    // No step token for that rail: a second control up there has to be a
+    const onRail = (cssRules(tools).match(/top:\s*var\(--fab-top-edge\)/g) || []).length;
+    assert.equal(onRail, 0, 'nothing may sit on the retired top-right rail');
+    // No step token for that rail either: a control up there has to be a
     // deliberate edit, not a copy-paste of --fab-top-slot-1.
-    // A DECLARATION, not a mention: the token block names the token it
+    // A DECLARATION, not a mention: the token block names the tokens it
     // deliberately does not define, and that prose must not trip this.
-    assert.ok(!/--fab-top-slot-\d+\s*:/.test(clientFile('css', 'styles.css')),
-        'the top rail is one slot on purpose - do not build a row here');
-    // And it is a full 45px target, same as every other FAB.
+    assert.ok(!/--fab-top-slot-\d+\s*:/.test(cssRules(clientFile('css', 'styles.css'))),
+        'the top rail is retired - do not build a row there');
+    // The one remaining FAB is still a full 45px target.
     assert.match(ruleOf(tools, '.fab-menu-btn'), /width:\s*var\(--fab-size\);/);
     assert.match(ruleOf(tools, '.fab-menu-btn'), /height:\s*var\(--fab-size\);/);
     assert.ok(html.includes('id="sessionEditorBtn"'));
@@ -544,22 +634,34 @@ test('NOTHING MOVED INSIDE #terminal, so the scroll guard cannot eat a tap', () 
     // div that closes #terminal-screen.
     const screenEnd = html.indexOf('<!-- Vendored xterm.js');
     assert.ok(screenEnd > 0);
-    for (const id of ['terminalToolsBtn', 'sessionEditorBtn',
-        'cloude-image-attach-input']) {
+    for (const id of ['terminalToolsBtn', 'cloude-image-attach-input']) {
         assert.ok(html.indexOf(`id="${id}"`) > screenEnd,
             `${id} must sit outside #terminal-screen, not inside #terminal`);
     }
-    // THE EDITOR IS STILL BODY-LEVEL AFTER MOVING TO THE TOP-RIGHT.
-    // Pinning a control over the terminal's top corner is exactly the
-    // change that tempts someone to mount it inside #terminal so it can
-    // be positioned against it. That would hand every tap and drag on it
+    // THE TOOLS FAB IS STILL BODY-LEVEL, and it is the one that still
+    // floats over the terminal. That is exactly the placement which
+    // tempts someone to mount it inside #terminal so it can be
+    // positioned against it, which would hand every tap and drag on it
     // to blockOverscrollEscape. A byte offset only proves it comes after
     // some marker; measure the real NESTING DEPTH instead.
-    assert.equal(depthOfElement(html, 'sessionEditorBtn'), 0,
-        '#sessionEditorBtn must be a DIRECT child of <body>');
-    // The controls it must not have fallen into, for the same reason.
-    assert.ok(html.indexOf('id="sessionEditorBtn"') > html.indexOf('id="terminal">'),
-        'and it must come after #terminal closes');
+    assert.equal(depthOfElement(html, 'terminalToolsBtn'), 0,
+        '#terminalToolsBtn must be a DIRECT child of <body>');
+
+    // THE SESSION EDITOR IS NO LONGER BODY-LEVEL, ON PURPOSE. It moved
+    // into the header's `.controls` row, which is nested inside
+    // `.header-row` inside `.header` - and crucially NOT inside
+    // #terminal, so the gesture guard still cannot reach it. Assert the
+    // container rather than the depth number, or a header restructure
+    // reads as this control escaping into the terminal.
+    const editorAt = html.indexOf('id="sessionEditorBtn"');
+    const terminalOpen = html.indexOf('<div id="terminal"></div>');
+    assert.ok(editorAt > -1 && editorAt < terminalOpen,
+        'the header is declared before #terminal, so the editor precedes it');
+    assert.ok(html.lastIndexOf('<div class="controls">', editorAt) > -1
+        && html.indexOf('</div><!-- /.header-row -->', editorAt) > editorAt,
+        '#sessionEditorBtn must live inside the header .controls row');
+    assert.ok(depthOfElement(html, 'sessionEditorBtn') > 0,
+        'and it is therefore nested, not a body-level float any more');
     // And the popups are appended to body, never into the terminal.
     const fab = clientFile('js', 'fab-menu.js');
     assert.ok(fab.includes('document.body.appendChild(menuEl)'));
@@ -583,13 +685,19 @@ test('GEOMETRY: desktop leaves no hole in the bottom row', () => {
     // The editor used to need a desktop-only rule to move UP into that
     // empty slot 1, because leaving it at slot 2 stranded a 57px hole in
     // the middle of the row that read as a button that failed to render.
-    // Moving it to the top-right rail dissolves that problem instead of
-    // patching it: slot 1 is now the LAST slot, so an empty slot 1 is
-    // simply the end of a one-button row, not a hole between two.
-    assert.ok(!/@media \(min-width: 769px\)[\s\S]*?\.session-editor-fab/.test(tools),
-        'the editor is off the bottom row, so it needs no width override');
-    assert.ok(!tools.includes('--fab-slot-1'),
+    // Moving it off the bottom row dissolved that problem instead of
+    // patching it, and it is not even a floating control any more.
+    assert.ok(!/\.session-editor-fab/.test(cssRules(tools)),
+        'the editor is off the bottom row and off every rail');
+    assert.ok(!cssRules(tools).includes('--fab-slot-1'),
         'only the d-pad reads slot 1, and styles.css is where it does it');
+    // AND THE ROW IS EMPTY ON DESKTOP NOW, WHICH IS THE WHOLE POINT OF
+    // CHANGE 1. Slot 0 goes with slot 1 at the same 769px line, so
+    // desktop has no bottom row at all rather than one lone button
+    // hovering over the command line beside a gap.
+    assert.match(tools,
+        /@media \(min-width: 769px\) \{\s*\n\s*\.terminal-tools-fab,/,
+        'slot 0 must leave at the same width slot 1 does');
 });
 
 /**

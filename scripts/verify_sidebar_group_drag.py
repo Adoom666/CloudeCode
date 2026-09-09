@@ -409,12 +409,23 @@ def measure_non_drag_parity(browser, port: int, rep: Report, theme: str) -> None
     """The picker moves a row EXACTLY where the drag moves it.
 
     Description: the same start state and the same destination, reached
-      with no pointer drag at all - a click on the row's kebab, a click
-      on its "move to another group" entry, and a click on a menu entry.
-      The row's own group chip carried this same action once; it folded
-      into the kebab menu when the chip itself was removed from the row.
-      If the kebab route and the drag route ever disagree, the phone
-      user is the one who loses.
+      with no pointer drag at all - focus the row, press `g`, click an
+      entry in the picker that opens.
+
+      THIS ROUTE USED TO START WITH A POINTER, and no longer can. The
+      row's group chip carried the action, then folded into the row's
+      overflow menu, and that menu was removed on 2026-09-08 ("remove
+      'add to group' / 'restart the agent' and the three dots now that
+      they're not needed"). So `g` is what is left, and this measures the
+      picker itself rather than any particular way of summoning it: if
+      the picker route and the drag route ever disagree, the phone user
+      is the one who loses.
+
+      NOTE WHAT THAT COSTS A PHONE. `g` needs a keyboard. With the menu
+      item gone, dragging the row onto a group header is the only route a
+      touch-only device has, which is the one thing this module's own
+      header said should never be true. Recorded here rather than
+      papered over.
     Inputs: browser; port (int); rep (Report); theme (str). Output: None.
     """
     page = open_page(browser, port, {DENSITY_KEY: "cozy"})
@@ -426,22 +437,21 @@ def measure_non_drag_parity(browser, port: int, rep: Report, theme: str) -> None
         {"uuid": "gb", "name": "infra", "members": []},
     ])
 
-    page.click(
-        '.session-sidebar-row[data-name="cloude_fstest"] [data-row-menu]')
-    page.wait_for_selector("#session-row-menu-panel", timeout=4000)
-    item = page.query_selector("#session-row-menu-panel [data-group-pick]")
-    rep.check(item is not None,
-              f"[{theme}] the kebab offers a group control, with no drag involved",
-              "item present" if item else "NO group item in the kebab menu")
-    if item is None:
-        page.close()
-        return
-    box = item.bounding_box()
-    rep.check(bool(box) and box["width"] > 0 and box["height"] > 0,
-              f"[{theme}] the kebab's group item has a real painted box, not a zero-size element",
-              f"{box}")
-    item.click()
+    rep.check(
+        page.query_selector('[data-row-menu]') is None,
+        f"[{theme}] no row paints an overflow menu trigger any more",
+        "kebab absent" if page.query_selector('[data-row-menu]') is None
+        else "a kebab is still painted")
+    page.evaluate("""() => {
+      const row = document.querySelector(
+        '.session-sidebar-row[data-name="cloude_fstest"]');
+      row.focus();
+    }""")
+    page.keyboard.press("g")
     page.wait_for_selector(".session-sidebar-group-menu", timeout=4000)
+    rep.check(True,
+              f"[{theme}] `g` on the focused row opens the picker, with no drag involved",
+              "picker opened")
 
     menu = page.evaluate("""() => {
       const m = document.querySelector('.session-sidebar-group-menu');

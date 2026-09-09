@@ -1,6 +1,17 @@
 /**
  * Session editor - everything that acts on THIS SESSION.
  * ----------------------------------------------------------------------
+ * IT IS A HEADER CONTROL, NOT A FAB, since the owner asked for it "up
+ * into the menu next to the folder one". #sessionEditorBtn is declared
+ * inside `.controls` in index.html beside the file editor and carries
+ * the header's own `.btn-icon`; client/css/session-editor-header.css
+ * shows it only while the terminal screen is active, which is how a
+ * session-scoped control survives living in an app-scoped row. The
+ * plumbing below did not change: FabMenu still builds the dropdown and
+ * AnchorPopover still places it, preferring above the trigger and
+ * falling to below when there is no room - from the header there never
+ * is, so it hangs down.
+ *
  * TWO ROWS: session theme, detach session. Neither moves content; both
  * act on the session you are looking at. That is the distinction from
  * the terminal tools menu, whose rows all move content across the
@@ -40,8 +51,8 @@
  *     while looking at the session it marks, so it belongs on the
  *     terminal screen beside the terminal it recolours.
  *
- * So: its own FAB, its own glyph, on the top-right rail above the
- * terminal, hidden on every screen with no session attached.
+ * So: its own control, its own glyph, in the header beside the file
+ * editor, hidden on every screen with no session attached.
  *
  * The theme row delegates to session-theme-menu.js, which still owns
  * the theme picker. This module is the control surface only.
