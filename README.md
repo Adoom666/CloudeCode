@@ -344,7 +344,7 @@ curl -LO https://github.com/Adoom666/CloudeCode/releases/download/v1.0.36/Cloude
 
 # 2. Verify
 shasum -a 256 Cloude.Code-1.0.36-arm64.dmg
-# expected: 5256fb2d3251e95dfa60269c45a90865de629e916046d98738c7b100d94f3db1
+# expected: a40a2c54e18c8e1e5a7636540942cc2c901ec726736fafe8d403378a53c43ae7
 ```
 
 3. Open the DMG, drag **Cloude Code** to `/Applications`, and launch it. The first run provisions the venv, installs dependencies, generates your secrets, and pops a QR window — scan it with your authenticator app.
